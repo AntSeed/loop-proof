@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["core", "host", "methods"]
+
+[workspace.dependencies]
+loop-core = { path = "core" }
+methods = { path = "methods" }
+
+alloy-primitives = { version = "1", default-features = false, features = ["rlp", "serde"] }
+alloy-consensus = { version = "1", default-features = false, features = ["serde"] }
+alloy-rlp = { version = "0.3", default-features = false }
+alloy-trie = { version = "0.9", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+risc0-build = { version = "3.0" }
+
+# Reduce proving time for release runs
+[profile.release]
+debug = 1
+lto = true

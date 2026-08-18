@@ -1,0 +1,17 @@
+[package]
+name = "loop-host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+loop-core = { workspace = true }
+methods = { workspace = true }
+risc0-zkvm = { version = "3.0" }
+alloy-primitives = { workspace = true }
+alloy-consensus = { workspace = true }
+alloy-trie = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ureq = { version = "2", features = ["json"] }
+sha2 = "0.10"
+anyhow = "1"

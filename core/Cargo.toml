@@ -1,0 +1,12 @@
+[package]
+name = "loop-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+alloy-primitives = { workspace = true }
+alloy-consensus = { workspace = true }
+alloy-rlp = { workspace = true }
+alloy-trie = { workspace = true }
+alloy-sol-types = { version = "1", default-features = false }
+serde = { workspace = true }
