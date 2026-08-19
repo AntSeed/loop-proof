@@ -14,8 +14,17 @@ pub struct Client {
 pub type LogLoc = (u64, usize, usize);
 
 impl Client {
-    pub fn new(endpoints: &[&str]) -> Self {
-        Self { endpoints: endpoints.iter().map(|s| s.to_string()).collect() }
+    pub fn new<I, S>(endpoints: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self {
+            endpoints: endpoints
+                .into_iter()
+                .map(|endpoint| endpoint.as_ref().to_owned())
+                .collect(),
+        }
     }
 
     fn call(&self, method: &str, params: Value) -> Result<Value> {
@@ -24,7 +33,9 @@ impl Client {
             for url in &self.endpoints {
                 let res = ureq::post(url)
                     .timeout(std::time::Duration::from_secs(30))
-                    .send_json(json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}));
+                    .send_json(
+                        json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}),
+                    );
                 match res {
                     Ok(r) => {
                         let body: Value = r.into_json()?;
@@ -62,7 +73,11 @@ impl Client {
                 && topic(l, 1)? == Some(addr_topic(from))
                 && topic(l, 2)? == Some(addr_topic(to))
             {
-                return Ok((hex_u64(&rec["blockNumber"])?, hex_u64(&rec["transactionIndex"])? as usize, i));
+                return Ok((
+                    hex_u64(&rec["blockNumber"])?,
+                    hex_u64(&rec["transactionIndex"])? as usize,
+                    i,
+                ));
             }
         }
         bail!("no matching USDC transfer in {tx}")
@@ -76,7 +91,11 @@ impl Client {
         from_block: u64,
     ) -> Result<Option<LogLoc>> {
         let latest = hex_u64(&self.call("eth_blockNumber", json!([]))?)?;
-        let filter_topics = json!([format!("{TRANSFER_TOPIC}"), format!("{}", addr_topic(from)), format!("{}", addr_topic(to))]);
+        let filter_topics = json!([
+            format!("{TRANSFER_TOPIC}"),
+            format!("{}", addr_topic(from)),
+            format!("{}", addr_topic(to))
+        ]);
         let mut b = from_block;
         while b <= latest {
             let end = (b + 499_999).min(latest);
@@ -102,8 +121,12 @@ impl Client {
         max: usize,
     ) -> Result<Vec<LogLoc>> {
         let latest = hex_u64(&self.call("eth_blockNumber", json!([]))?)?;
-        let topics = json!([format!("{}", loop_core::CHANNEL_SETTLED_TOPIC), Value::Null,
-                            format!("{}", addr_topic(buyer)), format!("{}", addr_topic(seller))]);
+        let topics = json!([
+            format!("{}", loop_core::CHANNEL_SETTLED_TOPIC),
+            Value::Null,
+            format!("{}", addr_topic(buyer)),
+            format!("{}", addr_topic(seller))
+        ]);
         let mut out = Vec::new();
         let mut b = from_block;
         while b <= latest && out.len() < max {
@@ -147,16 +170,24 @@ impl Client {
     pub fn block_evidence(&self, number: u64, targets: &[u64]) -> Result<BlockEvidence> {
         use alloy_trie::{proof::ProofRetainer, HashBuilder, Nibbles};
 
-        let block = self.call("eth_getBlockByNumber", json!([format!("0x{number:x}"), false]))?;
+        let block = self.call(
+            "eth_getBlockByNumber",
+            json!([format!("0x{number:x}"), false]),
+        )?;
         let rpc_hash: B256 = parse_b256(&block["hash"])?;
         let header: alloy_consensus::Header = serde_json::from_value(block.clone())
             .context("header deserialization — RPC schema mismatch")?;
         if header.hash_slow() != rpc_hash {
-            bail!("block {number}: recomputed header hash {} != RPC hash {rpc_hash}", header.hash_slow());
+            bail!(
+                "block {number}: recomputed header hash {} != RPC hash {rpc_hash}",
+                header.hash_slow()
+            );
         }
 
         let receipts = self.call("eth_getBlockReceipts", json!([format!("0x{number:x}")]))?;
-        let receipts = receipts.as_array().context("eth_getBlockReceipts unsupported")?;
+        let receipts = receipts
+            .as_array()
+            .context("eth_getBlockReceipts unsupported")?;
         let encoded: Vec<Bytes> = receipts
             .iter()
             .map(encode_receipt)
@@ -174,13 +205,17 @@ impl Client {
             .map(|(i, v)| (Nibbles::unpack(loop_core::trie_index_key(i as u64)), v))
             .collect();
         leaves.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut hb = HashBuilder::default().with_proof_retainer(ProofRetainer::new(target_keys.clone()));
+        let mut hb =
+            HashBuilder::default().with_proof_retainer(ProofRetainer::new(target_keys.clone()));
         for (key, value) in &leaves {
             hb.add_leaf(key.clone(), value.as_ref());
         }
         let root = hb.root();
         if root != header.receipts_root {
-            bail!("block {number}: local receipts-root {root} != header {}", header.receipts_root);
+            bail!(
+                "block {number}: local receipts-root {root} != header {}",
+                header.receipts_root
+            );
         }
         let proof_nodes = hb.take_proof_nodes();
 
@@ -198,9 +233,16 @@ impl Client {
             // self-check the exact proof the guest will verify
             alloy_trie::proof::verify_proof(root, key.clone(), Some(value.to_vec()), proof.iter())
                 .map_err(|e| anyhow!("block {number}: receipt {i} proof self-check: {e}"))?;
-            out.push(loop_core::ReceiptProof { tx_index: *i, value, proof });
+            out.push(loop_core::ReceiptProof {
+                tx_index: *i,
+                value,
+                proof,
+            });
         }
-        Ok(BlockEvidence { header, receipts: out })
+        Ok(BlockEvidence {
+            header,
+            receipts: out,
+        })
     }
 }
 
@@ -245,7 +287,11 @@ fn encode_receipt(r: &Value) -> Result<Bytes> {
         }
     }
     let inner = rlp_list(&fields);
-    Ok(if ty == 0 { inner.into() } else { [vec![ty as u8], inner].concat().into() })
+    Ok(if ty == 0 {
+        inner.into()
+    } else {
+        [vec![ty as u8], inner].concat().into()
+    })
 }
 
 // ── tiny RLP encoder ───────────────────────────────────────────────────
@@ -255,7 +301,11 @@ fn rlp_len_prefix(base: u8, len: usize) -> Vec<u8> {
         vec![base + len as u8]
     } else {
         let be = (len as u64).to_be_bytes();
-        let sig = be.iter().skip_while(|b| **b == 0).cloned().collect::<Vec<_>>();
+        let sig = be
+            .iter()
+            .skip_while(|b| **b == 0)
+            .cloned()
+            .collect::<Vec<_>>();
         let mut out = vec![base + 55 + sig.len() as u8];
         out.extend(sig);
         out

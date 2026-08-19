@@ -4,8 +4,8 @@
 use risc0_zkvm::guest::env;
 
 fn main() {
-    let input: loop_core::LoopInput = env::read();
-    let journal = loop_core::verify(&input).expect("loop predicate not satisfied");
+    let input: loop_core::SellerPenaltyInput = env::read();
+    let journal = loop_core::verify(&input).expect("seller penalty predicate not satisfied");
     // ABI-encoded so the on-chain registry can sha256-match and abi.decode it.
     env::commit_slice(&journal.abi_encode());
 }

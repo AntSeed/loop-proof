@@ -6,8 +6,9 @@ members = ["core", "host", "methods"]
 loop-core = { path = "core" }
 methods = { path = "methods" }
 
-alloy-primitives = { version = "1", default-features = false, features = ["rlp", "serde"] }
-alloy-consensus = { version = "1", default-features = false, features = ["serde"] }
+alloy-primitives = { version = "=1.4.1", default-features = false, features = ["rlp", "serde"] }
+alloy-consensus = { version = "=1.1.0", default-features = false, features = ["serde"] }
+alloy-eips = { version = "=1.1.0", default-features = false }
 alloy-rlp = { version = "0.3", default-features = false }
 alloy-trie = { version = "0.9", default-features = false }
 serde = { version = "1", features = ["derive"] }

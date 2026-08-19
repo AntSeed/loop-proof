@@ -1,0 +1,11 @@
+[package]
+name = "checkpoint-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alloy-consensus = { workspace = true }
+alloy-primitives = { workspace = true }
+alloy-rlp = { workspace = true }
+alloy-sol-types = { workspace = true }
+serde = { workspace = true }

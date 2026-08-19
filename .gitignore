@@ -1,3 +1,8 @@
 target/
+cache/
+out/
+.env
+.env.*
+!.env.example
 cases/flash-fixture.json
 prove.log
