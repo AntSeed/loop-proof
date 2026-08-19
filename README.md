@@ -142,10 +142,12 @@ first and falls back to public Base RPCs.
 ```bash
 cargo build --release
 
-# Fetch receipt proofs for the configured seller/funder/buyer cohort.
+# Discover all bounded settlements, select the exact minimum checkpoint
+# windows, fetch only selected receipt proofs, and write both manifests.
 ./target/release/loop-host fetch \
   --case cases/flash.json \
-  --out cases/flash-fixture.json
+  --out cases/flash-fixture.json \
+  --selection-out cases/flash-selection.json
 
 # Native validation plus zkVM execution, without producing a proof.
 ./target/release/loop-host run cases/flash-fixture.json
@@ -169,6 +171,12 @@ The checkpoint workspace uses Rust 1.94 and pins Steel to commit
 
 ```bash
 cd checkpoint
+
+# Resolve every selected 30-block window to an ASR-valid type-621 game at
+# finalized Ethereum state. This only writes a proof plan.
+cargo run --release -p checkpoint-host --bin checkpoint-plan -- \
+  --selection ../cases/flash-selection.json \
+  --out ../cases/flash-checkpoint-plan.json
 
 # Live Ethereum/Base preflight plus zkVM execution. Defaults to one target
 # 28 blocks behind the checkpoint.
@@ -195,9 +203,33 @@ The two-block oracle storage path measured 91,338 execution gas with a mock
 verifier; production total gas must add the real RISC Zero verifier and
 transaction calldata.
 
-### Current Base mainnet measurement
+### Current Base mainnet selection
 
-The `cases/flash.json` fixture was fetched through `BASE_RPC_URL` and executed
+`loop-host fetch` scans only the case's required `[start_block,
+end_block_exclusive)` period and excludes blocks before AggregateVerifier
+coverage. It first decodes settlement deltas from `eth_getLogs` as selection
+hints, then runs an exact deterministic optimizer over protocol-aligned
+30-block windows. Full receipts and Merkle proofs are fetched only for the
+selected evidence, and the unchanged native predicate reauthenticates the
+selected volume before either output file is accepted.
+
+For the current `cases/flash.json` period, the live 2026-08-19 result is:
+
+- 2,850 eligible settlement candidates across 3 buyers;
+- 69 selected settlement receipts proving 1,000.701075 USDC;
+- 70 referenced Base blocks in 49 total checkpoint windows;
+- 40 ASR-valid AggregateVerifier games in the finalized checkpoint plan;
+- an 838 KB optimized fixture, down from the former 11 MB fixture.
+
+The earlier planning estimate was 573 windows. Live exact optimization found a
+strictly better valid result: **49**. The unchanged native predicate and zkVM
+guest both accept it, and the checkpoint planner resolves all 49 windows at
+finalized Ethereum state. Artificially retaining 573 windows would violate the
+minimum-window objective.
+
+### Previous Base mainnet measurement
+
+The former first-settlements fixture was fetched through `BASE_RPC_URL` and executed
 with RISC Zero 3.0 in development proving mode on 2026-08-19:
 
 - 3 linked buyers;

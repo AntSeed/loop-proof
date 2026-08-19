@@ -2,6 +2,7 @@
 name = "checkpoint-host"
 version = "0.1.0"
 edition = "2024"
+default-run = "checkpoint-host"
 
 [dependencies]
 alloy = { workspace = true, features = ["full"] }
@@ -14,10 +15,13 @@ checkpoint-core = { workspace = true }
 checkpoint-methods = { workspace = true }
 clap = { version = "4.5", features = ["derive", "env"] }
 dotenvy = "0.15"
+futures = "0.3"
 risc0-op-steel = { workspace = true, features = ["host", "reqwest-rustls-tls"] }
 risc0-ethereum-contracts = "3.0"
 risc0-zkvm = { workspace = true, features = ["client"] }
 sha2 = "0.10"
+serde = { workspace = true }
+serde_json = "1"
 tokio = { version = "1.40", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5"

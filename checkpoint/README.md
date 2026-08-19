@@ -37,15 +37,27 @@ BEACON_API_URL=https://ethereum-beacon-api.publicnode.com
 
 ```bash
 cargo test -p checkpoint-core
+
+# Read-only planning: resolve selected windows at finalized Ethereum state.
+cargo run --release -p checkpoint-host --bin checkpoint-plan -- \
+  --selection ../cases/flash-selection.json \
+  --out ../cases/flash-checkpoint-plan.json
+
 cargo run --release -p checkpoint-host -- --journal-out checkpoint-journal.hex
 RISC0_DEV_MODE=1 cargo run --release -p checkpoint-host -- \
   --prove --seal-out checkpoint-seal.hex
 ```
 
-The default game/index is a stable known-valid Base AggregateVerifier fixture.
-Production automation should discover the newest ASR-valid AggregateVerifier
-game, select the intermediate root following each evidence block, and archive
-the Steel beacon root before Base's EIP-4788 retention window expires.
+`checkpoint-plan` validates the selection manifest, discovers type-621 games,
+checks each game's start and interval configuration, requires ASR acceptance at
+one finalized Ethereum block, and writes the game, intermediate-root index,
+checkpoint block, and sorted target blocks for every proof. It does not produce
+proofs or submit transactions.
+
+The default `checkpoint-host` game/index remains a stable known-valid Base
+AggregateVerifier fixture. Production automation must consume the generated
+plan and archive each Steel beacon root before Base's EIP-4788 retention window
+expires.
 
 ## Current measurement
 

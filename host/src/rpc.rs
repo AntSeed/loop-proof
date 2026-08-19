@@ -13,6 +13,25 @@ pub struct Client {
 /// (block_number, tx_index, log_index_within_receipt)
 pub type LogLoc = (u64, usize, usize);
 
+#[derive(Clone, Debug)]
+pub struct SettlementCandidate {
+    pub block_number: u64,
+    pub transaction_hash: B256,
+    pub transaction_index: usize,
+    pub block_log_index: u64,
+    pub amount_raw: u128,
+}
+
+impl SettlementCandidate {
+    pub fn canonical_key(&self) -> (u64, usize, u64) {
+        (
+            self.block_number,
+            self.transaction_index,
+            self.block_log_index,
+        )
+    }
+}
+
 impl Client {
     pub fn new<I, S>(endpoints: I) -> Self
     where
@@ -118,9 +137,11 @@ impl Client {
         buyer: Address,
         seller: Address,
         from_block: u64,
-        max: usize,
-    ) -> Result<Vec<LogLoc>> {
-        let latest = hex_u64(&self.call("eth_blockNumber", json!([]))?)?;
+        end_block_exclusive: u64,
+    ) -> Result<Vec<SettlementCandidate>> {
+        if from_block >= end_block_exclusive {
+            return Ok(Vec::new());
+        }
         let topics = json!([
             format!("{}", loop_core::CHANNEL_SETTLED_TOPIC),
             Value::Null,
@@ -129,22 +150,49 @@ impl Client {
         ]);
         let mut out = Vec::new();
         let mut b = from_block;
-        while b <= latest && out.len() < max {
-            let end = (b + 99_999).min(latest);
+        let last_block = end_block_exclusive - 1;
+        while b <= last_block {
+            let end = (b + 99_999).min(last_block);
             let logs = self.call(
                 "eth_getLogs",
                 json!([{ "address": format!("{channels}"), "topics": topics,
                          "fromBlock": format!("0x{b:x}"), "toBlock": format!("0x{end:x}") }]),
             )?;
             for l in logs.as_array().into_iter().flatten() {
-                if out.len() >= max {
-                    break;
+                let data = parse_hex_bytes(&l["data"])?;
+                if data.len() < 64 || data[32..48].iter().any(|byte| *byte != 0) {
+                    bail!("ChannelSettled volume does not fit u128");
                 }
-                out.push(self.locate(l)?);
+                let amount_raw = u128::from_be_bytes(data[48..64].try_into().unwrap());
+                out.push(SettlementCandidate {
+                    block_number: hex_u64(&l["blockNumber"])?,
+                    transaction_hash: parse_b256(&l["transactionHash"])?,
+                    transaction_index: hex_u64(&l["transactionIndex"])? as usize,
+                    block_log_index: hex_u64(&l["logIndex"])?,
+                    amount_raw,
+                });
             }
             b = end + 1;
         }
         Ok(out)
+    }
+
+    pub fn locate_settlement(&self, candidate: &SettlementCandidate) -> Result<LogLoc> {
+        let rec = self.call(
+            "eth_getTransactionReceipt",
+            json!([format!("{}", candidate.transaction_hash)]),
+        )?;
+        if hex_u64(&rec["blockNumber"])? != candidate.block_number
+            || hex_u64(&rec["transactionIndex"])? as usize != candidate.transaction_index
+        {
+            bail!("settlement receipt location changed");
+        }
+        let logs = rec["logs"].as_array().context("no logs")?;
+        let local = logs
+            .iter()
+            .position(|log| hex_u64(&log["logIndex"]).ok() == Some(candidate.block_log_index))
+            .context("settlement log not found in its receipt")?;
+        Ok((candidate.block_number, candidate.transaction_index, local))
     }
 
     /// Convert a getLogs entry to (block, tx_index, log_index_within_receipt).

@@ -1,20 +1,26 @@
 //! Host: fetches seller-penalty evidence from Base RPC, builds the guest fixture,
 //! and runs the executor/prover.
 //!
-//!   loop-host fetch --case case.json --out fixture.json
+//!   loop-host fetch --case case.json --out fixture.json --selection-out selection.json
 //!   loop-host run fixture.json            # native check + zkVM execute/prove
 //!
 //! RISC0_DEV_MODE=1 gives instant fake proofs with real cycle counts;
 //! unset it for a real STARK.
 
 mod rpc;
+mod selection;
 
 use alloy_primitives::{Address, B256};
 use anyhow::{bail, Context, Result};
 use loop_core::{
     BuyerClaim, FundingClaim, HopClaim, LogRef, SellerPenaltyInput, SellerPenaltyJournal,
+    MINIMUM_COHORT_VOLUME_RAW,
 };
-use serde::Deserialize;
+use selection::{
+    select_minimum_windows, BuyerSettlementCandidate, SelectedCheckpointWindow,
+    AGGREGATE_VERIFIER_START_BLOCK,
+};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 const RPCS: &[&str] = &[
@@ -33,6 +39,8 @@ struct Case {
     deposits_contract: Address,
     seller: Address,
     funder: Address,
+    start_block: u64,
+    end_block_exclusive: u64,
     /// Tx hashes of the forwarding chain, in order (seller → … → funder).
     hop_txs: Vec<B256>,
     /// Expected (from, to) per hop, same order.
@@ -43,12 +51,31 @@ struct Case {
 #[derive(Deserialize)]
 struct BuyerCase {
     buyer: Address,
-    /// Max settlements to include as evidence for this buyer.
-    #[serde(default = "default_max_settlements")]
-    max_settlements: usize,
 }
-fn default_max_settlements() -> usize {
-    1_000
+
+#[derive(Serialize)]
+struct SelectionManifest {
+    version: u32,
+    chain_id: u64,
+    start_block: u64,
+    end_block_exclusive: u64,
+    aggregate_verifier_start_block: u64,
+    minimum_volume_raw: u128,
+    candidate_settlement_count: usize,
+    selected_settlement_count: usize,
+    selected_volume_raw: u128,
+    buyer_count: usize,
+    buyer_coverage: Vec<BuyerSelectionManifest>,
+    selected_block_numbers: Vec<u64>,
+    checkpoint_windows: Vec<SelectedCheckpointWindow>,
+}
+
+#[derive(Serialize)]
+struct BuyerSelectionManifest {
+    buyer: Address,
+    candidate_settlement_count: usize,
+    selected_settlement_count: usize,
+    selected_volume_raw: u128,
 }
 
 fn main() -> Result<()> {
@@ -58,13 +85,17 @@ fn main() -> Result<()> {
         Some("fetch") => {
             let case_path = arg_value(&args, "--case").context("--case required")?;
             let out_path = arg_value(&args, "--out").context("--out required")?;
-            fetch(&case_path, &out_path)
+            let selection_out = arg_value(&args, "--selection-out")
+                .unwrap_or_else(|| format!("{out_path}.selection.json"));
+            fetch(&case_path, &out_path, &selection_out)
         }
         Some("run") => {
             let fixture = args.get(2).context("usage: loop-host run fixture.json")?;
             run(fixture, args.iter().any(|a| a == "--prove"))
         }
-        _ => bail!("usage: loop-host fetch --case case.json --out fixture.json | loop-host run fixture.json [--prove]"),
+        _ => bail!(
+            "usage: loop-host fetch --case case.json --out fixture.json [--selection-out selection.json] | loop-host run fixture.json [--prove]"
+        ),
     }
 }
 
@@ -76,8 +107,14 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
 
 // ─────────────────────────────── fetch ───────────────────────────────
 
-fn fetch(case_path: &str, out_path: &str) -> Result<()> {
+fn fetch(case_path: &str, out_path: &str, selection_out: &str) -> Result<()> {
     let case: Case = serde_json::from_str(&std::fs::read_to_string(case_path)?)?;
+    if case.start_block >= case.end_block_exclusive {
+        bail!("case start_block must be before end_block_exclusive");
+    }
+    if case.end_block_exclusive <= AGGREGATE_VERIFIER_START_BLOCK + 1 {
+        bail!("case period ends before AggregateVerifier coverage");
+    }
     if case.hop_txs.len() != case.hop_edges.len() {
         bail!("hop_txs and hop_edges must have the same length");
     }
@@ -109,9 +146,14 @@ fn fetch(case_path: &str, out_path: &str) -> Result<()> {
         hop_locs.push(loc);
     }
 
+    for (block_number, _, _) in &hop_locs {
+        validate_fixed_block(&case, *block_number, "hop")?;
+    }
+
     // 2. First funding and post-funding settlements for each claimed buyer.
-    let mut buyer_locs = Vec::new();
-    for buyer_case in &case.buyers {
+    let mut buyer_fundings = Vec::new();
+    let mut settlement_candidates = Vec::new();
+    for (buyer_index, buyer_case) in case.buyers.iter().enumerate() {
         let funding = client
             .find_first_transfer(case.usdc, case.funder, buyer_case.buyer, DEPLOY_BLOCK)?
             .with_context(|| format!("no funder→{} transfer found", buyer_case.buyer))?;
@@ -119,13 +161,33 @@ fn fetch(case_path: &str, out_path: &str) -> Result<()> {
             "buyer {} funding: block {} tx {} log {}",
             buyer_case.buyer, funding.0, funding.1, funding.2
         );
+        validate_fixed_block(&case, funding.0, "funding")?;
+        buyer_fundings.push((buyer_case.buyer, funding));
+        let settlement_start = (funding.0 + 1)
+            .max(case.start_block)
+            .max(AGGREGATE_VERIFIER_START_BLOCK + 1);
         let settlements = client.find_settlements(
             case.channels_contract,
             buyer_case.buyer,
             case.seller,
-            funding.0 + 1,
-            buyer_case.max_settlements,
+            settlement_start,
+            case.end_block_exclusive,
         )?;
+        for settlement in &settlements {
+            validate_evidence_block(
+                case.start_block,
+                case.end_block_exclusive,
+                settlement.block_number,
+                "settlement",
+            )?;
+            if settlement.block_number <= funding.0 {
+                bail!(
+                    "settlement block {} is not after funding block {}",
+                    settlement.block_number,
+                    funding.0
+                );
+            }
+        }
         if settlements.is_empty() {
             bail!(
                 "no ChannelSettled({}, {}) events after funding block",
@@ -134,12 +196,61 @@ fn fetch(case_path: &str, out_path: &str) -> Result<()> {
             );
         }
         println!(
-            "buyer {}: {} settlement receipts selected",
+            "buyer {}: {} bounded settlement candidates",
             buyer_case.buyer,
             settlements.len()
         );
-        buyer_locs.push((buyer_case.buyer, funding, settlements));
+        settlement_candidates.extend(settlements.into_iter().map(|settlement| {
+            BuyerSettlementCandidate {
+                buyer_index,
+                settlement,
+            }
+        }));
     }
+
+    let fixed_blocks = hop_locs
+        .iter()
+        .map(|location| location.0)
+        .chain(buyer_fundings.iter().map(|(_, location)| location.0))
+        .collect::<Vec<_>>();
+    let selection = select_minimum_windows(
+        &settlement_candidates,
+        &fixed_blocks,
+        case.buyers.len(),
+        MINIMUM_COHORT_VOLUME_RAW,
+    )
+    .map_err(|error| anyhow::anyhow!(error))?;
+    println!(
+        "selected {} of {} settlements across {} checkpoint windows",
+        selection.selected_candidate_indices.len(),
+        settlement_candidates.len(),
+        selection.checkpoint_windows.len()
+    );
+    println!(
+        "selected volume: {:.6} USDC",
+        selection.selected_volume_raw as f64 / 1e6
+    );
+
+    let mut selected_by_buyer = vec![Vec::new(); case.buyers.len()];
+    for candidate_index in &selection.selected_candidate_indices {
+        let candidate = &settlement_candidates[*candidate_index];
+        selected_by_buyer[candidate.buyer_index]
+            .push(client.locate_settlement(&candidate.settlement)?);
+    }
+    for settlements in &mut selected_by_buyer {
+        settlements.sort_unstable();
+    }
+    let buyer_locs = buyer_fundings
+        .into_iter()
+        .enumerate()
+        .map(|(buyer_index, (buyer, funding))| {
+            (
+                buyer,
+                funding,
+                std::mem::take(&mut selected_by_buyer[buyer_index]),
+            )
+        })
+        .collect::<Vec<_>>();
 
     // 3. Gather referenced blocks: header + inclusion proofs for exactly the
     // receipts the claim touches.
@@ -215,11 +326,117 @@ fn fetch(case_path: &str, out_path: &str) -> Result<()> {
 
     // 5. Native predicate check before writing the fixture.
     let journal = loop_core::verify(&input).map_err(|e| anyhow::anyhow!("predicate: {e}"))?;
+    if journal.suspicious_volume_raw != selection.selected_volume_raw {
+        bail!(
+            "selected RPC volume {} does not match authenticated receipt volume {}",
+            selection.selected_volume_raw,
+            journal.suspicious_volume_raw
+        );
+    }
     print_journal(&journal);
 
+    let selected_block_numbers = targets_by_block.keys().copied().collect::<Vec<_>>();
+    let buyer_coverage = case
+        .buyers
+        .iter()
+        .enumerate()
+        .map(|(buyer_index, buyer_case)| {
+            let candidate_settlement_count = settlement_candidates
+                .iter()
+                .filter(|candidate| candidate.buyer_index == buyer_index)
+                .count();
+            let selected_candidates = selection
+                .selected_candidate_indices
+                .iter()
+                .map(|candidate_index| &settlement_candidates[*candidate_index])
+                .filter(|candidate| candidate.buyer_index == buyer_index)
+                .collect::<Vec<_>>();
+            let selected_volume_raw = selected_candidates
+                .iter()
+                .map(|candidate| candidate.settlement.amount_raw)
+                .sum();
+            BuyerSelectionManifest {
+                buyer: buyer_case.buyer,
+                candidate_settlement_count,
+                selected_settlement_count: selected_candidates.len(),
+                selected_volume_raw,
+            }
+        })
+        .collect();
+    let manifest = SelectionManifest {
+        version: 1,
+        chain_id: case.chain_id,
+        start_block: case.start_block,
+        end_block_exclusive: case.end_block_exclusive,
+        aggregate_verifier_start_block: AGGREGATE_VERIFIER_START_BLOCK,
+        minimum_volume_raw: MINIMUM_COHORT_VOLUME_RAW,
+        candidate_settlement_count: settlement_candidates.len(),
+        selected_settlement_count: selection.selected_candidate_indices.len(),
+        selected_volume_raw: selection.selected_volume_raw,
+        buyer_count: case.buyers.len(),
+        buyer_coverage,
+        selected_block_numbers,
+        checkpoint_windows: selection.checkpoint_windows,
+    };
+
     std::fs::write(out_path, serde_json::to_vec(&input)?)?;
+    std::fs::write(selection_out, serde_json::to_vec_pretty(&manifest)?)?;
     println!("fixture written to {out_path}");
+    println!("selection manifest written to {selection_out}");
     Ok(())
+}
+
+fn validate_fixed_block(case_data: &Case, block_number: u64, label: &str) -> Result<()> {
+    validate_evidence_block(
+        case_data.start_block,
+        case_data.end_block_exclusive,
+        block_number,
+        label,
+    )
+}
+
+fn validate_evidence_block(
+    start_block: u64,
+    end_block_exclusive: u64,
+    block_number: u64,
+    label: &str,
+) -> Result<()> {
+    if block_number < start_block || block_number >= end_block_exclusive {
+        bail!(
+            "{label} block {block_number} is outside case period [{start_block}, {end_block_exclusive})"
+        );
+    }
+    if block_number <= AGGREGATE_VERIFIER_START_BLOCK {
+        bail!("{label} block {block_number} predates AggregateVerifier coverage");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_start_inclusive_end_exclusive_period() {
+        let start = AGGREGATE_VERIFIER_START_BLOCK + 1;
+        let end = start + 10;
+
+        assert!(validate_evidence_block(start, end, start, "test").is_ok());
+        assert!(validate_evidence_block(start, end, end - 1, "test").is_ok());
+        assert!(validate_evidence_block(start, end, start - 1, "test").is_err());
+        assert!(validate_evidence_block(start, end, end, "test").is_err());
+    }
+
+    #[test]
+    fn rejects_blocks_before_aggregate_verifier_coverage() {
+        assert!(validate_evidence_block(
+            AGGREGATE_VERIFIER_START_BLOCK,
+            AGGREGATE_VERIFIER_START_BLOCK + 2,
+            AGGREGATE_VERIFIER_START_BLOCK,
+            "test",
+        )
+        .is_err());
+    }
 }
 
 // ─────────────────────────────── run ───────────────────────────────

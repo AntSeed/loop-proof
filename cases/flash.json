@@ -5,18 +5,17 @@
   "deposits_contract": "0x0F7a3a8f4Da01637d1202bb5443fcF7F88F99fD2",
   "seller": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
   "funder": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+  "start_block": 44471575,
+  "end_block_exclusive": 49936173,
   "buyers": [
     {
-      "buyer": "0xd27016b0490a41de9267949913089fd6035b20fa",
-      "max_settlements": 1000
+      "buyer": "0xd27016b0490a41de9267949913089fd6035b20fa"
     },
     {
-      "buyer": "0xcde496d9a51bd6b3c836200b3c95dc5a5451a64e",
-      "max_settlements": 1
+      "buyer": "0xcde496d9a51bd6b3c836200b3c95dc5a5451a64e"
     },
     {
-      "buyer": "0x227d2b7de931af0a9d21d1bbadc8298cfb782d80",
-      "max_settlements": 1
+      "buyer": "0x227d2b7de931af0a9d21d1bbadc8298cfb782d80"
     }
   ],
   "hop_txs": [
