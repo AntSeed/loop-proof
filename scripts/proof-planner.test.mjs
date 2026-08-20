@@ -29,7 +29,7 @@ test("cohort selector reuses supported historical funding evidence", () => {
 test("closed-loop planner prioritizes direct seller-funder over relays", () => {
   const claim = { claimId: "claim", type: "P0_CLOSED_LOOP", subjects: ["seller"], approvedBuyers: ["a", "b", "c"], approvedFunders: ["funder"], dependencyRoot: "0x1" };
   const dependencies = [
-    { ...evidence("direct", null, 46_303_000, 1n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
+    { ...evidence("direct", null, 46_303_100, 1n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
     ...["a", "b", "c"].flatMap((buyer, index) => [
       { ...evidence(`f${buyer}`, buyer, 46_303_001 + index, 1n), evidenceType: "USDC_FUNDING", funder: "funder" },
       { ...evidence(`s${buyer}`, buyer, 46_303_031 + index, index === 0 ? 400_000_000n : 300_000_000n), evidenceType: "SETTLEMENT" },
@@ -54,7 +54,7 @@ test("native cohort funding is never aggregated across funders", () => {
 test("closed-loop closure must match the selected cohort funder", () => {
   const claim = { claimId: "claim", type: "P0_CLOSED_LOOP", subjects: ["seller"], approvedBuyers: ["a", "b", "c"], approvedFunders: ["good", "other"], dependencyRoot: "0x1" };
   const dependencies = [
-    { ...evidence("closure", null, 46_303_000, 1n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "other" },
+    { ...evidence("closure", null, 46_303_100, 1n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "other" },
     ...["a", "b", "c"].flatMap((buyer, index) => [
       { ...evidence(`f${buyer}`, buyer, 46_303_001 + index, 1n), evidenceType: "USDC_FUNDING", funder: "good" },
       evidence(`s${buyer}`, buyer, 46_303_031 + index, index === 0 ? 400_000_000n : 300_000_000n),
@@ -67,7 +67,7 @@ test("direct buyer closure buyer is included in the settled cohort", () => {
   const buyers = ["a", "b", "c", "d"];
   const claim = { claimId: "claim", type: "P0_CLOSED_LOOP", subjects: ["seller"], approvedBuyers: buyers, approvedFunders: ["funder"], dependencyRoot: "0x1" };
   const dependencies = [
-    { ...evidence("closure", "a", 46_303_000, 1n), evidenceType: "DIRECT_SELLER_BUYER" },
+    { ...evidence("closure", "a", 46_303_100, 1n), evidenceType: "DIRECT_SELLER_BUYER" },
     ...buyers.flatMap((buyer, index) => [
       { ...evidence(`f${buyer}`, buyer, 46_303_001 + index, 1n), evidenceType: "USDC_FUNDING", funder: "funder" },
       evidence(`s${buyer}`, buyer, 46_303_031 + index, buyer === "a" ? 1n : 400_000_000n),
@@ -76,6 +76,19 @@ test("direct buyer closure buyer is included in the settled cohort", () => {
   const plan = planClaim(claim, dependencies, { reportRoot: "0x2" });
   assert.equal(plan.closureType, "DIRECT_SELLER_BUYER");
   assert(plan.selectedEvidence.some((entry) => entry.evidenceType === "SETTLEMENT" && entry.buyer === "a"));
+});
+
+test("reciprocal planner enforces the exact 80 percent volume boundary", () => {
+  const claim = { claimId: "pair", type: "P0_RECIPROCAL", walletA: "a", walletB: "b", subjects: ["a", "b"], dependencyRoot: "0x1" };
+  const qualifying = [
+    ...Array.from({ length: 50 }, (_, index) => ({ ...evidence(`ab${index}`, "a", 46_303_001 + index, 1_000_000n), evidenceType: "RECIPROCAL_SETTLEMENT", seller: "b" })),
+    ...Array.from({ length: 50 }, (_, index) => ({ ...evidence(`ba${index}`, "b", 46_303_101 + index, 800_000n), evidenceType: "RECIPROCAL_SETTLEMENT", seller: "a" })),
+  ];
+  const plan = planClaim(claim, qualifying, { reportRoot: "0x2" });
+  assert.equal(plan.selectedEvidence.length, 100);
+
+  const below = qualifying.map((entry) => entry.dependencyId.startsWith("ba") ? { ...entry, amountRaw: "799999" } : entry);
+  assert.throws(() => planClaim(claim, below, { reportRoot: "0x2" }), /80% reciprocity/);
 });
 
 test("planner rejects unknown claim types", () => {

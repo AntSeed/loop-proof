@@ -60,8 +60,8 @@ struct GuestExecution {
 fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let args = env::args().skip(1).collect::<Vec<_>>();
-    let input_path = arg(&args, "--input").context("missing --input <proof-witness-v2.json>")?;
-    let output_path = arg(&args, "--output").context("missing --output <proof-result-v2.json>")?;
+    let input_path = arg(&args, "--input").context("missing --input <proof-witness-v3.json>")?;
+    let output_path = arg(&args, "--output").context("missing --output <proof-result-v3.json>")?;
     let prove = args.iter().any(|value| value == "--prove");
     let production = args.iter().any(|value| value == "--production");
     if production && !prove {
@@ -78,7 +78,7 @@ fn main() -> Result<()> {
     if package.version != enforcement_core::PREDICATE_VERSION
         || package.kind != "antseed-wash-trading-proof-witness"
     {
-        bail!("expected a predicate-v2 self-contained witness package");
+        bail!("expected a predicate-v3 self-contained witness package");
     }
     if !package.enforceable {
         bail!("analysis-only/router-attribution cases cannot be proven or submitted");
@@ -169,7 +169,11 @@ fn execute_or_prove<T: Serialize>(
     image_id: [u32; 8],
     prove: bool,
 ) -> Result<GuestExecution> {
-    let env = risc0_zkvm::ExecutorEnv::builder().write(input)?.build()?;
+    let input_bytes = serde_json::to_vec(input)?;
+    let mut builder = risc0_zkvm::ExecutorEnv::builder();
+    builder.write_slice(&[u32::try_from(input_bytes.len()).context("guest input too large")?]);
+    builder.write_slice(&input_bytes);
+    let env = builder.build()?;
     let digest = Risc0Digest::from(image_id);
     if prove {
         let info = risc0_zkvm::default_prover().prove(env, elf)?;
@@ -221,4 +225,143 @@ fn arg(args: &[String], flag: &str) -> Option<String> {
         .position(|value| value == flag)
         .and_then(|index| args.get(index + 1))
         .cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_consensus::Header;
+    use alloy_primitives::{address, Bytes};
+    use alloy_trie::{proof::ProofRetainer, HashBuilder, Nibbles};
+    use enforcement_core::{
+        EnforcementBlock, LogRef, ReciprocalInput, SettlementEvidence, BASE_CHAIN_ID,
+        CHANNELS_ADDRESS, PERIOD_START_BLOCK,
+    };
+    use loop_core::{ReceiptProof, CHANNEL_SETTLED_TOPIC};
+
+    #[test]
+    fn reciprocal_witness_executes_in_the_guest() {
+        let address_a = address!("0000000000000000000000000000000000000001");
+        let address_b = address!("0000000000000000000000000000000000000002");
+        let mut logs = Vec::new();
+        let mut settlements = Vec::new();
+        for index in 0..100usize {
+            let (buyer, seller, amount) = if index < 50 {
+                (address_a, address_b, 1_000_000u128)
+            } else {
+                (address_b, address_a, 800_000u128)
+            };
+            let mut data = [0u8; 64];
+            data[48..].copy_from_slice(&amount.to_be_bytes());
+            logs.push(rlp_list(&[
+                rlp_bytes(CHANNELS_ADDRESS.as_slice()),
+                rlp_list(&[
+                    rlp_bytes(CHANNEL_SETTLED_TOPIC.as_slice()),
+                    rlp_bytes(B256::ZERO.as_slice()),
+                    rlp_bytes(address_topic(buyer).as_slice()),
+                    rlp_bytes(address_topic(seller).as_slice()),
+                ]),
+                rlp_bytes(&data),
+            ]));
+            settlements.push(SettlementEvidence {
+                settlement: LogRef {
+                    block: 0,
+                    receipt: 0,
+                    log: index,
+                },
+            });
+        }
+        let receipt = Bytes::from(rlp_list(&[
+            rlp_uint(1),
+            rlp_uint(1),
+            rlp_bytes(&[0u8; 256]),
+            rlp_list(&logs),
+        ]));
+        let key = Nibbles::unpack(loop_core::trie_index_key(0));
+        let mut builder =
+            HashBuilder::default().with_proof_retainer(ProofRetainer::new(vec![key.clone()]));
+        builder.add_leaf(key.clone(), receipt.as_ref());
+        let receipts_root = builder.root();
+        let proof = builder
+            .take_proof_nodes()
+            .matching_nodes_sorted(&key)
+            .into_iter()
+            .map(|(_, node)| node)
+            .collect();
+        let input = ReciprocalInput {
+            chain_id: BASE_CHAIN_ID,
+            address_a,
+            address_b,
+            blocks: vec![EnforcementBlock {
+                header: Header {
+                    number: PERIOD_START_BLOCK,
+                    timestamp: PERIOD_START_BLOCK,
+                    receipts_root,
+                    ..Default::default()
+                },
+                receipts: vec![ReceiptProof {
+                    tx_index: 0,
+                    value: receipt,
+                    proof,
+                }],
+                transactions: Vec::new(),
+            }],
+            settlements,
+        };
+        let journal = enforcement_core::verify_reciprocal(&input).unwrap();
+        let expected = journal.abi_encode();
+        let execution = execute_or_prove(
+            &input,
+            expected.clone(),
+            reciprocal_methods::RECIPROCAL_GUEST_ELF,
+            reciprocal_methods::RECIPROCAL_GUEST_ID,
+            false,
+        )
+        .unwrap();
+        assert_eq!(execution.journal, expected);
+        assert!(execution.seal.is_none());
+    }
+
+    fn address_topic(value: alloy_primitives::Address) -> B256 {
+        let mut topic = [0u8; 32];
+        topic[12..].copy_from_slice(value.as_slice());
+        B256::from(topic)
+    }
+
+    fn rlp_uint(value: u64) -> Vec<u8> {
+        if value == 0 {
+            return vec![0x80];
+        }
+        let bytes = value.to_be_bytes();
+        let first = bytes.iter().position(|byte| *byte != 0).unwrap();
+        rlp_bytes(&bytes[first..])
+    }
+
+    fn rlp_bytes(value: &[u8]) -> Vec<u8> {
+        if value.len() == 1 && value[0] < 0x80 {
+            return value.to_vec();
+        }
+        let mut result = rlp_length(0x80, 0xb7, value.len());
+        result.extend_from_slice(value);
+        result
+    }
+
+    fn rlp_list(items: &[Vec<u8>]) -> Vec<u8> {
+        let payload = items.concat();
+        let mut result = rlp_length(0xc0, 0xf7, payload.len());
+        result.extend_from_slice(&payload);
+        result
+    }
+
+    fn rlp_length(short_base: u8, long_base: u8, length: usize) -> Vec<u8> {
+        if length <= 55 {
+            return vec![short_base + length as u8];
+        }
+        let bytes = length.to_be_bytes();
+        let first = bytes.iter().position(|byte| *byte != 0).unwrap();
+        let encoded = &bytes[first..];
+        let mut result = vec![long_base + encoded.len() as u8];
+        result.extend_from_slice(encoded);
+        result
+    }
 }

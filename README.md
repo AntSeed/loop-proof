@@ -1,4 +1,4 @@
-# AntSeed Wash-Trading Proofs — Predicate v2
+# AntSeed Wash-Trading Proofs — Predicate v3
 
 This workspace contains the three RISC Zero predicates used by AntSeed's
 wash-trading enforcement path:
@@ -28,10 +28,10 @@ The onchain registry is
 
 ## Fixed Scope and Constants
 
-| Item | Predicate-v2 value |
+| Item | Predicate-v3 value |
 |---|---:|
 | Base chain ID | `8453` |
-| Predicate version | `2` |
+| Predicate version | `3` |
 | Included settlement blocks | `44,471,575` through `49,936,172` |
 | Journal period | `[44,471,575, 49,936,173)` |
 | Start state boundary | `44,471,574` |
@@ -61,15 +61,14 @@ Every accepted guest execution proves all of the following common facts.
   `receiptsRoot` with a Merkle-Patricia proof.
 - Every referenced transaction is verified against the supplied header's
   `transactionsRoot` with a Merkle-Patricia proof.
-- Every EIP-1186 account proof is verified against the supplied header's
-  `stateRoot`.
-- Every EIP-1186 storage proof is verified against the authenticated account's
-  `storageRoot`.
-- Account and storage non-inclusion/zero proofs are supported, but malformed
+- P0 witnesses use only authenticated receipts and transactions; they do not
+  require historical `eth_getProof` support.
+- P1 EIP-1186 account and storage proofs are verified against the authenticated
+  header's `stateRoot` and account `storageRoot`.
+- P1 account and storage non-inclusion/zero proofs are supported, but malformed
   non-inclusion witnesses are rejected.
-- Duplicate account proofs for the same block/address, duplicate storage-slot
-  proofs, duplicate receipt indexes, duplicate transaction indexes, and
-  duplicate proof block numbers are rejected.
+- Duplicate P1 account or storage proofs, duplicate receipt or transaction
+  indexes, and duplicate proof block numbers are rejected.
 - Onchain, the registry independently requires every journal block reference
   to satisfy `IBaseAnalysisStateOracle.isCanonicalBlock(number, hash)`.
 
@@ -78,10 +77,10 @@ its supplied Base header. The state-oracle check is what binds that header to
 canonical finalized Base history. The checkpoint implementation is documented
 in [`checkpoint/README.md`](checkpoint/README.md).
 
-### Pinned contracts and storage layouts
+### Pinned contracts and P1 storage layouts
 
-The guest accepts only the following deployed contract addresses and, where
-contract state is read, runtime code hashes:
+The guests accept only the following deployed contract addresses. P1 also pins
+runtime code hashes for contracts whose historical state it reads:
 
 | Contract | Address | Authentication |
 |---|---|---|
@@ -91,7 +90,7 @@ contract state is read, runtime code hashes:
 | Old emissions | `0x36877fBa8Fa333aa46a1c57b66D132E4995C86b5` | `0x5991d7a7f4d33f70e29ad71421820d37c8ae04eb99a720184b99a2b7d231876e` |
 | New emissions | `0xF13bE52c4A3afC6AE29536f073588d01A0564088` | `0x534c9513b91440044e12ad087f414f8ae0b59fd7cba3d892e1a522296bfcf464` |
 
-Pinned storage derivations are:
+P1-only pinned storage derivations are:
 
 - `AntseedDeposits.buyers` mapping slot `9`; `firstChannelAt` is struct
   offset `3`.
@@ -105,16 +104,27 @@ Pinned storage derivations are:
 - Seller and buyer counter evidence must cover both emissions contracts and
   every epoch `0` through `18` exactly once for the requested subject.
 
-The observed first new-emissions pointer block is `45,937,736`. Predicate v2
+The observed first new-emissions pointer block is `45,937,736`. Predicate v3
 does not trust the pointer as a volume oracle: it authenticates and sums the
 boundary deltas from both pinned emissions contracts directly.
 
 ### Funder identity and funding
 
 For cohort predicates, linked buyers must be nonzero, strictly sorted, unique,
-and between `3` and `160` entries. The seller and exact funder must be nonzero
-and different addresses. One funding witness must exist for every linked buyer
-and no unrelated or duplicate buyer funding witness is accepted.
+and between `3` and `160` entries. The seller and exact funder must be nonzero;
+a seller may be its own funder. One funding witness must exist for every linked
+buyer and no unrelated or duplicate buyer funding witness is accepted.
+
+For P0, a receipt/transaction witness proves only positive funding before the
+selected seller settlements. Direct USDC and protocol-deposit funding require
+the authenticated transaction signer to equal the funder. Native funding
+requires the same signer match plus a successful receipt for the authenticated
+transaction. Smart-account attribution is unsupported on this receipt-only
+path. P0 does not claim that the selected transfer is the buyer's first funder
+or predates the buyer's first-ever channel.
+
+P1 retains the stronger historical-state timing rule below and therefore still
+requires an archive RPC with historical `eth_getProof` support.
 
 For every linked buyer, the proof authenticates
 `AntseedDeposits.buyers[buyer].firstChannelAt` at block `49,936,172` and proves
@@ -159,7 +169,7 @@ For them, the proof requires:
 - The pinned owner slot decodes to a nonzero owner.
 - The pinned plugin-count slot is zero.
 
-The smart-account address—not its owner—is the funder identity. Predicate v2
+The smart-account address—not its owner—is the funder identity. Predicate v3
 does not merge the owner and smart-account addresses into one funder.
 
 #### Native ETH funding
@@ -174,7 +184,7 @@ does not merge the owner and smart-account addresses into one funder.
 
 Native ETH funding is intentionally **not** supported for smart-contract
 funders. A top-level Ethereum transaction cannot originate from a contract
-account, and predicate v2 does not authenticate internal native-value call
+account, and predicate v3 does not authenticate internal native-value call
 traces.
 
 ## P0 Closed-Cycle Guarantee
@@ -241,7 +251,7 @@ For every path:
 - the final funder receipt either loses no more than `1 USDC` or preserves at
   least `98%` of the seller payment.
 
-Predicate v2 prevents transfer-log reuse; it does not require relay addresses
+Predicate v3 prevents transfer-log reuse; it does not require relay addresses
 to be distinct within one path or across different paths.
 
 ### Closed-cycle journal and penalties
@@ -255,13 +265,10 @@ The closed-cycle guest commits:
 - authenticated qualified volume;
 - closure kind and path count;
 - fixed `9,000 BPS` penalty;
-- sorted, unique buyers that independently satisfy the 99% buyer-share rule;
 - sorted, unique canonical Base block references.
 
-The seller receives the future seller penalty. A linked buyer appears in
-`penalizedBuyers` only if authenticated target-seller volume is at least `99%`
-of that buyer's complete frozen-period `userBuyerPoints` delta across both
-emissions contracts and epochs `0–18`.
+The seller is marked P0 and receives the future seller-points penalty. P0 is
+seller-only: the journal contains no buyer counters or buyer penalties.
 
 ## P0 Reciprocal Guarantee
 
@@ -279,17 +286,15 @@ An accepted reciprocal proof guarantees all of the following.
   to A.
 - It contains at least `10 USDC` from A to B and at least `10 USDC` from B to
   A.
-
-There is no 80% balance rule and no reciprocity-share rule.
+- The smaller directional volume is at least `80%` of the larger directional
+  volume, using exact integer arithmetic.
 
 The reciprocal guest commits the normalized pair, both directional settlement
-counts, both directional volumes, fixed period and penalty, qualifying buyer
-penalties, deterministic claim ID, and canonical block references.
+counts, both directional volumes, fixed period and penalty, deterministic claim
+ID, and canonical block references.
 
-Both addresses receive the future seller penalty. Address A receives a future
-buyer penalty only if the authenticated A-to-B target volume is at least `99%`
-of A's complete frozen-period purchases. Address B is checked independently
-using B-to-A volume. The journal cannot penalize any buyer other than A or B.
+Both addresses are marked P0 and receive the future seller-points penalty. The
+P0 journal contains no buyer counters or buyer penalties.
 
 ## P1 Coordinated-Control Guarantee
 
@@ -383,11 +388,11 @@ cohort cannot be replayed as a different claim.
 
 All journals use ABI encoding and include:
 
-- `predicateVersion = 2`;
+- `predicateVersion = 3`;
 - the deterministic `claimId`;
 - fixed period start and end-exclusive blocks;
 - `penaltyBps = 9_000`;
-- a sorted, unique `penalizedBuyers` array capped at `160`; and
+- a sorted, unique `penalizedBuyers` array capped at `160` for P1 only; and
 - sorted, unique `(number, blockHash)` references capped at `256`.
 
 The journal ABI definitions live beside the Rust journals in
@@ -414,22 +419,25 @@ Before changing penalties, the registry:
    sorting, uniqueness, and journal-specific invariants; and
 5. checks every block reference against the Base state oracle.
 
-Claim IDs are idempotent. Seller and buyer penalties are monotonic and use
+Claim IDs are idempotent. Seller and P1 buyer penalties are monotonic and use
 `max(previousPenalty, 9_000)`, so separate proofs never add multiple 9,000-BPS
-penalties together. Including the cohort hash in cohort claim IDs allows a
-different proven cohort to add newly proven buyer penalties without stacking
-the seller penalty.
+penalties together. P0 proof bits are recorded independently from the points
+penalty, so a later P0 proof still marks a seller that an earlier P1 proof had
+already penalized.
 
 [`../antseed/packages/contracts/policies/AntseedWashTradingPointsPolicy.sol`](../antseed/packages/contracts/policies/AntseedWashTradingPointsPolicy.sol)
 returns seller and buyer penalties to the points-policy registry. A 9,000-BPS
 reduction leaves 10% of otherwise calculated future points. Previously accrued
-points, locked rewards, and historical reward state are not modified.
+points, locked rewards, and historical reward state are not confiscated or
+redirected. The separate composite reward policy holds P0 sellers and sellers
+submitted in its immutable deployment-time inactivity snapshot while preserving
+ownership of the locked balance. Later settlements cannot clear either block.
 
 Emergency policy removal remains available through the existing points-policy
 registry. There is no claim-level owner override or mutable enforcement
 allowlist in the wash-trading registry.
 
-## What Predicate v2 Does Not Prove
+## What Predicate v3 Does Not Prove
 
 These limitations are intentional and security-relevant:
 
@@ -438,6 +446,9 @@ These limitations are intentional and security-relevant:
   approved-address array.
 - P0 proves a sufficient authenticated set of settlements meeting its
   thresholds; it does not claim that every seller settlement is enumerated.
+- P0 funding proves a positive funding event before the selected settlements;
+  it does not prove the buyer's first funder or funding before the buyer's
+  first-ever channel.
 - P1 is the predicate that authenticates the seller's complete frozen-period
   counter delta for the 50% comparison.
 - CoW, routers, aggregators, and generic unpinned contract funders are not attributed.
@@ -454,7 +465,20 @@ These limitations are intentional and security-relevant:
 
 ## Proof and Submission Flow
 
-Materialize a coordinated-control witness from the frozen scan with a Base
+Materialize a P0 witness from a proof plan using an ordinary Base RPC. This path
+reads receipt and transaction tries only and never calls `eth_getProof`:
+
+```bash
+cd loop-proof
+
+BASE_RPC_URL="$BASE_RPC_URL" \
+  cargo run --release -p loop-host --bin wash-trading-materialize-p0 -- \
+  --plan /absolute/path/to/proof-plan.json \
+  --claim-id 0xClaimId \
+  --output cases/p0-witness-v3.json
+```
+
+Materialize a P1 coordinated-control witness from the frozen scan with a Base
 archive RPC that supports historical `eth_getProof` at both fixed state
 boundaries:
 
@@ -465,7 +489,7 @@ BASE_ARCHIVE_RPC_URL="$ARCHIVE_BASE_RPC_URL" \
   cargo run --release -p loop-host --bin wash-trading-materialize -- \
   --scan-dir /absolute/path/to/scan \
   --seller 0xSeller \
-  --output cases/p1-witness-v2.json
+  --output cases/p1-witness-v3.json
 ```
 
 Use `--funders 0xFunderA,0xFunderB` to restrict materialization to specific
@@ -485,20 +509,20 @@ reads while limiting archive-node usage to missing witness data. Without
 fixed boundary fails the initial archive preflight and cannot produce a valid
 witness.
 
-The predicate-v2 prover accepts one self-contained witness package per
+The predicate-v3 prover accepts one self-contained witness package per
 invocation:
 
 ```bash
 cd loop-proof
 
 cargo run -p loop-host --bin wash-trading-prove -- \
-  --input proof-witness-v2.json \
-  --output proof-result-v2.json
+  --input proof-witness-v3.json \
+  --output proof-result-v3.json
 ```
 
 The witness package must have:
 
-- `version: 2`;
+- `version: 3`;
 - `kind: "antseed-wash-trading-proof-witness"`;
 - `enforceable: true`; and
 - exactly one `proofType` and corresponding predicate input.
@@ -508,8 +532,8 @@ both `--production` and `RISC0_DEV_MODE=0`:
 
 ```bash
 RISC0_DEV_MODE=0 cargo run --release -p loop-host --bin wash-trading-prove -- \
-  --input proof-witness-v2.json \
-  --output proof-result-v2.json \
+  --input proof-witness-v3.json \
+  --output proof-result-v3.json \
   --prove \
   --production
 ```
@@ -524,13 +548,13 @@ Submit production results sequentially with the resumable script:
 cd ../antseed/packages/contracts
 
 node scripts/submit-wash-trading-proofs.mjs \
-  --manifest /absolute/path/proof-result-v2.json \
+  --manifest /absolute/path/proof-result-v3.json \
   --registry 0xRegistryAddress \
   --rpc-url "$ANTSEED_BASE_RPC_URL" \
   --dry-run
 
 node scripts/submit-wash-trading-proofs.mjs \
-  --manifest /absolute/path/proof-result-v2.json \
+  --manifest /absolute/path/proof-result-v3.json \
   --registry 0xRegistryAddress \
   --rpc-url "$ANTSEED_BASE_RPC_URL" \
   --submit
@@ -547,7 +571,7 @@ case can be submitted independently with its own result manifest.
 
 Analysis classifies cases as:
 
-- `proof-ready` — eligible for predicate-v2 production proving;
+- `proof-ready` — eligible for predicate-v3 production proving;
 - `analysis-only-router-attribution` — retained in analytics but refused by
   production proving and submission; or
 - `fails-predicate` — does not meet the predicate thresholds.

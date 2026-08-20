@@ -10,7 +10,7 @@ use loop_core::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const PREDICATE_VERSION: u32 = 2;
+pub const PREDICATE_VERSION: u32 = 3;
 pub const BASE_CHAIN_ID: u64 = 8_453;
 pub const PERIOD_START_BLOCK: u64 = 44_471_575;
 pub const PERIOD_END_BLOCK_EXCLUSIVE: u64 = 49_936_173;
@@ -29,6 +29,7 @@ pub const MINIMUM_CLOSURE_RAW: u128 = 1_000_000;
 pub const MINIMUM_RECIPROCAL_SETTLEMENTS: u32 = 100;
 pub const MINIMUM_RECIPROCAL_DIRECTION_SETTLEMENTS: u32 = 10;
 pub const MINIMUM_RECIPROCAL_DIRECTION_VOLUME_RAW: u128 = 10_000_000;
+pub const MINIMUM_RECIPROCAL_VOLUME_BPS: u128 = 8_000;
 pub const MAX_RELAY_SECONDS: u64 = 86_400;
 pub const MAX_RELAY_EARLY_DELTA_RAW: u128 = 1_000;
 pub const MIN_RELAY_RETAINED_BPS: u128 = 9_800;
@@ -182,6 +183,12 @@ pub struct FundingEvidence {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PositiveFundingEvidence {
+    pub buyer: Address,
+    pub kind: FundingKind,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SettlementEvidence {
     pub settlement: LogRef,
 }
@@ -240,10 +247,8 @@ pub struct ClosedCycleInput {
     pub funder: Address,
     pub linked_buyers: Vec<Address>,
     pub blocks: Vec<EnforcementBlock>,
-    pub state_proofs: Vec<Eip1186AccountProof>,
-    pub fundings: Vec<FundingEvidence>,
+    pub fundings: Vec<PositiveFundingEvidence>,
     pub settlements: Vec<SettlementEvidence>,
-    pub buyer_counters: Vec<CounterDelta>,
     pub closure: ClosureEvidence,
 }
 
@@ -253,9 +258,7 @@ pub struct ReciprocalInput {
     pub address_a: Address,
     pub address_b: Address,
     pub blocks: Vec<EnforcementBlock>,
-    pub state_proofs: Vec<Eip1186AccountProof>,
     pub settlements: Vec<SettlementEvidence>,
-    pub buyer_counters: Vec<CounterDelta>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -284,7 +287,6 @@ pub struct ClosedCycleJournal {
     pub closure_kind: u8,
     pub closure_path_count: u32,
     pub penalty_bps: u16,
-    pub penalized_buyers: Vec<Address>,
     pub block_refs: Vec<(u64, B256)>,
 }
 
@@ -301,7 +303,6 @@ pub struct ReciprocalJournal {
     pub volume_a_to_b_raw: u128,
     pub volume_b_to_a_raw: u128,
     pub penalty_bps: u16,
-    pub penalized_buyers: Vec<Address>,
     pub block_refs: Vec<(u64, B256)>,
 }
 
@@ -328,12 +329,12 @@ alloy_sol_types::sol! {
     struct SolClosedCycleJournal {
         uint32 predicateVersion; bytes32 claimId; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
         address seller; address funder; bytes32 cohortHash; uint32 cohortCount; uint128 qualifiedVolumeRaw;
-        uint8 closureKind; uint32 closurePathCount; uint16 penaltyBps; address[] penalizedBuyers; SolBlockRef[] blockRefs;
+        uint8 closureKind; uint32 closurePathCount; uint16 penaltyBps; SolBlockRef[] blockRefs;
     }
     struct SolReciprocalJournal {
         uint32 predicateVersion; bytes32 claimId; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
         address addressA; address addressB; uint32 settlementCountAToB; uint32 settlementCountBToA;
-        uint128 volumeAToBRaw; uint128 volumeBToARaw; uint16 penaltyBps; address[] penalizedBuyers; SolBlockRef[] blockRefs;
+        uint128 volumeAToBRaw; uint128 volumeBToARaw; uint16 penaltyBps; SolBlockRef[] blockRefs;
     }
     struct SolCoordinatedControlJournal {
         uint32 predicateVersion; bytes32 claimId; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
@@ -379,7 +380,6 @@ impl ClosedCycleJournal {
             closureKind: self.closure_kind,
             closurePathCount: self.closure_path_count,
             penaltyBps: self.penalty_bps,
-            penalizedBuyers: self.penalized_buyers.clone(),
             blockRefs: sol_block_refs(&self.block_refs),
         }
         .abi_encode()
@@ -400,7 +400,6 @@ impl ReciprocalJournal {
             volumeAToBRaw: self.volume_a_to_b_raw,
             volumeBToARaw: self.volume_b_to_a_raw,
             penaltyBps: self.penalty_bps,
-            penalizedBuyers: self.penalized_buyers.clone(),
             blockRefs: sol_block_refs(&self.block_refs),
         }
         .abi_encode()
@@ -437,18 +436,16 @@ pub fn verify_closed_cycle(input: &ClosedCycleInput) -> Result<ClosedCycleJourna
         &input.linked_buyers,
     )?;
     let block_refs = authenticate_blocks(&input.blocks)?;
-    let state = StateResolver::authenticate(&input.blocks, &input.state_proofs)?;
     let resolver = ChainResolver {
         blocks: &input.blocks,
     };
-    let funding_times = verify_fundings(
+    let funding_times = verify_positive_fundings(
         input.funder,
         &input.linked_buyers,
         &input.fundings,
         &resolver,
-        &state,
     )?;
-    let (qualified_volume_raw, target_volumes, crossing_key) = verify_settlements(
+    let (qualified_volume_raw, _, crossing_key) = verify_settlements(
         input.seller,
         &input.linked_buyers,
         &funding_times,
@@ -465,12 +462,6 @@ pub fn verify_closed_cycle(input: &ClosedCycleInput) -> Result<ClosedCycleJourna
         crossing_key.ok_or("closed cycle: threshold was not crossed")?,
         &input.closure,
         &resolver,
-    )?;
-    let penalized_buyers = qualifying_buyers(
-        &input.linked_buyers,
-        &target_volumes,
-        &input.buyer_counters,
-        &state,
     )?;
     let cohort_hash = cohort_hash(&input.linked_buyers);
     Ok(ClosedCycleJournal {
@@ -491,7 +482,6 @@ pub fn verify_closed_cycle(input: &ClosedCycleInput) -> Result<ClosedCycleJourna
         closure_kind,
         closure_path_count,
         penalty_bps: PENALTY_BPS,
-        penalized_buyers,
         block_refs,
     })
 }
@@ -505,7 +495,6 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<ReciprocalJournal, S
         return Err("reciprocal: pair must be nonzero and normalized".into());
     }
     let block_refs = authenticate_blocks(&input.blocks)?;
-    let state = StateResolver::authenticate(&input.blocks, &input.state_proofs)?;
     let resolver = ChainResolver {
         blocks: &input.blocks,
     };
@@ -539,22 +528,9 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<ReciprocalJournal, S
             return Err("reciprocal: settlement does not belong to exact ordered pair".into());
         }
     }
-    if count_ab
-        .checked_add(count_ba)
-        .ok_or("reciprocal: count overflow")?
-        < MINIMUM_RECIPROCAL_SETTLEMENTS
-        || count_ab < MINIMUM_RECIPROCAL_DIRECTION_SETTLEMENTS
-        || count_ba < MINIMUM_RECIPROCAL_DIRECTION_SETTLEMENTS
-        || volume_ab < MINIMUM_RECIPROCAL_DIRECTION_VOLUME_RAW
-        || volume_ba < MINIMUM_RECIPROCAL_DIRECTION_VOLUME_RAW
-    {
+    if !reciprocal_thresholds_satisfied(count_ab, count_ba, volume_ab, volume_ba)? {
         return Err("reciprocal: directional threshold not satisfied".into());
     }
-    let buyers = vec![input.address_a, input.address_b];
-    let target_volumes =
-        BTreeMap::from([(input.address_a, volume_ab), (input.address_b, volume_ba)]);
-    let penalized_buyers =
-        qualifying_buyers(&buyers, &target_volumes, &input.buyer_counters, &state)?;
     Ok(ReciprocalJournal {
         predicate_version: PREDICATE_VERSION,
         claim_id: reciprocal_claim_id(input.address_a, input.address_b),
@@ -567,9 +543,33 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<ReciprocalJournal, S
         volume_a_to_b_raw: volume_ab,
         volume_b_to_a_raw: volume_ba,
         penalty_bps: PENALTY_BPS,
-        penalized_buyers,
         block_refs,
     })
+}
+
+fn reciprocal_thresholds_satisfied(
+    count_ab: u32,
+    count_ba: u32,
+    volume_ab: u128,
+    volume_ba: u128,
+) -> Result<bool, String> {
+    let total_count = count_ab
+        .checked_add(count_ba)
+        .ok_or("reciprocal: count overflow")?;
+    let minimum_volume = volume_ab.min(volume_ba);
+    let maximum_volume = volume_ab.max(volume_ba);
+    let reciprocal = minimum_volume
+        .checked_mul(10_000)
+        .ok_or("reciprocal: ratio overflow")?
+        >= maximum_volume
+            .checked_mul(MINIMUM_RECIPROCAL_VOLUME_BPS)
+            .ok_or("reciprocal: ratio overflow")?;
+    Ok(total_count >= MINIMUM_RECIPROCAL_SETTLEMENTS
+        && count_ab >= MINIMUM_RECIPROCAL_DIRECTION_SETTLEMENTS
+        && count_ba >= MINIMUM_RECIPROCAL_DIRECTION_SETTLEMENTS
+        && volume_ab >= MINIMUM_RECIPROCAL_DIRECTION_VOLUME_RAW
+        && volume_ba >= MINIMUM_RECIPROCAL_DIRECTION_VOLUME_RAW
+        && reciprocal)
 }
 
 pub fn verify_coordinated_control(
@@ -586,7 +586,7 @@ pub fn verify_coordinated_control(
         blocks: &input.blocks,
     };
     for cohort in &input.funding_cohorts {
-        verify_fundings(
+        verify_state_fundings(
             cohort.funder,
             &cohort.linked_buyers,
             &cohort.fundings,
@@ -1060,7 +1060,106 @@ impl ChainResolver<'_> {
     }
 }
 
-fn verify_fundings(
+fn verify_positive_fundings(
+    funder: Address,
+    linked_buyers: &[Address],
+    fundings: &[PositiveFundingEvidence],
+    resolver: &ChainResolver<'_>,
+) -> Result<BTreeMap<Address, u64>, String> {
+    if fundings.len() != linked_buyers.len() {
+        return Err("funding evidence must cover each linked buyer exactly once".into());
+    }
+    let linked = linked_buyers.iter().copied().collect::<BTreeSet<_>>();
+    let mut times = BTreeMap::new();
+    for evidence in fundings {
+        if !linked.contains(&evidence.buyer) || times.contains_key(&evidence.buyer) {
+            return Err("duplicate or unrelated funding buyer".into());
+        }
+        let funding_time = match evidence.kind {
+            FundingKind::Usdc { transfer } => {
+                let (from, to, amount, _) = resolver.usdc_transfer(transfer)?;
+                if from != funder || to != evidence.buyer || amount < MINIMUM_USDC_FUNDING_RAW {
+                    return Err("invalid direct USDC funding".into());
+                }
+                require_transaction_signer(
+                    funder,
+                    resolver.transaction_for_log(transfer)?,
+                    resolver,
+                )?;
+                resolver.block(transfer.block)?.header.timestamp
+            }
+            FundingKind::ProtocolDeposit {
+                transfer,
+                deposited,
+            } => {
+                if transfer.block != deposited.block || transfer.receipt != deposited.receipt {
+                    return Err("protocol deposit logs must share one receipt".into());
+                }
+                let transfer_key = resolver.log_key(transfer)?;
+                let deposited_key = resolver.log_key(deposited)?;
+                let (from, to, transferred_amount, _) = resolver.usdc_transfer(transfer)?;
+                let (deposit_buyer, deposited_amount, _) = resolver.protocol_deposit(deposited)?;
+                if !valid_protocol_deposit(
+                    transfer_key,
+                    deposited_key,
+                    from,
+                    to,
+                    transferred_amount,
+                    deposit_buyer,
+                    deposited_amount,
+                    funder,
+                    evidence.buyer,
+                ) {
+                    return Err("invalid protocol-deposit funding".into());
+                }
+                require_transaction_signer(
+                    funder,
+                    resolver.transaction_for_log(transfer)?,
+                    resolver,
+                )?;
+                resolver.block(transfer.block)?.header.timestamp
+            }
+            FundingKind::Native {
+                transaction,
+                receipt,
+            } => {
+                let (receipt_proof, receipt_block) = resolver.receipt(receipt)?;
+                if !receipt_success(&receipt_proof.value)? {
+                    return Err("native funding receipt reverted".into());
+                }
+                let (envelope, signer, transaction_block) =
+                    resolver.decoded_transaction(transaction)?;
+                let (transaction_proof, _) = resolver.transaction(transaction)?;
+                if receipt.block != transaction.block
+                    || receipt_proof.tx_index != transaction_proof.tx_index
+                    || receipt_block.header.number != transaction_block.header.number
+                    || signer != funder
+                    || envelope.to() != Some(evidence.buyer)
+                    || envelope.value() < U256::from(MINIMUM_NATIVE_FUNDING_WEI)
+                {
+                    return Err("invalid native funding".into());
+                }
+                transaction_block.header.timestamp
+            }
+        };
+        times.insert(evidence.buyer, funding_time);
+    }
+    Ok(times)
+}
+
+fn require_transaction_signer(
+    funder: Address,
+    transaction: TransactionRef,
+    resolver: &ChainResolver<'_>,
+) -> Result<(), String> {
+    let (_, signer, _) = resolver.decoded_transaction(transaction)?;
+    if signer != funder {
+        return Err("funding transaction signer mismatch".into());
+    }
+    Ok(())
+}
+
+fn verify_state_fundings(
     funder: Address,
     linked_buyers: &[Address],
     fundings: &[FundingEvidence],
@@ -1673,6 +1772,7 @@ fn topic_address(topic: B256) -> Address {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy_trie::{proof::ProofRetainer, HashBuilder};
 
     #[test]
     fn relay_boundaries_are_exact() {
@@ -1770,6 +1870,109 @@ mod tests {
         assert!(!buyer_share_qualifies(98, 100).unwrap());
         assert!(buyer_share_qualifies(99_000_000, 100_000_000).unwrap());
         assert!(!buyer_share_qualifies(98_999_999, 100_000_000).unwrap());
+        assert!(reciprocal_thresholds_satisfied(50, 50, 50_000_000, 40_000_000).unwrap());
+        assert!(!reciprocal_thresholds_satisfied(50, 50, 50_000_000, 39_999_999).unwrap());
+    }
+
+    #[test]
+    fn reciprocal_receipt_witness_authenticates_and_rejects_tampering() {
+        let input = reciprocal_input(1_000_000, 800_000, true);
+        let journal = verify_reciprocal(&input).unwrap();
+        assert_eq!(journal.settlement_count_a_to_b, 50);
+        assert_eq!(journal.settlement_count_b_to_a, 50);
+        assert_eq!(journal.volume_a_to_b_raw, 50_000_000);
+        assert_eq!(journal.volume_b_to_a_raw, 40_000_000);
+
+        let mut tampered_root = input.clone();
+        tampered_root.blocks[0].header.receipts_root = B256::ZERO;
+        assert!(verify_reciprocal(&tampered_root).is_err());
+
+        let mut duplicate = input.clone();
+        duplicate.settlements.push(duplicate.settlements[0].clone());
+        assert!(verify_reciprocal(&duplicate)
+            .unwrap_err()
+            .contains("duplicate settlement"));
+
+        let mut wrong_subject = input.clone();
+        wrong_subject.address_b = address!("0000000000000000000000000000000000000003");
+        assert!(verify_reciprocal(&wrong_subject)
+            .unwrap_err()
+            .contains("exact ordered pair"));
+
+        let reverted = reciprocal_input(1_000_000, 800_000, false);
+        assert!(verify_reciprocal(&reverted)
+            .unwrap_err()
+            .contains("referenced receipt reverted"));
+
+        let below_ratio = reciprocal_input(1_000_000, 799_999, true);
+        assert!(verify_reciprocal(&below_ratio)
+            .unwrap_err()
+            .contains("directional threshold"));
+    }
+
+    #[test]
+    fn receipt_only_funding_requires_the_recovered_funder_signer() {
+        let raw = alloy_primitives::hex::decode("01f86382210580018252089400000000000000000000000000000000000000aa0180c001a04e4f22a8bf8949e504ea441c49c09aef77d2c21559b6dec72922ce5f0bf82405a05970730d98c433bfa3a0abf720cb52020856b6b446d3bc345197d1d53198639d").unwrap();
+        let block = transaction_block(Bytes::from(raw));
+        let blocks = [block];
+        let resolver = ChainResolver { blocks: &blocks };
+        let reference = TransactionRef {
+            block: 0,
+            transaction: 0,
+        };
+        let signer = address!("19e7e376e7c213b7e7e7e46cc70a5dd086daff2a");
+        assert!(require_transaction_signer(signer, reference, &resolver).is_ok());
+        assert!(require_transaction_signer(
+            address!("0000000000000000000000000000000000000001"),
+            reference,
+            &resolver
+        )
+        .unwrap_err()
+        .contains("signer mismatch"));
+    }
+
+    #[test]
+    fn closed_cycle_receipt_witness_enforces_funding_order_threshold_and_closure() {
+        let input = closed_cycle_input(400_000_000);
+        let journal = verify_closed_cycle(&input).unwrap();
+        assert_eq!(journal.cohort_count, 3);
+        assert_eq!(journal.qualified_volume_raw, 1_200_000_000);
+        assert_eq!(journal.closure_kind, 1);
+
+        let mut funding_after_settlement = input.clone();
+        funding_after_settlement.blocks[0].header.timestamp = PERIOD_START_BLOCK + 100;
+        assert!(verify_closed_cycle(&funding_after_settlement)
+            .unwrap_err()
+            .contains("settlement is not after funding"));
+
+        let insufficient = closed_cycle_input(300_000_000);
+        assert!(verify_closed_cycle(&insufficient)
+            .unwrap_err()
+            .contains("qualified volume below 1,000 USDC"));
+
+        let mut duplicate = input.clone();
+        duplicate.settlements.push(duplicate.settlements[0].clone());
+        assert!(verify_closed_cycle(&duplicate)
+            .unwrap_err()
+            .contains("duplicate settlement"));
+
+        let mut invalid_closure = input.clone();
+        invalid_closure.closure = ClosureEvidence::Direct {
+            transfer: invalid_closure.settlements[0].settlement,
+        };
+        assert!(verify_closed_cycle(&invalid_closure).is_err());
+
+        let mut wrong_signer = input.clone();
+        wrong_signer.funder = address!("0000000000000000000000000000000000000010");
+        assert!(verify_closed_cycle(&wrong_signer).is_err());
+
+        let mut tampered_receipt = input.clone();
+        tampered_receipt.blocks[0].header.receipts_root = B256::ZERO;
+        assert!(verify_closed_cycle(&tampered_receipt).is_err());
+
+        let mut tampered_transaction = input.clone();
+        tampered_transaction.blocks[0].header.transactions_root = B256::ZERO;
+        assert!(verify_closed_cycle(&tampered_transaction).is_err());
     }
 
     #[test]
@@ -1854,5 +2057,294 @@ mod tests {
         malformed.exists = true;
         malformed.code_hash = DEPOSITS_CODE_HASH;
         assert!(StateResolver::authenticate(&[block], &[malformed]).is_err());
+    }
+
+    fn reciprocal_input(
+        amount_a_to_b: u128,
+        amount_b_to_a: u128,
+        success: bool,
+    ) -> ReciprocalInput {
+        let address_a = address!("0000000000000000000000000000000000000001");
+        let address_b = address!("0000000000000000000000000000000000000002");
+        let mut blocks = Vec::new();
+        let mut settlements = Vec::new();
+        for index in 0..100usize {
+            let (buyer, seller, amount) = if index < 50 {
+                (address_a, address_b, amount_a_to_b)
+            } else {
+                (address_b, address_a, amount_b_to_a)
+            };
+            blocks.push(settlement_block(
+                PERIOD_START_BLOCK + index as u64,
+                buyer,
+                seller,
+                amount,
+                success,
+            ));
+            settlements.push(SettlementEvidence {
+                settlement: LogRef {
+                    block: index,
+                    receipt: 0,
+                    log: 0,
+                },
+            });
+        }
+        ReciprocalInput {
+            chain_id: BASE_CHAIN_ID,
+            address_a,
+            address_b,
+            blocks,
+            settlements,
+        }
+    }
+
+    fn closed_cycle_input(settlement_amount: u128) -> ClosedCycleInput {
+        let funder = address!("19e7e376e7c213b7e7e7e46cc70a5dd086daff2a");
+        let seller = address!("00000000000000000000000000000000000000aa");
+        let buyers = vec![
+            address!("0000000000000000000000000000000000000001"),
+            address!("0000000000000000000000000000000000000002"),
+            address!("0000000000000000000000000000000000000003"),
+        ];
+        let transaction = Bytes::from(alloy_primitives::hex::decode("01f86382210580018252089400000000000000000000000000000000000000aa0180c001a04e4f22a8bf8949e504ea441c49c09aef77d2c21559b6dec72922ce5f0bf82405a05970730d98c433bfa3a0abf720cb52020856b6b446d3bc345197d1d53198639d").unwrap());
+        let mut blocks = Vec::new();
+        let mut fundings = Vec::new();
+        for (index, buyer) in buyers.iter().copied().enumerate() {
+            blocks.push(usdc_transfer_block(
+                PERIOD_START_BLOCK - 20 + index as u64,
+                funder,
+                buyer,
+                MINIMUM_USDC_FUNDING_RAW,
+                Some(transaction.clone()),
+            ));
+            fundings.push(PositiveFundingEvidence {
+                buyer,
+                kind: FundingKind::Usdc {
+                    transfer: LogRef {
+                        block: index,
+                        receipt: 0,
+                        log: 0,
+                    },
+                },
+            });
+        }
+        let mut settlements = Vec::new();
+        for (index, buyer) in buyers.iter().copied().enumerate() {
+            blocks.push(settlement_block(
+                PERIOD_START_BLOCK + index as u64,
+                buyer,
+                seller,
+                settlement_amount,
+                true,
+            ));
+            settlements.push(SettlementEvidence {
+                settlement: LogRef {
+                    block: buyers.len() + index,
+                    receipt: 0,
+                    log: 0,
+                },
+            });
+        }
+        blocks.push(usdc_transfer_block(
+            PERIOD_START_BLOCK + 10,
+            seller,
+            funder,
+            MINIMUM_CLOSURE_RAW,
+            None,
+        ));
+        ClosedCycleInput {
+            chain_id: BASE_CHAIN_ID,
+            seller,
+            funder,
+            linked_buyers: buyers,
+            blocks,
+            fundings,
+            settlements,
+            closure: ClosureEvidence::Direct {
+                transfer: LogRef {
+                    block: 6,
+                    receipt: 0,
+                    log: 0,
+                },
+            },
+        }
+    }
+
+    fn settlement_block(
+        number: u64,
+        buyer: Address,
+        seller: Address,
+        amount: u128,
+        success: bool,
+    ) -> EnforcementBlock {
+        let mut data = [0u8; 64];
+        data[48..].copy_from_slice(&amount.to_be_bytes());
+        let log = rlp_list(&[
+            rlp_bytes(CHANNELS_ADDRESS.as_slice()),
+            rlp_list(&[
+                rlp_bytes(CHANNEL_SETTLED_TOPIC.as_slice()),
+                rlp_bytes(B256::ZERO.as_slice()),
+                rlp_bytes(address_topic(buyer).as_slice()),
+                rlp_bytes(address_topic(seller).as_slice()),
+            ]),
+            rlp_bytes(&data),
+        ]);
+        let receipt = Bytes::from(rlp_list(&[
+            rlp_uint(if success { 1 } else { 0 }),
+            rlp_uint(1),
+            rlp_bytes(&[0u8; 256]),
+            rlp_list(&[log]),
+        ]));
+        let (receipts_root, proof) = trie_proof(&receipt);
+        EnforcementBlock {
+            header: Header {
+                number,
+                timestamp: number,
+                receipts_root,
+                ..Default::default()
+            },
+            receipts: vec![ReceiptProof {
+                tx_index: 0,
+                value: receipt,
+                proof,
+            }],
+            transactions: Vec::new(),
+        }
+    }
+
+    fn usdc_transfer_block(
+        number: u64,
+        from: Address,
+        to: Address,
+        amount: u128,
+        transaction: Option<Bytes>,
+    ) -> EnforcementBlock {
+        let mut data = [0u8; 32];
+        data[16..].copy_from_slice(&amount.to_be_bytes());
+        let log = rlp_list(&[
+            rlp_bytes(USDC_ADDRESS.as_slice()),
+            rlp_list(&[
+                rlp_bytes(TRANSFER_TOPIC.as_slice()),
+                rlp_bytes(address_topic(from).as_slice()),
+                rlp_bytes(address_topic(to).as_slice()),
+            ]),
+            rlp_bytes(&data),
+        ]);
+        let receipt = Bytes::from(rlp_list(&[
+            rlp_uint(1),
+            rlp_uint(1),
+            rlp_bytes(&[0u8; 256]),
+            rlp_list(&[log]),
+        ]));
+        let (receipts_root, receipt_proof) = trie_proof(&receipt);
+        let (transactions_root, transactions) = if let Some(value) = transaction {
+            let (root, proof) = trie_proof(&value);
+            (
+                root,
+                vec![TransactionProof {
+                    tx_index: 0,
+                    value,
+                    proof,
+                }],
+            )
+        } else {
+            (B256::ZERO, Vec::new())
+        };
+        EnforcementBlock {
+            header: Header {
+                number,
+                timestamp: number,
+                receipts_root,
+                transactions_root,
+                ..Default::default()
+            },
+            receipts: vec![ReceiptProof {
+                tx_index: 0,
+                value: receipt,
+                proof: receipt_proof,
+            }],
+            transactions,
+        }
+    }
+
+    fn transaction_block(value: Bytes) -> EnforcementBlock {
+        let (transactions_root, proof) = trie_proof(&value);
+        EnforcementBlock {
+            header: Header {
+                number: PERIOD_START_BLOCK,
+                transactions_root,
+                ..Default::default()
+            },
+            receipts: Vec::new(),
+            transactions: vec![TransactionProof {
+                tx_index: 0,
+                value,
+                proof,
+            }],
+        }
+    }
+
+    fn trie_proof(value: &Bytes) -> (B256, Vec<Bytes>) {
+        let key = Nibbles::unpack(loop_core::trie_index_key(0));
+        let mut builder =
+            HashBuilder::default().with_proof_retainer(ProofRetainer::new(vec![key.clone()]));
+        builder.add_leaf(key.clone(), value.as_ref());
+        let root = builder.root();
+        let proof = builder
+            .take_proof_nodes()
+            .matching_nodes_sorted(&key)
+            .into_iter()
+            .map(|(_, node)| node)
+            .collect();
+        (root, proof)
+    }
+
+    fn address_topic(value: Address) -> B256 {
+        let mut topic = [0u8; 32];
+        topic[12..].copy_from_slice(value.as_slice());
+        B256::from(topic)
+    }
+
+    fn rlp_len_prefix(base: u8, len: usize) -> Vec<u8> {
+        if len <= 55 {
+            vec![base + len as u8]
+        } else {
+            let bytes = (len as u64).to_be_bytes();
+            let significant = bytes
+                .iter()
+                .skip_while(|byte| **byte == 0)
+                .copied()
+                .collect::<Vec<_>>();
+            let mut prefix = vec![base + 55 + significant.len() as u8];
+            prefix.extend(significant);
+            prefix
+        }
+    }
+
+    fn rlp_bytes(bytes: &[u8]) -> Vec<u8> {
+        if bytes.len() == 1 && bytes[0] < 0x80 {
+            return bytes.to_vec();
+        }
+        [rlp_len_prefix(0x80, bytes.len()), bytes.to_vec()].concat()
+    }
+
+    fn rlp_list(items: &[Vec<u8>]) -> Vec<u8> {
+        let payload = items.concat();
+        [rlp_len_prefix(0xc0, payload.len()), payload].concat()
+    }
+
+    fn rlp_uint(value: u128) -> Vec<u8> {
+        if value == 0 {
+            return vec![0x80];
+        }
+        let bytes = value.to_be_bytes();
+        rlp_bytes(
+            bytes
+                .iter()
+                .skip_while(|byte| **byte == 0)
+                .copied()
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )
     }
 }

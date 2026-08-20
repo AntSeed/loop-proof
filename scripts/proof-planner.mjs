@@ -5,6 +5,8 @@ export const AGGREGATE_VERIFIER_START_BLOCK = 46_302_960;
 export const CHECKPOINT_WINDOW_BLOCKS = 30;
 export const HISTORICAL_START_BLOCK = 44_469_557;
 export const MINIMUM_VOLUME_RAW = 1_000_000_000n;
+export const MINIMUM_RECIPROCAL_DIRECTION_VOLUME_RAW = 10_000_000n;
+export const MINIMUM_RECIPROCAL_VOLUME_BPS = 8_000n;
 
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const CHANNEL_SETTLED_TOPIC = "0x0b287f37d8bd14ef37f2966734ab387c243cc1a1663616a25a4cc259877736b1";
@@ -257,6 +259,7 @@ function buildCohortStrategy(strategy, fundings, settlements, closure) {
   const requiredBuyers = closure.evidence.filter((entry) => entry.evidenceType === "DIRECT_SELLER_BUYER").map((entry) => entry.buyer);
   const selection = selectMinimumSettlementWindows(eligibleSettlements, fundingByBuyer, fixedBlocks, requiredBuyers);
   if (!selection) return null;
+  if (closure.evidence.length > 0 && !closureOccursAfterThreshold(selection.settlements, closure.evidence)) return null;
   const funding = selection.buyers.map((buyer) => fundingByBuyer.get(buyer));
   const allEvidence = [...closure.evidence, ...funding, ...selection.settlements];
   return {
@@ -451,27 +454,9 @@ function compareWindowRank(left, right) {
 
 function planReciprocal(claim, dependencies, bundle) {
   const settlements = dependencies.filter((entry) => entry.evidenceType === "RECIPROCAL_SETTLEMENT");
-  const byWindow = [...groupBy(settlements, (entry) => authenticationGroup(entry.blockNumber)).entries()]
-    .map(([checkpoint, entries]) => ({ checkpoint, entries: [...entries].sort(compareEvidence) }))
-    .sort((left, right) => left.checkpoint.localeCompare(right.checkpoint));
-  let states = new Map([["0:0", { windows: [], count: 0, directions: 0 }]]);
-  for (const window of byWindow) {
-    const mask = directionMask(window.entries, claim);
-    const next = new Map(states);
-    for (const state of states.values()) {
-      const candidate = { windows: [...state.windows, window], count: state.count + window.entries.length, directions: state.directions | mask };
-      const cappedCount = Math.min(100, candidate.count);
-      const key = `${candidate.directions}:${cappedCount}`;
-      const existing = next.get(key);
-      if (!existing || compareReciprocalState(candidate, existing) < 0) next.set(key, candidate);
-    }
-    states = next;
-  }
-  const valid = [...states.values()].filter((state) => state.count >= 100 && state.directions === 3).sort(compareReciprocalState);
-  if (valid.length === 0) throw new Error(`${claim.claimId}: fewer than 100 bidirectional settlements`);
-  const selected = minimumReciprocalReceipts(valid[0].windows.flatMap((window) => window.entries), claim);
+  const selected = minimumReciprocalReceipts(settlements, claim);
   return finalizePlanClaim(claim, selected, {
-    selectionReason: `minimum reciprocal windows; 100 receipts; cost=${costTuple(selected).join("/")}`,
+    selectionReason: `100 receipts; at least 80% volume reciprocity; cost=${costTuple(selected).join("/")}`,
     rejectedAlternatives: [],
     provenSettlementCount: selected.length,
     provenDirections: 2,
@@ -490,13 +475,26 @@ function selectClosureForFunder(dependencies, funder, approvedBuyers) {
     if (candidates.length === 0) continue;
     if (evidenceClass !== "RELAY_PATH") {
       candidates.sort(compareEvidence);
-      return { evidence: [candidates[0]], evidenceClass, rejected: [...rejected, ...candidates.slice(1).map(summarizeEvidence)] };
+      const selected = candidates.at(-1);
+      return { evidence: [selected], evidenceClass, rejected: [...rejected, ...candidates.slice(0, -1).map(summarizeEvidence)] };
     }
     const valid = candidates.filter(validRelayPath).sort(compareRelayPath);
-    if (valid.length >= 3) return { evidence: valid.slice(0, 3), evidenceClass, rejected: [...rejected, ...valid.slice(3).map(summarizeEvidence)] };
+    if (valid.length >= 3) return { evidence: valid.slice(-3), evidenceClass, rejected: [...rejected, ...valid.slice(0, -3).map(summarizeEvidence)] };
     rejected.push(...candidates.map(summarizeEvidence));
   }
   return null;
+}
+
+function closureOccursAfterThreshold(settlements, closureEvidence) {
+  const ordered = [...settlements].sort(compareEvidence);
+  let volume = 0n;
+  let crossing = null;
+  for (const settlement of ordered) {
+    volume += BigInt(settlement.amountRaw);
+    if (crossing == null && volume >= MINIMUM_VOLUME_RAW) crossing = settlement;
+  }
+  if (crossing == null) return false;
+  return closureEvidence.flatMap(atomicEvidence).every((entry) => compareEvidence(entry, crossing) > 0);
 }
 
 function validRelayPath(path) {
@@ -610,17 +608,31 @@ function finalizeReceiptSelection(entries) {
 }
 
 function minimumReciprocalReceipts(entries, claim) {
-  const aToB = entries.filter((entry) => entry.buyer === claim.walletA && entry.seller === claim.walletB).sort(compareEvidence);
-  const bToA = entries.filter((entry) => entry.buyer === claim.walletB && entry.seller === claim.walletA).sort(compareEvidence);
-  if (aToB.length === 0 || bToA.length === 0) throw new Error("reciprocal selection lacks one direction");
-  const selected = [aToB[0], bToA[0]];
-  const used = new Set(selected.map((entry) => entry.dependencyId));
-  for (const entry of [...entries].sort(compareEvidence)) {
-    if (selected.length === 100) break;
-    if (!used.has(entry.dependencyId)) { selected.push(entry); used.add(entry.dependencyId); }
+  const byAmount = (left, right) => BigInt(right.amountRaw) > BigInt(left.amountRaw) ? 1 : BigInt(right.amountRaw) < BigInt(left.amountRaw) ? -1 : compareEvidence(left, right);
+  const aToB = entries.filter((entry) => entry.buyer === claim.walletA && entry.seller === claim.walletB).sort(byAmount);
+  const bToA = entries.filter((entry) => entry.buyer === claim.walletB && entry.seller === claim.walletA).sort(byAmount);
+  let best = null;
+  for (let countAToB = 10; countAToB <= 90; countAToB += 1) {
+    const countBToA = 100 - countAToB;
+    if (aToB.length < countAToB || bToA.length < countBToA) continue;
+    const selectedAToB = aToB.slice(0, countAToB);
+    const selectedBToA = bToA.slice(0, countBToA);
+    const volumeAToB = sumRaw(selectedAToB);
+    const volumeBToA = sumRaw(selectedBToA);
+    if (!reciprocalVolumesQualify(volumeAToB, volumeBToA)) continue;
+    const selected = [...selectedAToB, ...selectedBToA].sort(compareEvidence);
+    const candidate = { selected, cost: costTuple(selected) };
+    if (!best || compareCost(candidate, best) < 0) best = candidate;
   }
-  if (selected.length !== 100) throw new Error("reciprocal selection has fewer than 100 unique receipts");
-  return selected.sort(compareEvidence);
+  if (!best) throw new Error("reciprocal selection cannot satisfy count, directional volume, and 80% reciprocity");
+  return best.selected;
+}
+
+function reciprocalVolumesQualify(volumeAToB, volumeBToA) {
+  if (volumeAToB < MINIMUM_RECIPROCAL_DIRECTION_VOLUME_RAW || volumeBToA < MINIMUM_RECIPROCAL_DIRECTION_VOLUME_RAW) return false;
+  const minimum = volumeAToB < volumeBToA ? volumeAToB : volumeBToA;
+  const maximum = volumeAToB > volumeBToA ? volumeAToB : volumeBToA;
+  return minimum * 10_000n >= maximum * MINIMUM_RECIPROCAL_VOLUME_BPS;
 }
 
 function locateLog(logs, dependency, contracts) {

@@ -736,6 +736,7 @@ version = "0.1.0"
 dependencies = [
  "enforcement-core",
  "risc0-zkvm",
+ "serde_json",
 ]
 
 [[package]]

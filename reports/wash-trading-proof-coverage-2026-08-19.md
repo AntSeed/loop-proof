@@ -5,34 +5,34 @@ Source scan: `90c3bbb3f29831d912ff60dc` (conservative-v2)
 ## Summary
 
 - 42 report findings = 18 seller findings + 24 reciprocal-pair findings.
-- Predicate v2 supports native funding, direct USDC funding, and authenticated protocol deposits, including seller-funded buyers.
+- Predicate v3 supports native funding, direct USDC funding, and authenticated protocol deposits, including seller-funded buyers.
 - Multi-funder P1 aggregation is allowed only when every included exact funder funds at least 3 selected buyers.
 - 13 of 18 seller findings satisfy 3 buyers, 1,000 USDC, and 50% after funding with one funder.
 - 4 fail the single-funder 50% threshold; 1 additional finding passes 50% but remains below 1,000 USDC.
-- 39 cases are proof-ready; 0 remain analysis-only for router attribution; 3 fail predicate v2.
+- 39 cases are proof-ready; 0 remain analysis-only for router attribution; 3 fail predicate v3.
 
 ## Seller Findings
 
 | Priority | Seller | Enforcement status | Support category | Best single-funder result | Multi-funder result | Threshold status |
 |---|---|---|---|---|---|---|
-| P0 | Flash · `0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c` | proof-ready | closed-cycle predicate v2 | first_native_funder · 0xd0b238…0b76 · 50 buyers · 42,738.709496 USDC · 95.29% | 50 buyers · 42,748.461892 USDC · 95.31% | passes |
-| P1 | CatGPT · `0xb629449e487740c5fb86d7c4ddd51709d692dab4` | proof-ready | protocol-deposit predicate v2 | primary_usdc_funder · 0xb62944…dab4 · 15 buyers · 21,972.469339 USDC · 92.84% | 15 buyers · 21,972.469339 USDC · 92.84% | passes |
-| P1 | StrataCode · `0x6f9b9e63d3f776d359eb2fb0a82d12ee496fbefe` | proof-ready | native exact-funder predicate v2 | first_native_funder · 0x55d2ee…0e44 · 17 buyers · 10,612.500621 USDC · 73.12% | 24 buyers · 14,507.8487 USDC · 99.96% | passes |
-| P1 | GPU-Garden · `0xa06fda7beb9800a442c7f14e27b5b6fb2ab3a89e` | proof-ready | native exact-funder predicate v2 | first_native_funder · 0x3304e2…566a · 20 buyers · 12,720.017291 USDC · 99.99% | 20 buyers · 12,720.017291 USDC · 99.99% | passes |
-| P1 | InferenceLab · `0x74d4ca0dcb2d9140da86dbf7bbe97eef7d4f2f72` | proof-ready | native exact-funder predicate v2 | first_native_funder · 0x3304e2…566a · 20 buyers · 12,012.48959 USDC · 99.99% | 20 buyers · 12,012.48959 USDC · 99.99% | passes |
-| P1 | 0x7adbe9…c915 · `0x7adbe9474e067376da5dea2f757ea3eaa60dc915` | fails-predicate | native exact-funder predicate v2 | first_native_funder · 0x3304e2…566a · 3 buyers · 5,437.502671 USDC · 46.71% | 14 buyers · 5,437.50488 USDC · 46.71% | fails 50% |
-| P1 | TokenShop · `0xbd0cd45b7b486f312460e657701350fab953a3d2` | proof-ready | native exact-funder predicate v2 | first_native_funder · 0x3304e2…566a · 20 buyers · 11,639.492435 USDC · 99.99% | 20 buyers · 11,639.492435 USDC · 99.99% | passes |
-| P1 | Auralis AI \| Legal · `0xca72a6f0a756921a4e303fe88ddbbc193594b659` | proof-ready | native exact-funder predicate v2 | first_native_funder · 0x18bead…63dd · 6 buyers · 2,678.078089 USDC · 60.18% | 11 buyers · 2,678.09374 USDC · 60.18% | passes |
-| P1 | Auralis AI \| Medical · `0xc228219f75ee855e33c874616505406648c78d88` | proof-ready | native exact-funder predicate v2 | first_native_funder · 0x1b1d21…b53d · 3 buyers · 1,732.594738 USDC · 39.98% | 28 buyers · 3,134.824692 USDC · 72.34% | passes |
-| P1 | 0x1734b6…e621 · `0x1734b6f07239fc2c5806b83f054802ca87f8e621` | proof-ready | multi-source exact-funder predicate v2 | primary_usdc_funder · 0xee7ae8…4055 · 3 buyers · 3,560.557779 USDC · 83.35% | 37 buyers · 3,563.718616 USDC · 83.43% | passes |
-| P1 | NoaxAI · `0x94c3f5af394542cfa123f32e17a7a25feeed6758` | proof-ready | multi-source exact-funder predicate v2 | first_native_funder · 0xdea91d…dcbb · 15 buyers · 3,581.954232 USDC · 99.99% | 15 buyers · 3,581.954232 USDC · 99.99% | passes |
-| P1 | surplus-provider · `0xda96465c5ff412bb13a9b919a3247a681f7528f0` | proof-ready | native exact-funder predicate v2 | first_native_funder · 0x55d2ee…0e44 · 147 buyers · 3,294.462214 USDC · 99.99% | 147 buyers · 3,294.462214 USDC · 99.99% | passes |
-| P1 | Prompt-Forge · `0x3a59c0058d6f4d75887aadf6812855a75b9ef1fd` | proof-ready | multi-source exact-funder predicate v2 | first_native_funder · 0xdea91d…dcbb · 14 buyers · 3,193.660034 USDC · 99.99% | 14 buyers · 3,193.660034 USDC · 99.99% | passes |
-| P1 | ClaudeNode · `0x41a609faf354500f5e4af4501b05f045bf0de985` | proof-ready | multi-source exact-funder predicate v2 | first_native_funder · 0x55d2ee…0e44 · 22 buyers · 2,487.920938 USDC · 99.93% | 22 buyers · 2,487.920938 USDC · 99.93% | passes |
-| P1 | 0xddfa54…27fe · `0xddfa54f436de24b909c49763e1604563b96327fe` | proof-ready | native exact-funder predicate v2 | first_native_funder · 0x3304e2…566a · 3 buyers · 716.95769 USDC · 35.04% | 14 buyers · 1,419.688104 USDC · 69.40% | passes |
-| P1 | 0xb269dc…b1a6 · `0xb269dc2c211dfcd926222b4b2b82a731d22fb1a6` | fails-predicate | native exact-funder predicate v2 | first_native_funder · 0x91604f…c499 · 3 buyers · 739.062551 USDC · 42.25% | 3 buyers · 739.062551 USDC · 42.25% | fails 50% |
-| P1 | 0x5cd441…08f1 · `0x5cd4413f15d664afbdab2fc4273c56e215aa08f1` | proof-ready | multi-source exact-funder predicate v2 | first_native_funder · 0x3304e2…566a · 25 buyers · 1,122.23824 USDC · 95.97% | 25 buyers · 1,122.23824 USDC · 95.97% | passes |
-| P1 | 0xc8bd28…f6c9 · `0xc8bd287fd6574519bc937c5c90e7d9687e2df6c9` | fails-predicate | native exact-funder predicate v2 | first_native_funder · 0x91604f…c499 · 5 buyers · 745.579995 USDC · 73.23% | 10 buyers · 745.848155 USDC · 73.26% | fails 1,000 USDC |
+| P0 | Flash · `0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c` | proof-ready | closed-cycle predicate v3 | first_native_funder · 0xd0b238…0b76 · 50 buyers · 42,738.709496 USDC · 95.29% | 50 buyers · 42,748.461892 USDC · 95.31% | passes |
+| P0 | CatGPT · `0xb629449e487740c5fb86d7c4ddd51709d692dab4` | proof-ready | protocol-deposit predicate v3 | primary_usdc_funder · 0xb62944…dab4 · 15 buyers · 21,972.469339 USDC · 92.84% | 15 buyers · 21,972.469339 USDC · 92.84% | passes |
+| P1 | StrataCode · `0x6f9b9e63d3f776d359eb2fb0a82d12ee496fbefe` | proof-ready | native exact-funder predicate v3 | first_native_funder · 0x55d2ee…0e44 · 17 buyers · 10,612.500621 USDC · 73.12% | 24 buyers · 14,507.8487 USDC · 99.96% | passes |
+| P1 | GPU-Garden · `0xa06fda7beb9800a442c7f14e27b5b6fb2ab3a89e` | proof-ready | native exact-funder predicate v3 | first_native_funder · 0x3304e2…566a · 20 buyers · 12,720.017291 USDC · 99.99% | 20 buyers · 12,720.017291 USDC · 99.99% | passes |
+| P1 | InferenceLab · `0x74d4ca0dcb2d9140da86dbf7bbe97eef7d4f2f72` | proof-ready | native exact-funder predicate v3 | first_native_funder · 0x3304e2…566a · 20 buyers · 12,012.48959 USDC · 99.99% | 20 buyers · 12,012.48959 USDC · 99.99% | passes |
+| P1 | 0x7adbe9…c915 · `0x7adbe9474e067376da5dea2f757ea3eaa60dc915` | fails-predicate | native exact-funder predicate v3 | first_native_funder · 0x3304e2…566a · 3 buyers · 5,437.502671 USDC · 46.71% | 14 buyers · 5,437.50488 USDC · 46.71% | fails 50% |
+| P1 | TokenShop · `0xbd0cd45b7b486f312460e657701350fab953a3d2` | proof-ready | native exact-funder predicate v3 | first_native_funder · 0x3304e2…566a · 20 buyers · 11,639.492435 USDC · 99.99% | 20 buyers · 11,639.492435 USDC · 99.99% | passes |
+| P1 | Auralis AI \| Legal · `0xca72a6f0a756921a4e303fe88ddbbc193594b659` | proof-ready | native exact-funder predicate v3 | first_native_funder · 0x18bead…63dd · 6 buyers · 2,678.078089 USDC · 60.18% | 11 buyers · 2,678.09374 USDC · 60.18% | passes |
+| P1 | Auralis AI \| Medical · `0xc228219f75ee855e33c874616505406648c78d88` | proof-ready | native exact-funder predicate v3 | first_native_funder · 0x1b1d21…b53d · 3 buyers · 1,732.594738 USDC · 39.98% | 28 buyers · 3,134.824692 USDC · 72.34% | passes |
+| P1 | 0x1734b6…e621 · `0x1734b6f07239fc2c5806b83f054802ca87f8e621` | proof-ready | multi-source exact-funder predicate v3 | primary_usdc_funder · 0xee7ae8…4055 · 3 buyers · 3,560.557779 USDC · 83.35% | 37 buyers · 3,563.718616 USDC · 83.43% | passes |
+| P1 | NoaxAI · `0x94c3f5af394542cfa123f32e17a7a25feeed6758` | proof-ready | multi-source exact-funder predicate v3 | first_native_funder · 0xdea91d…dcbb · 15 buyers · 3,581.954232 USDC · 99.99% | 15 buyers · 3,581.954232 USDC · 99.99% | passes |
+| P1 | surplus-provider · `0xda96465c5ff412bb13a9b919a3247a681f7528f0` | proof-ready | native exact-funder predicate v3 | first_native_funder · 0x55d2ee…0e44 · 147 buyers · 3,294.462214 USDC · 99.99% | 147 buyers · 3,294.462214 USDC · 99.99% | passes |
+| P1 | Prompt-Forge · `0x3a59c0058d6f4d75887aadf6812855a75b9ef1fd` | proof-ready | multi-source exact-funder predicate v3 | first_native_funder · 0xdea91d…dcbb · 14 buyers · 3,193.660034 USDC · 99.99% | 14 buyers · 3,193.660034 USDC · 99.99% | passes |
+| P1 | ClaudeNode · `0x41a609faf354500f5e4af4501b05f045bf0de985` | proof-ready | multi-source exact-funder predicate v3 | first_native_funder · 0x55d2ee…0e44 · 22 buyers · 2,487.920938 USDC · 99.93% | 22 buyers · 2,487.920938 USDC · 99.93% | passes |
+| P1 | 0xddfa54…27fe · `0xddfa54f436de24b909c49763e1604563b96327fe` | proof-ready | native exact-funder predicate v3 | first_native_funder · 0x3304e2…566a · 3 buyers · 716.95769 USDC · 35.04% | 14 buyers · 1,419.688104 USDC · 69.40% | passes |
+| P1 | 0xb269dc…b1a6 · `0xb269dc2c211dfcd926222b4b2b82a731d22fb1a6` | fails-predicate | native exact-funder predicate v3 | first_native_funder · 0x91604f…c499 · 3 buyers · 739.062551 USDC · 42.25% | 3 buyers · 739.062551 USDC · 42.25% | fails 50% |
+| P1 | 0x5cd441…08f1 · `0x5cd4413f15d664afbdab2fc4273c56e215aa08f1` | proof-ready | multi-source exact-funder predicate v3 | first_native_funder · 0x3304e2…566a · 25 buyers · 1,122.23824 USDC · 95.97% | 25 buyers · 1,122.23824 USDC · 95.97% | passes |
+| P1 | 0xc8bd28…f6c9 · `0xc8bd287fd6574519bc937c5c90e7d9687e2df6c9` | fails-predicate | native exact-funder predicate v3 | first_native_funder · 0x91604f…c499 · 5 buyers · 745.579995 USDC · 73.23% | 10 buyers · 745.848155 USDC · 73.26% | fails 1,000 USDC |
 
 ## Reciprocal-Pair Findings
 
