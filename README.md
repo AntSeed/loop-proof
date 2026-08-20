@@ -401,6 +401,12 @@ The journal ABI definitions live beside the Rust journals in
 and invariant checks live in
 [`../antseed/packages/contracts/integrity/AntseedWashTradingRegistry.sol`](../antseed/packages/contracts/integrity/AntseedWashTradingRegistry.sol).
 
+The default guests retain the internal `predicateVersion = 3` schema guard, but
+their program image IDs change when verifier rules change. A registry configured
+with an older closed-cycle or coordinated-control image ID must not remain an
+enforcement entry point; deploy the registry with the newly built default image
+IDs.
+
 ## Onchain Enforcement Effect
 
 The registry exposes exactly three proof submission functions:

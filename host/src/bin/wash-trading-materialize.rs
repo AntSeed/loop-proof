@@ -577,12 +577,10 @@ fn select_threshold_witness(
         })
         .collect::<Vec<_>>();
     funder_groups.sort_unstable_by_key(|(volume, funder, _)| (Reverse(*volume), *funder));
-    let mut selected_buyers = Vec::new();
-    let mut available = 0u128;
+    let mut selected_group = None;
     for (_, _, buyers) in funder_groups {
-        if available >= threshold {
-            break;
-        }
+        let mut selected_buyers = Vec::new();
+        let mut available = 0u128;
         for (index, (volume, buyer)) in buyers.into_iter().enumerate() {
             if index >= 3 && available >= threshold {
                 break;
@@ -592,10 +590,13 @@ fn select_threshold_witness(
                 .checked_add(volume)
                 .context("buyer volume overflow")?;
         }
+        if selected_buyers.len() >= 3 && available >= threshold {
+            selected_group = Some(selected_buyers);
+            break;
+        }
     }
-    if selected_buyers.len() < 3 || available < threshold {
-        bail!("qualifying exact-funder cohorts do not reach the P1 threshold");
-    }
+    let mut selected_buyers =
+        selected_group.context("no single exact-funder cohort reaches the P1 threshold")?;
     selected_buyers.sort_unstable();
 
     let selected_set = selected_buyers.iter().copied().collect::<BTreeSet<_>>();
@@ -811,6 +812,9 @@ fn build_funding_cohorts(
             )
             .or_default()
             .push(*buyer);
+    }
+    if cohorts.len() != 1 {
+        bail!("coordinated-control witness must contain exactly one funder");
     }
     cohorts
         .into_iter()
@@ -1055,7 +1059,7 @@ mod tests {
     }
 
     #[test]
-    fn selection_keeps_three_buyers_per_selected_funder() {
+    fn selection_never_aggregates_multiple_funders() {
         let funder_a = address!("0000000000000000000000000000000000000010");
         let funder_b = address!("0000000000000000000000000000000000000020");
         let buyers = [
@@ -1084,10 +1088,20 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
+        assert!(select_threshold_witness(&channels, &assignments, 700)
+            .unwrap_err()
+            .to_string()
+            .contains("no single exact-funder cohort"));
+
         let (selected_buyers, _, volume) =
-            select_threshold_witness(&channels, &assignments, 700).unwrap();
-        assert_eq!(selected_buyers.len(), 6);
-        assert_eq!(volume, 900);
+            select_threshold_witness(&channels, &assignments, 500).unwrap();
+        assert_eq!(selected_buyers.len(), 3);
+        assert_eq!(volume, 600);
+        let selected_funders = selected_buyers
+            .iter()
+            .map(|buyer| assignments[buyer].0)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(selected_funders.len(), 1);
     }
 
     #[test]

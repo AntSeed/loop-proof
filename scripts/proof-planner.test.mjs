@@ -40,6 +40,18 @@ test("closed-loop planner prioritizes direct seller-funder over relays", () => {
   assert.equal(plan.selectedEvidence.filter((entry) => entry.evidenceType.startsWith("RELAY")).length, 0);
 });
 
+test("closed-loop planner rejects seller self-transfer closure", () => {
+  const claim = { claimId: "claim", type: "P0_CLOSED_LOOP", subjects: ["seller"], approvedBuyers: ["a", "b", "c"], approvedFunders: ["seller"], dependencyRoot: "0x1" };
+  const dependencies = [
+    { ...evidence("direct", null, 46_303_100, 1n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "seller", from: "seller", to: "seller" },
+    ...["a", "b", "c"].flatMap((buyer, index) => [
+      { ...evidence(`f${buyer}`, buyer, 46_303_001 + index, 1n), evidenceType: "USDC_FUNDING", funder: "seller" },
+      { ...evidence(`s${buyer}`, buyer, 46_303_031 + index, index === 0 ? 400_000_000n : 300_000_000n), evidenceType: "SETTLEMENT" },
+    ]),
+  ];
+  assert.throws(() => planClaim(claim, dependencies, { reportRoot: "0x2" }), /no valid cohort funding strategy/);
+});
+
 test("native cohort funding is never aggregated across funders", () => {
   const claim = { claimId: "claim", type: "P1_COORDINATED_CONTROL", subjects: ["seller"], approvedBuyers: ["a", "b", "c"], approvedFunders: ["f1", "f2"], dependencyRoot: "0x1" };
   const dependencies = [

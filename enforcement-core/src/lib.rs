@@ -19,7 +19,7 @@ pub const STATE_END_BLOCK: u64 = PERIOD_END_BLOCK_EXCLUSIVE - 1;
 pub const EMISSIONS_CUTOVER_BLOCK: u64 = 45_937_736;
 pub const PENALTY_BPS: u16 = 9_000;
 pub const MAX_BUYERS: usize = 160;
-pub const MAX_FUNDERS: usize = 160;
+pub const MAX_FUNDERS: usize = 1;
 pub const MAX_BLOCK_REFS: usize = 256;
 pub const MINIMUM_BUYERS: usize = 3;
 pub const MINIMUM_VOLUME_RAW: u128 = 1_000_000_000;
@@ -711,8 +711,8 @@ fn validate_common(
 }
 
 fn validate_funding_cohorts(cohorts: &[FunderCohort]) -> Result<Vec<Address>, String> {
-    if cohorts.is_empty() || cohorts.len() > MAX_FUNDERS {
-        return Err("funding cohorts: invalid length".into());
+    if cohorts.len() != MAX_FUNDERS {
+        return Err("funding cohorts: exactly one funder is required".into());
     }
     let mut previous_funder = None;
     let mut buyers = BTreeSet::new();
@@ -1488,6 +1488,7 @@ fn verify_closure(
             ensure_period_block(block, "direct closure")?;
             if key <= crossing_key
                 || from != seller
+                || from == to
                 || (to != funder && linked_buyers.binary_search(&to).is_err())
                 || amount < MINIMUM_CLOSURE_RAW
             {
@@ -1522,8 +1523,11 @@ fn verify_closure(
                 let first_time = resolver.block(path.seller_payment.block)?.header.timestamp;
                 let final_time = resolver.block(path.final_receipt.block)?.header.timestamp;
                 if from1 != seller
+                    || from1 == to1
                     || to1 != from2
+                    || from2 == to2
                     || to2 != from3
+                    || from3 == to3
                     || to3 != funder
                     || final_time < first_time
                     || final_time - first_time > MAX_RELAY_SECONDS
@@ -1976,7 +1980,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_funder_cohorts_each_require_three_buyers() {
+    fn coordinated_control_rejects_multiple_funders() {
         let funder_a = address!("0000000000000000000000000000000000000010");
         let funder_b = address!("0000000000000000000000000000000000000020");
         let buyers = [
@@ -1985,6 +1989,7 @@ mod tests {
             address!("0000000000000000000000000000000000000003"),
             address!("0000000000000000000000000000000000000004"),
             address!("0000000000000000000000000000000000000005"),
+            address!("0000000000000000000000000000000000000006"),
         ];
         let cohorts = vec![
             FunderCohort {
@@ -1998,7 +2003,94 @@ mod tests {
                 fundings: Vec::new(),
             },
         ];
-        assert!(validate_funding_cohorts(&cohorts).is_err());
+        assert!(validate_funding_cohorts(&cohorts)
+            .unwrap_err()
+            .contains("exactly one funder"));
+    }
+
+    #[test]
+    fn closed_cycle_rejects_zero_movement_self_transfer_closure() {
+        let mut input = closed_cycle_input(400_000_000);
+        input.seller = input.funder;
+        for (index, buyer) in input.linked_buyers.iter().copied().enumerate() {
+            input.blocks[input.linked_buyers.len() + index] = settlement_block(
+                PERIOD_START_BLOCK + index as u64,
+                buyer,
+                input.seller,
+                400_000_000,
+                true,
+            );
+        }
+        let closure_block = input.blocks.len() - 1;
+        input.blocks[closure_block] = usdc_transfer_block(
+            PERIOD_START_BLOCK + 10,
+            input.seller,
+            input.seller,
+            MINIMUM_CLOSURE_RAW,
+            None,
+        );
+
+        assert!(verify_closed_cycle(&input)
+            .unwrap_err()
+            .contains("invalid seller-outward direct closure"));
+    }
+
+    #[test]
+    fn closed_cycle_rejects_zero_movement_relay_hop() {
+        let mut input = closed_cycle_input(400_000_000);
+        let mut paths = Vec::new();
+        for index in 0..3usize {
+            let relay_one = Address::from_word(U256::from(0x100 + index).into());
+            let relay_two = if index == 0 {
+                relay_one
+            } else {
+                Address::from_word(U256::from(0x200 + index).into())
+            };
+            let first_block = input.blocks.len();
+            input.blocks.push(usdc_transfer_block(
+                PERIOD_START_BLOCK + 20 + (index * 3) as u64,
+                input.seller,
+                relay_one,
+                MINIMUM_CLOSURE_RAW,
+                None,
+            ));
+            input.blocks.push(usdc_transfer_block(
+                PERIOD_START_BLOCK + 21 + (index * 3) as u64,
+                relay_one,
+                relay_two,
+                MINIMUM_CLOSURE_RAW,
+                None,
+            ));
+            input.blocks.push(usdc_transfer_block(
+                PERIOD_START_BLOCK + 22 + (index * 3) as u64,
+                relay_two,
+                input.funder,
+                MINIMUM_CLOSURE_RAW,
+                None,
+            ));
+            paths.push(RelayPathEvidence {
+                seller_payment: LogRef {
+                    block: first_block,
+                    receipt: 0,
+                    log: 0,
+                },
+                relay_forward: LogRef {
+                    block: first_block + 1,
+                    receipt: 0,
+                    log: 0,
+                },
+                final_receipt: LogRef {
+                    block: first_block + 2,
+                    receipt: 0,
+                    log: 0,
+                },
+            });
+        }
+        input.closure = ClosureEvidence::Relay { paths };
+
+        assert!(verify_closed_cycle(&input)
+            .unwrap_err()
+            .contains("invalid relay closure path"));
     }
 
     #[test]

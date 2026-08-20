@@ -236,7 +236,7 @@ function buildCohortStrategies(strategy, claim, dependencies, requiresClosure) {
   const funderGroups = [...new Set(fundings.map((entry) => entry.funder))].sort();
   return funderGroups.flatMap((selectedFunder) => {
     const closure = requiresClosure
-      ? selectClosureForFunder(dependencies, selectedFunder, claim.approvedBuyers)
+      ? selectClosureForFunder(dependencies, selectedFunder, claim.approvedBuyers, claim.subjects[0])
       : { evidence: [], evidenceClass: null, rejected: [] };
     if (!closure) return [];
     const candidate = buildCohortStrategy(strategy, fundings.filter((entry) => entry.funder === selectedFunder), settlements, closure);
@@ -464,13 +464,16 @@ function planReciprocal(claim, dependencies, bundle) {
   }, bundle);
 }
 
-function selectClosureForFunder(dependencies, funder, approvedBuyers) {
+function selectClosureForFunder(dependencies, funder, approvedBuyers, seller) {
   const classes = ["DIRECT_SELLER_FUNDER", "DIRECT_SELLER_BUYER", "RELAY_PATH"];
   const rejected = [];
   for (const evidenceClass of classes) {
     const candidates = dependencies.filter((entry) => entry.evidenceType === evidenceClass
       && (evidenceClass !== "DIRECT_SELLER_BUYER" || approvedBuyers.includes(entry.buyer))
       && (evidenceClass === "DIRECT_SELLER_BUYER" || entry.funder === funder)
+      && (evidenceClass !== "DIRECT_SELLER_FUNDER" || funder !== seller)
+      && (evidenceClass !== "DIRECT_SELLER_BUYER" || entry.buyer !== seller)
+      && atomicEvidence(entry).every(nonSelfTransfer)
       && (evidenceClass === "RELAY_PATH" || BigInt(entry.amountRaw) > 0n));
     if (candidates.length === 0) continue;
     if (evidenceClass !== "RELAY_PATH") {
@@ -512,6 +515,10 @@ function validRelayPath(path) {
   if (absolute(firstAmount - secondAmount) > 1_000n) return false;
   const retained = secondAmount - thirdAmount;
   return retained <= 1_000_000n || thirdAmount * 10_000n >= secondAmount * 9_800n;
+}
+
+function nonSelfTransfer(entry) {
+  return entry.from == null || entry.to == null || normalize(entry.from) !== normalize(entry.to);
 }
 
 function flattenRelay(path) {
