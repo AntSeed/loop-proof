@@ -1,9 +1,21 @@
 use crate::rpc::SettlementCandidate;
+use alloy_primitives::Address;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub const AGGREGATE_VERIFIER_START_BLOCK: u64 = 46_302_960;
 pub const CHECKPOINT_WINDOW_BLOCKS: u64 = 30;
+
+/// Select the highest-volume enforceable funder, breaking ties by the lower
+/// address so independent hosts produce the same case witness.
+pub fn select_enforceable_funder<I>(candidates: I) -> Option<(Address, u128)>
+where
+    I: IntoIterator<Item = (Address, u128)>,
+{
+    candidates
+        .into_iter()
+        .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
+}
 
 #[derive(Clone, Debug)]
 pub struct BuyerSettlementCandidate {
@@ -389,6 +401,20 @@ mod tests {
         assert_eq!(
             checkpoint_block_number(AGGREGATE_VERIFIER_START_BLOCK + 31).unwrap(),
             AGGREGATE_VERIFIER_START_BLOCK + 60
+        );
+    }
+
+    #[test]
+    fn funder_selection_uses_volume_then_lower_address() {
+        let low = Address::with_last_byte(1);
+        let high = Address::with_last_byte(2);
+        assert_eq!(
+            select_enforceable_funder([(high, 10), (low, 10)]),
+            Some((low, 10))
+        );
+        assert_eq!(
+            select_enforceable_funder([(low, 10), (high, 11)]),
+            Some((high, 11))
         );
     }
 

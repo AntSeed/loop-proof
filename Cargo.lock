@@ -1129,19 +1129,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "closed-cycle-methods"
+version = "0.1.0"
+dependencies = [
+ "risc0-build",
+]
+
+[[package]]
 name = "cobs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
 dependencies = [
  "thiserror",
-]
-
-[[package]]
-name = "cohort-methods"
-version = "0.1.0"
-dependencies = [
- "risc0-build",
 ]
 
 [[package]]
@@ -1190,6 +1190,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
 dependencies = [
  "unicode-segmentation",
+]
+
+[[package]]
+name = "coordinated-control-methods"
+version = "0.1.0"
+dependencies = [
+ "risc0-build",
 ]
 
 [[package]]
@@ -1719,12 +1726,12 @@ dependencies = [
  "alloy-consensus",
  "alloy-eips",
  "alloy-primitives",
+ "alloy-rlp",
  "alloy-sol-types",
  "alloy-trie",
+ "alloy-tx-macros",
  "loop-core",
  "serde",
- "serde_json",
- "sha2",
 ]
 
 [[package]]
@@ -2641,7 +2648,8 @@ dependencies = [
  "alloy-primitives",
  "alloy-trie",
  "anyhow",
- "cohort-methods",
+ "closed-cycle-methods",
+ "coordinated-control-methods",
  "dotenvy",
  "enforcement-core",
  "loop-core",

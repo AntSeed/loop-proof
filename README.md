@@ -1,383 +1,619 @@
-# AntSeed Seller-Penalty Proof
+# AntSeed Wash-Trading Proofs — Predicate v2
 
-This workspace contains the RISC Zero proof used by AntSeed's wash-trading
-**enforcement** path. It proves one seller claim and can additionally reproduce
-the exact settlement totals of an approved seller-report snapshot. It does not
-prove or enforce every finding in the analytics report in
-`../analyses/wash-trading`.
+This workspace contains the three RISC Zero predicates used by AntSeed's
+wash-trading enforcement path:
 
-## Enforcement rule
+1. **P0 closed cycle** — a common funder bootstraps buyers, those buyers settle
+   with one seller, and value later returns outward from that seller.
+2. **P0 reciprocal** — one normalized address pair repeatedly settles in both
+   directions.
+3. **P1 coordinated control** — a common-funder cohort contributes at least
+   half of one seller's complete frozen-period volume.
 
-The pinned guest proves all of the following:
+Each proof is self-contained. Enforcement does **not** trust an analytics
+report root, report leaf, dependency root, mutable funder allowlist, or generic
+router attribution. There is one seal and one journal per seller case or
+reciprocal pair; there is no multi-case zk proof.
 
-1. The proof uses Base chain ID `8453`, Base USDC, the deployed AntSeed
-   Channels contract, and the deployed AntSeed Deposits contract.
-2. Authentic USDC receipts show a direct or relay path from the seller to one
-   funder. Each relay forwards at least 98% within 43,200 Base blocks.
-3. That funder authentically funded at least **three distinct buyers**. Each
-   proven buyer received at least 1 USDC.
-4. Authentic `ChannelSettled` receipts show those buyers later settled with
-   the same seller. Every settlement must occur strictly after that buyer's
-   proven funding.
-5. The sum of the included post-funding settlement deltas is at least
-   **1,000 USDC**.
-6. No onchain log may be counted twice.
-7. Every receipt is included in the receipts trie of its supplied Base header.
-8. Every settlement in the approved seller-report snapshot is authenticated,
-   unique, canonically ordered, and inside the fixed report period.
-9. The authenticated snapshot reproduces its exact total volume, suspected
-   volume, suspected-buyer count, and deterministic evidence root.
-10. The proven common-funder cohort represents at least 50% of the approved
-    report total. The registry pins both the report ID and evidence root.
+The authoritative predicate implementation is
+[`enforcement-core/src/lib.rs`](enforcement-core/src/lib.rs). The three guest
+entrypoints are:
 
-If the proof and all referenced Base block hashes are accepted onchain, the
-seller receives a fixed `9,000 BPS` reduction in **future seller points**.
-Buyers receive no penalty.
+- [`closed-cycle-methods/guest/src/main.rs`](closed-cycle-methods/guest/src/main.rs)
+- [`reciprocal-methods/guest/src/main.rs`](reciprocal-methods/guest/src/main.rs)
+- [`coordinated-control-methods/guest/src/main.rs`](coordinated-control-methods/guest/src/main.rs)
 
-The exact constants and logic live in `core/src/lib.rs`. The compiled guest
-image ID is the versioned rule: changing a threshold or check changes the image
-ID that the registry must pin.
+The onchain registry is
+[`../antseed/packages/contracts/integrity/AntseedWashTradingRegistry.sol`](../antseed/packages/contracts/integrity/AntseedWashTradingRegistry.sol).
 
-## Public journal
+## Fixed Scope and Constants
 
-The guest commits an ABI-encoded `SellerPenaltyJournal` containing:
+| Item | Predicate-v2 value |
+|---|---:|
+| Base chain ID | `8453` |
+| Predicate version | `2` |
+| Included settlement blocks | `44,471,575` through `49,936,172` |
+| Journal period | `[44,471,575, 49,936,173)` |
+| Start state boundary | `44,471,574` |
+| End state boundary | `49,936,172` |
+| Seller/buyer penalty | `9,000 BPS` reduction |
+| Minimum common-funder cohort | `3` distinct buyers |
+| Maximum linked/penalized buyers | `160` |
+| Maximum journal block references | `256` |
+| Minimum cohort volume | `1,000 USDC` |
+| Minimum USDC funding per buyer | `1 USDC` |
+| Minimum native funding per buyer | `0.00005 ETH` |
 
-- predicate version, Base chain ID, and pinned contract addresses;
-- seller and funder;
-- linked-buyer and relay-hop counts;
-- fixed penalty BPS;
-- proven seller outflow, total buyer funding, and suspicious volume;
-- approved-report total and suspected volumes, suspected-buyer count, period,
-  report ID, and deterministic evidence root;
-- earliest funding and latest settlement blocks;
-- every referenced `(block number, block hash)`.
+All USDC values use the token's six-decimal raw units. Threshold comparisons
+are integer comparisons with checked unsigned arithmetic; there is no decimal
+rounding.
 
-The journal intentionally does not publish buyer addresses. The proof checks
-that they are distinct, funded, and linked to the seller's settlements without
-expanding permanent onchain state.
+## Common Authentication Guarantees
 
-## Data integrity
+Every accepted guest execution proves all of the following common facts.
 
-There are two independent integrity checks:
+### Canonical Base data
 
-1. **Inside the zkVM:** each referenced receipt has a Merkle-Patricia inclusion
-   proof against the `receiptsRoot` in its supplied Base header. The guest then
-   parses the authenticated USDC, `Deposited`, and `ChannelSettled` logs.
-2. **In the registry:** every `(number, hash)` committed by the guest must be
-   accepted by `IBaseAnalysisStateOracle.isCanonicalBlock`.
+- The witness declares Base chain ID `8453`.
+- Every supplied block number is unique, and the journal contains the supplied
+  `(blockNumber, blockHash)` pairs sorted by block number.
+- Every referenced receipt is verified against the supplied header's
+  `receiptsRoot` with a Merkle-Patricia proof.
+- Every referenced transaction is verified against the supplied header's
+  `transactionsRoot` with a Merkle-Patricia proof.
+- Every EIP-1186 account proof is verified against the supplied header's
+  `stateRoot`.
+- Every EIP-1186 storage proof is verified against the authenticated account's
+  `storageRoot`.
+- Account and storage non-inclusion/zero proofs are supported, but malformed
+  non-inclusion witnesses are rejected.
+- Duplicate account proofs for the same block/address, duplicate storage-slot
+  proofs, duplicate receipt indexes, duplicate transaction indexes, and
+  duplicate proof block numbers are rejected.
+- Onchain, the registry independently requires every journal block reference
+  to satisfy `IBaseAnalysisStateOracle.isCanonicalBlock(number, hash)`.
 
-The second check is necessary because a valid receipt proof only proves that a
-receipt belongs to the supplied header. The state oracle proves that the header
-is actually a canonical finalized Base header. Historical `blockhash()` cannot
-solve this because the EVM exposes only the latest 256 block hashes. A
-blockhash keeper also cannot authenticate old blocks unless it was already
-checkpointing them at the time.
+A valid receipt, transaction, or storage proof only authenticates data against
+its supplied Base header. The state-oracle check is what binds that header to
+canonical finalized Base history. The checkpoint implementation is documented
+in [`checkpoint/README.md`](checkpoint/README.md).
 
-`checkpoint/` implements that production path without an AntSeed L1 contract:
+### Pinned contracts and storage layouts
 
-1. Steel authenticates Ethereum state through an Ethereum beacon root exposed
-   by Base's EIP-4788 predeploy.
-2. The checkpoint guest proves that Base's Ethereum AnchorStateRegistry accepts
-   an AggregateVerifier game and reads one of its 30-block intermediate roots.
-3. The guest checks the OP output-root preimage and a contiguous Base header
-   chain from that checkpoint back to the requested evidence blocks.
-4. `AntseedBaseCheckpointOracle` validates the Steel commitment on Base and
-   permanently stores only those exact `(number, hash)` pairs.
+The guest accepts only the following deployed contract addresses and, where
+contract state is read, runtime code hashes:
 
-RPC and Beacon API responses are witnesses, not trust assumptions. Invalid
-responses fail inside Steel or the checkpoint guest.
+| Contract | Address | Authentication |
+|---|---|---|
+| Base USDC | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | Transfer logs are authenticated by address/topic/data shape |
+| AntSeed Channels | `0xBA66d3b4fbCf472F6F11D6F9F96aaCE96516F09d` | `0x9d8c726d151e2257e2b4e50f46dcf0bc7c976786585ee3b902be55bd431f1ed8` |
+| AntSeed Deposits | `0x0F7a3a8f4Da01637d1202bb5443fcF7F88F99fD2` | `0x41f0965f0300d0ce16e2a5824ae52fecf4321f4083e62abfa309e64414f95955` |
+| Old emissions | `0x36877fBa8Fa333aa46a1c57b66D132E4995C86b5` | `0x5991d7a7f4d33f70e29ad71421820d37c8ae04eb99a720184b99a2b7d231876e` |
+| New emissions | `0xF13bE52c4A3afC6AE29536f073588d01A0564088` | `0x534c9513b91440044e12ad087f414f8ae0b59fd7cba3d892e1a522296bfcf464` |
 
-## Why this path has no fraud-proof challenge
+Pinned storage derivations are:
 
-The common-funder enforcement evidence is monotonic:
+- `AntseedDeposits.buyers` mapping slot `9`; `firstChannelAt` is struct
+  offset `3`.
+- `AntseedChannels.channels` mapping slot `9`; buyer is offset `0`, seller is
+  offset `1`, and the packed `deposit/settled` word is offset `2`, with
+  `settled` in the upper 128 bits.
+- Old emissions `userSellerPoints` mapping slot `10` and `userBuyerPoints`
+  mapping slot `11`.
+- New emissions `userSellerPoints` mapping slot `14` and `userBuyerPoints`
+  mapping slot `15`.
+- Seller and buyer counter evidence must cover both emissions contracts and
+  every epoch `0` through `18` exactly once for the requested subject.
 
-- every included fact is authenticated;
-- adding valid evidence can only strengthen or preserve the result;
-- omitting evidence can only reduce the buyer count or proven volume;
-- reduced evidence can only make the penalty harder to obtain.
+The observed first new-emissions pointer block is `45,937,736`. Predicate v2
+does not trust the pointer as a volume oracle: it authenticates and sums the
+boundary deltas from both pinned emissions contracts directly.
 
-A prover therefore cannot create a common-funder link by hiding unfavorable
-data. The full-report mode additionally prevents a prover from substituting a
-smaller report snapshot: deployment pins the approved report ID and evidence
-root, and the guest must reproduce the exact pinned totals from authenticated
-receipts.
+### Funder identity and funding
 
-This design deliberately trusts the governance-approved report snapshot. It
-does not prove that the offchain report discovery process found every event on
-Base. A permissionless completeness claim would still need either complete
-event enumeration inside ZK or a challenge/fraud-proof mechanism.
+For cohort predicates, linked buyers must be nonzero, strictly sorted, unique,
+and between `3` and `160` entries. The seller and exact funder must be nonzero
+and different addresses. One funding witness must exist for every linked buyer
+and no unrelated or duplicate buyer funding witness is accepted.
 
-## What is not proven
+For every linked buyer, the proof authenticates
+`AntseedDeposits.buyers[buyer].firstChannelAt` at block `49,936,172` and proves
+that the selected funding block timestamp is strictly earlier than that first
+channel timestamp. Funding may predate the frozen settlement period.
 
-This proof does **not** establish:
+Supported funding forms are:
 
-- complete seller, buyer, transfer, or settlement activity;
-- that the selected funder was the first or primary funder;
-- that the proven buyers are all of the seller's buyers;
-- that the approved report snapshot contains every historical settlement;
-- the absence of organic buyers or legitimate activity;
-- the report's ≥99% buyer classification rule from every buyer's activity with
-  other sellers; the approved snapshot supplies that fixed classification;
-- the full multi-seller P0/P1 analytics report;
-- that every dishonest seller is detected.
+#### EOA USDC funding
 
-Those completeness-dependent claims may still be useful in the separate
-analytics/reporting system, but they do not control rewards.
+- A successful Base USDC `Transfer` log has exact
+  `from = funder`, `to = buyer`, and `amount >= 1 USDC`.
+- The transaction containing that log is authenticated.
+- The recovered transaction signer equals the funder.
+- The funder account has the empty-code hash at that funding block.
 
-## Enforcement scope
+#### EIP-7702 USDC funding
 
-- Seller future points are reduced by 90% after proof acceptance.
-- Buyer points are unchanged.
-- Existing locked rewards are unchanged.
-- No clawback or confiscation occurs.
-- Exact proof replay is a no-op, and later proofs cannot increase the fixed
-  penalty.
+- The same successful USDC `Transfer` requirements apply.
+- The authenticated funder account contains a 23-byte EIP-7702 delegation
+  designator beginning `0xef0100`.
+- The account code hash equals the supplied delegation designator's hash.
+- The recovered transaction signer equals the funder address.
 
-## Layout
+#### Pinned smart-account USDC funding
 
-- `core/` — input types, receipt authentication, predicate, and ABI journal.
-- `methods/guest/` — RISC Zero guest entrypoint.
-- `host/` — Base RPC evidence builder plus native, dry-run, and proving CLI.
-- `enforcement-core/` — shared report-root, dependency, receipt, and transaction predicate logic.
-- `cohort-methods/` — P0 closed-loop and P1 coordinated-control guest image.
-- `reciprocal-methods/` — P0 reciprocal-pair guest image.
-- `scripts/` — deterministic bundle planner.
-- `checkpoint/` — isolated Steel-based Base checkpoint proof workspace.
-- `cases/flash.json` — a three-buyer Base mainnet evidence request.
-- `cases/flash-full-report.json` — the approved Flash snapshot request: all
-  seller settlements plus the report's 55-buyer ≥99%-seller-share cohort.
+Only these two smart-account funder addresses are supported:
 
-The former full-analysis and challenge packages are not members of this
-enforcement workspace. The JavaScript scanner in `../analyses/wash-trading`
-remains a separate reporting tool.
+- `0xee7ae85f2fe2239e27d9c1e23fffe168d63b4055`
+- `0x17fe9197970454875df742a74b74ed5f984b645a`
 
-## Run
+For them, the proof requires:
 
-Requires Rust 1.88 and the RISC Zero toolchain.
+- A successful Base USDC `Transfer` with exact
+  `from = smart account`, `to = buyer`, and `amount >= 1 USDC`.
+- Proxy runtime code hash
+  `0x22bcbefe2dacbb6289d731af9eabb98fdfb6480f4c59c9b2f45f574f008ef68f`.
+- ERC-1967 implementation address
+  `0xd206ac7fef53d83ed4563e770b28dba90d0d9ec8`.
+- Implementation runtime code hash
+  `0x491c065559650e64988c11ac6fb90a72bec27afa3b112a4962fded431a603352`.
+- The pinned owner slot decodes to a nonzero owner.
+- The pinned plugin-count slot is zero.
 
-Copy `.env.example` to `.env` and set `BASE_RPC_URL`. The host reads that URL
-first and falls back to public Base RPCs.
+The smart-account address—not its owner—is the funder identity. Predicate v2
+does not merge the owner and smart-account addresses into one funder.
 
-```bash
-cargo build --release
+#### Native ETH funding
 
-# Discover all bounded settlements, select the exact minimum checkpoint
-# windows, fetch only selected receipt proofs, and write both manifests.
-./target/release/loop-host fetch \
-  --case cases/flash.json \
-  --out cases/flash-fixture.json \
-  --selection-out cases/flash-selection.json
+- The authenticated transaction has exact `to = buyer` and
+  `value >= 0.00005 ETH`.
+- Its receipt is authenticated and successful. Transaction inclusion without a
+  successful receipt is insufficient because a reverted transaction transfers
+  no ETH.
+- The receipt and transaction must be the same transaction in the same block.
+- The recovered signer is authenticated as the EOA or EIP-7702 funder.
 
-# Native validation plus zkVM execution, without producing a proof.
-./target/release/loop-host run cases/flash-fixture.json
+Native ETH funding is intentionally **not** supported for smart-contract
+funders. A top-level Ethereum transaction cannot originate from a contract
+account, and predicate v2 does not authenticate internal native-value call
+traces.
 
-# Fast development receipt with real guest cycle counts.
-RISC0_DEV_MODE=1 ./target/release/loop-host run \
-  cases/flash-fixture.json --prove
+## P0 Closed-Cycle Guarantee
 
-# Real proof.
-./target/release/loop-host run cases/flash-fixture.json --prove
+An accepted closed-cycle proof guarantees all of the following.
+
+### Funding and settlement phase
+
+- One exact funder funded the complete linked-buyer cohort under the common
+  funding rules above.
+- At least three distinct linked buyers have authenticated settlements with
+  the exact seller.
+- Every selected settlement is a successful `ChannelSettled` receipt emitted
+  by the pinned Channels contract.
+- The event's exact buyer is in the linked cohort, its seller equals the claim
+  seller, and its settlement delta is nonzero.
+- Every selected settlement block is inside
+  `[44,471,575, 49,936,173)`.
+- Every settlement block timestamp is strictly later than that buyer's funding
+  block timestamp.
+- No settlement log is counted twice.
+- Selected settlement deltas total at least `1,000 USDC` using checked
+  `uint128` arithmetic.
+
+### Threshold ordering
+
+Selected settlements are deterministically ordered by
+`(blockNumber, transactionIndex, logIndex)`. The proof records the exact event
+where the selected cumulative volume first reaches `1,000 USDC`. Closure
+evidence must occur strictly after that event in the same ordering.
+
+### Direct closure
+
+A direct closure proves one successful Base USDC transfer:
+
+- `from = seller`;
+- `to = exact funder` or `to = one linked buyer`;
+- `amount >= 1 USDC`;
+- the transfer is inside the fixed period; and
+- the transfer occurs strictly after the threshold-crossing settlement.
+
+The direction is seller-outward only. `funder -> seller` and
+`buyer -> seller` do not count as closure.
+
+### Relay closure
+
+A relay closure proves at least three paths. Each path contains three distinct,
+successful Base USDC transfer logs with this exact shape:
+
+`seller -> relay 1 -> relay 2 -> exact funder`
+
+For every path:
+
+- the seller payment occurs after the threshold crossing;
+- all three transfers are in strict chain order and inside the fixed period;
+- no transfer log is reused in any relay path;
+- the final receipt occurs no more than `86,400` seconds after the seller
+  payment;
+- the seller payment is at least `1 USDC`;
+- the relay-forward amount differs from the seller payment by at most
+  `0.001 USDC`;
+- the final amount is nonzero and no greater than either the seller payment or
+  relay-forward amount; and
+- the final funder receipt either loses no more than `1 USDC` or preserves at
+  least `98%` of the seller payment.
+
+Predicate v2 prevents transfer-log reuse; it does not require relay addresses
+to be distinct within one path or across different paths.
+
+### Closed-cycle journal and penalties
+
+The closed-cycle guest commits:
+
+- predicate version and deterministic claim ID;
+- fixed period;
+- seller and exact funder;
+- cohort hash and cohort count;
+- authenticated qualified volume;
+- closure kind and path count;
+- fixed `9,000 BPS` penalty;
+- sorted, unique buyers that independently satisfy the 99% buyer-share rule;
+- sorted, unique canonical Base block references.
+
+The seller receives the future seller penalty. A linked buyer appears in
+`penalizedBuyers` only if authenticated target-seller volume is at least `99%`
+of that buyer's complete frozen-period `userBuyerPoints` delta across both
+emissions contracts and epochs `0–18`.
+
+## P0 Reciprocal Guarantee
+
+An accepted reciprocal proof guarantees all of the following.
+
+- The subjects are nonzero and normalized as `addressA < addressB`.
+- Every selected settlement is a successful, authenticated
+  `ChannelSettled` event emitted by the pinned Channels contract.
+- Every event is exactly either `addressA -> addressB` or
+  `addressB -> addressA`; unrelated buyers or sellers are rejected.
+- Every settlement lies inside the fixed period and has a nonzero delta.
+- No settlement log is counted twice.
+- The selected evidence contains at least `100` total settlements.
+- It contains at least `10` settlements from A to B and at least `10` from B
+  to A.
+- It contains at least `10 USDC` from A to B and at least `10 USDC` from B to
+  A.
+
+There is no 80% balance rule and no reciprocity-share rule.
+
+The reciprocal guest commits the normalized pair, both directional settlement
+counts, both directional volumes, fixed period and penalty, qualifying buyer
+penalties, deterministic claim ID, and canonical block references.
+
+Both addresses receive the future seller penalty. Address A receives a future
+buyer penalty only if the authenticated A-to-B target volume is at least `99%`
+of A's complete frozen-period purchases. Address B is checked independently
+using B-to-A volume. The journal cannot penalize any buyer other than A or B.
+
+## P1 Coordinated-Control Guarantee
+
+An accepted coordinated-control proof guarantees all of the following.
+
+### Common funder
+
+- One exact funder funded every buyer in a sorted, unique cohort of at least
+  three buyers under the common funding rules above.
+- ETH and USDC evidence may coexist only because every funding witness is
+  checked against that same exact funder address.
+- A smart account and its owner remain separate funder identities.
+
+### Cohort channel volume
+
+- Every selected `channelId` is unique.
+- At the end boundary, authenticated channel storage has the exact linked buyer
+  and exact claim seller.
+- The proof reads the channel's packed `settled` value at both state boundaries.
+- The channel contribution is
+  `settled(end block 49,936,172) - settled(start block 44,471,574)`.
+- Underflow is rejected and all channel/buyer/cohort additions use checked
+  arithmetic.
+- The sum of selected channel deltas is at least `1,000 USDC`.
+
+P1 uses cumulative channel-state deltas rather than settlement receipts because
+ordering and closure timing are not part of this predicate.
+
+### Complete seller-period volume
+
+- The seller's `userSellerPoints` values are authenticated at both state
+  boundaries for every epoch `0–18` in both pinned emissions contracts.
+- Each per-slot delta must be nonnegative and fit `uint128`.
+- All 38 deltas are added with checked arithmetic to produce the exact
+  `sellerPeriodVolume` used by the predicate.
+- The authenticated cohort volume satisfies
+  `cohortVolume * 2 >= sellerPeriodVolume`.
+- Equality at exactly `50%` passes; one raw USDC unit below the comparison
+  fails.
+
+The new emissions contract may be absent at the start boundary; that is
+authenticated as zero. The old emissions contract must exist at the start
+boundary, and both pinned contracts must exist with the expected code hashes at
+the end boundary.
+
+### P1 journal and penalties
+
+The P1 guest commits seller, exact funder, cohort hash/count, qualified cohort
+volume, exact seller-period volume, qualifying buyer penalties, fixed period
+and penalty, deterministic claim ID, and canonical block references.
+
+No return payment or closure evidence is required for P1. The seller receives
+the future seller penalty. A linked buyer receives the future buyer penalty
+only when authenticated target-seller channel volume is at least `99%` of that
+buyer's complete frozen-period `userBuyerPoints` delta.
+
+## Deterministic Claims and Public Journals
+
+For cohort predicates:
+
+```text
+cohortHash = keccak256(abi.encode(sortedLinkedBuyers))
+
+claimId = keccak256(abi.encode(
+  chainId,
+  proofType,
+  periodStartBlock,
+  periodEndBlockExclusive,
+  seller,
+  exactFunder,
+  cohortHash
+))
 ```
 
-The host prints user cycles, total cycles, segment count, journal SHA-256, and
-the ABI journal bytes required by `submitSellerPenalty`. Cycle cost scales
-primarily with the number and size of authenticated receipt proof paths.
+For reciprocal predicates:
 
-### Full Flash report development proof
-
-The full-report case reproduces the published Flash seller row, not the whole
-multi-seller report. Generated fixture, selection, cache, and journal files are
-ignored because the fixture is 480 MB and can be rebuilt from Base RPC data.
-
-```bash
-./target/release/loop-host fetch \
-  --case cases/flash-full-report.json \
-  --out cases/flash-full-report-fixture.json \
-  --selection-out cases/flash-full-report-selection.json
-
-# Development receipt only. RISC Zero prints an explicit warning that this is
-# not a valid production proof.
-RISC0_DEV_MODE=1 ./target/release/loop-host run \
-  cases/flash-full-report-fixture.json \
-  --prove \
-  --journal-out cases/flash-full-report-journal.hex
+```text
+claimId = keccak256(abi.encode(
+  chainId,
+  reciprocalProofType,
+  periodStartBlock,
+  periodEndBlockExclusive,
+  normalizedAddressA,
+  normalizedAddressB
+))
 ```
 
-The reproducible 2026-08-19 development run produced:
+The Rust guest computes the claim ID, and the Solidity registry recomputes it
+from the decoded journal. A proof for one predicate, period, subject, funder, or
+cohort cannot be replayed as a different claim.
 
-- 43,586 authenticated Flash settlements across 39,722 Base blocks;
-- 44,847.928171 USDC exact approved-report total;
-- 42,748.838506 USDC attributed to the report's 55 suspected buyers;
-- 33,490.027681 USDC post-funding qualified volume across 38 linked buyers;
-- report evidence root
-  `0x8a0ce40f96615b8e93a0de20d7ac4b5a47ef96b688093cc48c863c948ad91c21`;
-- journal SHA-256
-  `0xf44a443d31a0418faa7d0e37f6c7a756af317da90b6f03c02e69d1f119d27d6c`;
-- v3 seller image ID
-  `0x0fb2461a755f36b945d5a82d26716c0e513452bca3f9d73e990bcf133d01e91a`;
-- 29,295,611,813 user cycles and 31,979,995,136 total cycles across
-  30,499 segments in 294.83 seconds;
-- a 2,543,040-byte ABI journal.
+All journals use ABI encoding and include:
 
-The run used `RISC0_DEV_MODE=1`; it exercised and verified the real guest image
-but intentionally produced no secure production proof.
+- `predicateVersion = 2`;
+- the deterministic `claimId`;
+- fixed period start and end-exclusive blocks;
+- `penaltyBps = 9_000`;
+- a sorted, unique `penalizedBuyers` array capped at `160`; and
+- sorted, unique `(number, blockHash)` references capped at `256`.
 
-### Base checkpoint dry run
+The journal ABI definitions live beside the Rust journals in
+[`enforcement-core/src/lib.rs`](enforcement-core/src/lib.rs). Solidity decoding
+and invariant checks live in
+[`../antseed/packages/contracts/integrity/AntseedWashTradingRegistry.sol`](../antseed/packages/contracts/integrity/AntseedWashTradingRegistry.sol).
 
-The checkpoint workspace uses Rust 1.94 and pins Steel to commit
-`f6fc6297c938d7acc0563337da136d034c3cb67b`.
+## Onchain Enforcement Effect
 
-```bash
-cd checkpoint
+The registry exposes exactly three proof submission functions:
 
-# Resolve every selected 30-block window to an ASR-valid type-621 game at
-# finalized Ethereum state. This only writes a proof plan.
-cargo run --release -p checkpoint-host --bin checkpoint-plan -- \
-  --selection ../cases/flash-selection.json \
-  --out ../cases/flash-checkpoint-plan.json
-
-# Live Ethereum/Base preflight plus zkVM execution. Defaults to one target
-# 28 blocks behind the checkpoint.
-cargo run --release -p checkpoint-host -- \
-  --journal-out ../../antseed/packages/contracts/test/fixtures/checkpoint-journal.hex
-
-# Development Groth16-shaped receipt; this is not a production-secure proof.
-RISC0_DEV_MODE=1 cargo run --release -p checkpoint-host -- --prove
+```solidity
+submitClosedCycleProof(bytes seal, bytes journalData)
+submitReciprocalProof(bytes seal, bytes journalData)
+submitCoordinatedControlProof(bytes seal, bytes journalData)
 ```
 
-Each proof covers target blocks in one 30-block AggregateVerifier checkpoint
-window. Generate multiple proofs for evidence spread across multiple windows.
-The Base EIP-4788 history is approximately 4h33m, so a permissionless keeper
-must call `archiveBeaconRoot(timestamp)` before a needed root expires. Missing
-that call only prevents a penalty and therefore causes overpayment, never an
-unsupported underpayment.
+Before changing penalties, the registry:
 
-The current checkpoint image ID is
-`e719072a9e3c7645903268b7e01079b5ea7704612b680d9401964b83a83e643e`.
-A live 29-header run measured 7,923,466 user cycles and 9,568,256 padded
-cycles. This cost is separate from the seller receipt proof and can be reused
-for every seller proof that references the stored block hashes.
-The two-block oracle storage path measured 91,338 execution gas with a mock
-verifier; production total gas must add the real RISC Zero verifier and
-transaction calldata.
+1. verifies the seal against the corresponding immutable image ID;
+2. hashes and decodes the journal;
+3. recomputes the deterministic claim ID;
+4. checks predicate version, fixed period, thresholds, penalty, array caps,
+   sorting, uniqueness, and journal-specific invariants; and
+5. checks every block reference against the Base state oracle.
 
-### Current Base mainnet selection
+Claim IDs are idempotent. Seller and buyer penalties are monotonic and use
+`max(previousPenalty, 9_000)`, so separate proofs never add multiple 9,000-BPS
+penalties together. Including the cohort hash in cohort claim IDs allows a
+different proven cohort to add newly proven buyer penalties without stacking
+the seller penalty.
 
-`loop-host fetch` scans only the case's required `[start_block,
-end_block_exclusive)` period and excludes blocks before AggregateVerifier
-coverage. It first decodes settlement deltas from `eth_getLogs` as selection
-hints, then runs an exact deterministic optimizer over protocol-aligned
-30-block windows. Full receipts and Merkle proofs are fetched only for the
-selected evidence, and the unchanged native predicate reauthenticates the
-selected volume before either output file is accepted.
+[`../antseed/packages/contracts/policies/AntseedWashTradingPointsPolicy.sol`](../antseed/packages/contracts/policies/AntseedWashTradingPointsPolicy.sol)
+returns seller and buyer penalties to the points-policy registry. A 9,000-BPS
+reduction leaves 10% of otherwise calculated future points. Previously accrued
+points, locked rewards, and historical reward state are not modified.
 
-For the current `cases/flash.json` period, the live 2026-08-19 result is:
+Emergency policy removal remains available through the existing points-policy
+registry. There is no claim-level owner override or mutable enforcement
+allowlist in the wash-trading registry.
 
-- 2,850 eligible settlement candidates across 3 buyers;
-- 69 selected settlement receipts proving 1,000.701075 USDC;
-- 70 referenced Base blocks in 49 total checkpoint windows;
-- 40 ASR-valid AggregateVerifier games in the finalized checkpoint plan;
-- an 838 KB optimized fixture, down from the former 11 MB fixture.
+## What Predicate v2 Does Not Prove
 
-The earlier planning estimate was 573 windows. Live exact optimization found a
-strictly better valid result: **49**. The unchanged native predicate and zkVM
-guest both accept it, and the checkpoint planner resolves all 49 windows at
-finalized Ethereum state. Artificially retaining 573 windows would violate the
-minimum-window objective.
+These limitations are intentional and security-relevant:
 
-### Previous Base mainnet measurement
+- It does not prove that an analytics report is complete or correct.
+- It does not trust or consume a report root, report leaf, dependency root, or
+  approved-address array.
+- P0 proves a sufficient authenticated set of settlements meeting its
+  thresholds; it does not claim that every seller settlement is enumerated.
+- P1 is the predicate that authenticates the seller's complete frozen-period
+  counter delta for the 50% comparison.
+- CoW, routers, aggregators, and generic unpinned contract funders are not attributed.
+  Such cases remain `analysis-only-router-attribution` and cannot enter a
+  production submission manifest.
+- It does not equate a smart account with its owner.
+- It does not authenticate smart-account internal native ETH transfers.
+- It does not infer common control from exchange deposits, shared relayers,
+  IP addresses, offchain identities, or behavioral similarity.
+- It does not claw back past points or rewards.
+- It does not batch multiple seller cases into one zk proof.
+- It does not make an untrusted Base header canonical; canonicality is supplied
+  by the separately verified state oracle.
 
-The former first-settlements fixture was fetched through `BASE_RPC_URL` and executed
-with RISC Zero 3.0 in development proving mode on 2026-08-19:
+## Proof and Submission Flow
 
-- 3 linked buyers;
-- 1,002 authenticated settlement receipts;
-- 1,008 referenced Base blocks;
-- 11 MB input fixture;
-- 1,243.599300 USDC proven post-funding volume;
-- **574,196,479 user cycles**;
-- **623,378,432 total cycles** across 595 segments;
-- 5.52 seconds for the local development receipt (not a secure proof).
-
-This is roughly 195× the old 2.94M-cycle, three-settlement spike. The increase
-comes from proving enough individual low-value settlement events to cross the
-1,000-USDC threshold, not from searching the full analytics dataset.
-
-The same fixture also produces 1,008 block references in the public journal.
-A Foundry test using 1,008 references and a simple mapping-backed mock oracle
-measured **1,771,484 execution gas** for `submitSellerPenalty`. This excludes
-transaction intrinsic/calldata gas and uses a cheap mock verifier and oracle;
-it is not a production gas quote. The real cost depends on how finalized Base
-canonicality is authenticated. Before production, benchmark the exact calldata
-against the real verifier/oracle or replace per-block calls with an audited
-batch/range commitment that authenticates all referenced headers with one
-bounded onchain check. Do not remove canonical-header authentication to save
-gas.
-
-## Production checklist
-
-- Deploy and audit `AntseedBaseCheckpointOracle` and operate redundant
-  permissionless beacon-root archivers.
-- Build the guest reproducibly and pin its exact image ID.
-- Generate a final representative fixture and record zkVM cycles/proof size.
-- Verify Rust/Solidity ABI compatibility for the generated journal.
-- Audit the guest, registry, points policy, and deployment wiring.
-- Monitor verifier gas, checkpoint submission gas, and archive liveness.
-- Reduce receipt count through an authenticated onchain aggregate or storage
-  proof if the 574M-cycle representative proof is operationally unacceptable;
-  never replace it with an unauthenticated indexer total.
-- Keep the reporting scanner operationally separate from enforcement.
-
-## Report-matched batch enforcement
-
-The compact enforcement path starts from the scanner's immutable
-`proof-bundle-v1.json`. The bundle's report root is the governance trust anchor
-for period-completeness facts; the guests authenticate the selected positive
-onchain evidence and its membership in that root.
+Materialize a coordinated-control witness from the frozen scan with a Base
+archive RPC that supports historical `eth_getProof` at both fixed state
+boundaries:
 
 ```bash
-node scripts/plan-wash-trading-proofs.mjs \
-  --bundle proof-bundle-v1.json \
-  --out proof-plan-v1.json \
-  --rpc-url "$ANTSEED_BASE_RPC_URL"
+cd loop-proof
+
+BASE_ARCHIVE_RPC_URL="$ARCHIVE_BASE_RPC_URL" \
+  cargo run --release -p loop-host --bin wash-trading-materialize -- \
+  --scan-dir /absolute/path/to/scan \
+  --seller 0xSeller \
+  --output cases/p1-witness-v2.json
+```
+
+Use `--funders 0xFunderA,0xFunderB` to restrict materialization to specific
+exact funders. Without it, the materializer chooses threshold-sufficient
+cohorts deterministically. Every included funder must fund at least three
+selected buyers. Native funding and protocol deposits are supported; a
+seller may be its own exact funder. The materializer authenticates receipt,
+transaction, account, channel, deposit, and emissions-counter proofs and runs
+native predicate verification before writing the package.
+
+`BASE_RPC_URL` remains the primary endpoint for blocks, transactions, receipts,
+and logs. State-witness calls try `BASE_RPC_URL` first, then fall back to
+`BASE_ARCHIVE_RPC_URL` when the primary endpoint does not cover the requested
+historical block. This keeps the existing RPC for high-volume and in-range
+reads while limiting archive-node usage to missing witness data. Without
+`BASE_ARCHIVE_RPC_URL`, a primary endpoint whose proof index starts after the
+fixed boundary fails the initial archive preflight and cannot produce a valid
+witness.
+
+The predicate-v2 prover accepts one self-contained witness package per
+invocation:
+
+```bash
+cd loop-proof
 
 cargo run -p loop-host --bin wash-trading-prove -- \
-  --plan proof-plan-v1.json \
-  --out proof-results-v1.json \
-  --prove
-
-node scripts/report-wash-trading-proof-coverage.mjs \
-  --bundle proof-bundle-v1.json \
-  --plan proof-plan-v1.json \
-  --results proof-results-v1.json \
-  --out proof-coverage-v1.json
+  --input proof-witness-v2.json \
+  --output proof-result-v2.json
 ```
 
-The planner resolves every dependency against Base, requires settlements inside
-the fixed report period, and routes block authentication through either the
-AggregateVerifier checkpoint range or the historical backfill range. It
-minimizes state-proof groups before receipt count and witness size. Closed-loop evidence priority is
-`DIRECT_SELLER_FUNDER`, then `DIRECT_SELLER_BUYER`, then three valid relay
-paths. Reciprocal plans use exactly 100 unique settlements in both directions.
+The witness package must have:
 
-The coverage report keeps report-root-classified volume separate from the
-unique settlement volume actually authenticated by compact enforcement proofs.
-It also reports cohort and reciprocal totals separately because the two policy
-classes can refer to the same settlement and cannot be summed as a global
-deduplicated wash-trading total.
+- `version: 2`;
+- `kind: "antseed-wash-trading-proof-witness"`;
+- `enforceable: true`; and
+- exactly one `proofType` and corresponding predicate input.
 
-Use `RISC0_DEV_MODE=1` only for the development coverage gate. The resulting
-manifest is marked `development` and the contract submission script rejects it.
-Production proving must produce Groth16-compatible seals before submission.
+Use `--prove` to produce a receipt. Production proving additionally requires
+both `--production` and `RISC0_DEV_MODE=0`:
 
-### Security artifact invalidation
+```bash
+RISC0_DEV_MODE=0 cargo run --release -p loop-host --bin wash-trading-prove -- \
+  --input proof-witness-v2.json \
+  --output proof-result-v2.json \
+  --prove \
+  --production
+```
 
-The compact guests now require one approved funder for the entire cohort,
-authenticate the transaction behind every receipt-backed dependency, bind exact
-parties/channel/amount/period fields, reject duplicate dependency leaves and
-zero-value settlements, and reject zero-value or value-amplifying relay paths.
-These checks change both compact guest image IDs. Rebuild and pin the new cohort
-and reciprocal image IDs, then regenerate the proof plan, proof results, seals,
-coverage report, and submission manifest. Any artifact produced by an earlier
-compact image—including previously generated `proof-plan-v1.json` and
-`proof-results-v1.json` files—must not be submitted.
+The host rejects `enforceable=false` router-attribution cases. It executes the
+same predicate natively and inside the zkVM and rejects any journal-byte
+mismatch.
+
+Submit production results sequentially with the resumable script:
+
+```bash
+cd ../antseed/packages/contracts
+
+node scripts/submit-wash-trading-proofs.mjs \
+  --manifest /absolute/path/proof-result-v2.json \
+  --registry 0xRegistryAddress \
+  --rpc-url "$ANTSEED_BASE_RPC_URL" \
+  --dry-run
+
+node scripts/submit-wash-trading-proofs.mjs \
+  --manifest /absolute/path/proof-result-v2.json \
+  --registry 0xRegistryAddress \
+  --rpc-url "$ANTSEED_BASE_RPC_URL" \
+  --submit
+```
+
+The submission script refuses manifests marked as development, non-Base RPC
+networks, wrong image IDs, malformed claim IDs, noncanonical arrays, missing
+seals, analysis-only entries, and journal-digest mismatches. The production
+verifier remains the authority on seal validity. The script persists successful
+transaction receipts for resume. A failed case can be retried; an unrelated
+case can be submitted independently with its own result manifest.
+
+## Case Classification
+
+Analysis classifies cases as:
+
+- `proof-ready` — eligible for predicate-v2 production proving;
+- `analysis-only-router-attribution` — retained in analytics but refused by
+  production proving and submission; or
+- `fails-predicate` — does not meet the predicate thresholds.
+
+The current coverage report is
+[`reports/wash-trading-proof-coverage-2026-08-19.md`](reports/wash-trading-proof-coverage-2026-08-19.md).
+The current production-ready inventory is 39 independent proofs: one closed
+cycle, 24 reciprocal pairs, and 14 coordinated-control cohorts.
+
+## Source Map
+
+| Responsibility | File |
+|---|---|
+| Predicate constants, witnesses, state/receipt proofs, thresholds, journals | [`enforcement-core/src/lib.rs`](enforcement-core/src/lib.rs) |
+| Closed-cycle guest | [`closed-cycle-methods/guest/src/main.rs`](closed-cycle-methods/guest/src/main.rs) |
+| Reciprocal guest | [`reciprocal-methods/guest/src/main.rs`](reciprocal-methods/guest/src/main.rs) |
+| Coordinated-control guest | [`coordinated-control-methods/guest/src/main.rs`](coordinated-control-methods/guest/src/main.rs) |
+| P1 scan-to-witness materializer | [`host/src/bin/wash-trading-materialize.rs`](host/src/bin/wash-trading-materialize.rs) |
+| Witness execution and proof packaging | [`host/src/bin/wash-trading-prove.rs`](host/src/bin/wash-trading-prove.rs) |
+| EIP-1186 RPC fetching | [`host/src/rpc.rs`](host/src/rpc.rs) |
+| Deterministic funder selection | [`host/src/selection.rs`](host/src/selection.rs) |
+| Onchain registry | [`../antseed/packages/contracts/integrity/AntseedWashTradingRegistry.sol`](../antseed/packages/contracts/integrity/AntseedWashTradingRegistry.sol) |
+| Points policy | [`../antseed/packages/contracts/policies/AntseedWashTradingPointsPolicy.sol`](../antseed/packages/contracts/policies/AntseedWashTradingPointsPolicy.sol) |
+| Deployment | [`../antseed/packages/contracts/script/DeployWashTradingEnforcement.s.sol`](../antseed/packages/contracts/script/DeployWashTradingEnforcement.s.sol) |
+| Production submission | [`../antseed/packages/contracts/scripts/submit-wash-trading-proofs.mjs`](../antseed/packages/contracts/scripts/submit-wash-trading-proofs.mjs) |
+| Analysis classification | [`../analyses/wash-trading/scripts/wash-trading/proof-coverage.mjs`](../analyses/wash-trading/scripts/wash-trading/proof-coverage.mjs) |
+
+## Validation
+
+Run the proof workspace tests:
+
+```bash
+cd loop-proof
+cargo test --workspace
+cargo fmt --all --check
+```
+
+Run the enforcement contract tests:
+
+```bash
+cd ../antseed/packages/contracts
+forge test --match-path 'test/AntseedWashTrading*.t.sol'
+forge test
+node --test scripts/submit-wash-trading-proofs.test.mjs
+```
+
+Run the proof-planning and coverage tests:
+
+```bash
+cd ../../../loop-proof
+node --test scripts/*.test.mjs
+
+cd ../analyses
+node --test wash-trading/scripts/wash-trading/proof-coverage.test.mjs
+```
+
+## Production Acceptance Still Required
+
+Code and local tests do not replace production proof acceptance. Before Base
+submission:
+
+- materialize every referenced historical Base block in the state oracle;
+- generate all intended receipts with `RISC0_DEV_MODE=0`;
+- benchmark the largest 147-buyer witness under native and zkVM execution;
+- dry-run every submission against a Base fork;
+- obtain at least one successful production receipt for each image ID; and
+- submit claims sequentially through the resumable script.
+
+Development receipts and analysis-only router cases are never submit-ready.

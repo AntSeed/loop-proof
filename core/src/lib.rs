@@ -374,6 +374,32 @@ pub fn receipt_log(receipt: &[u8], log_index: usize) -> Result<ParsedLog, String
     Err(format!("receipt: log index {log_index} out of range"))
 }
 
+/// Return whether an authenticated receipt completed successfully.
+///
+/// Post-Byzantium receipts encode the first payload item as status `0` or `1`.
+/// Base blocks covered by the wash-trading predicates are post-Byzantium, so a
+/// 32-byte pre-Byzantium state root is intentionally rejected.
+pub fn receipt_success(receipt: &[u8]) -> Result<bool, String> {
+    let mut buf = receipt;
+    if !buf.is_empty() && buf[0] < 0xc0 {
+        buf = &buf[1..];
+    }
+    let (is_list, mut body) = next_item(&mut buf)?;
+    if !is_list {
+        return Err("receipt: not a list".into());
+    }
+    let (is_list, status) = next_item(&mut body)?;
+    if is_list {
+        return Err("receipt: status is a list".into());
+    }
+    match status {
+        [] => Ok(false),
+        [1] => Ok(true),
+        [0] => Ok(false),
+        _ => Err("receipt: invalid status".into()),
+    }
+}
+
 // ─────────────────────────── block authentication ───────────────────────────
 
 /// The receipts trie is keyed by rlp(tx_index) (NOT hashed keys).

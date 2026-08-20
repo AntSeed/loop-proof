@@ -1,41 +1,95 @@
 use alloy_consensus::{transaction::SignerRecoverable, Header, Transaction, TxEnvelope};
 use alloy_eips::eip2718::Decodable2718;
-use alloy_primitives::{address, keccak256, Address, Bytes, B256, U256};
+use alloy_primitives::{address, b256, keccak256, Address, Bytes, B256, U256};
 use alloy_sol_types::SolValue;
+use alloy_trie::{proof::verify_proof, Nibbles, TrieAccount, EMPTY_ROOT_HASH, KECCAK_EMPTY};
 use loop_core::{
-    receipt_log, trie_index_key, verify_receipt_inclusion, ReceiptProof, CHANNEL_SETTLED_TOPIC,
-    TRANSFER_TOPIC,
+    receipt_log, receipt_success, trie_index_key, verify_receipt_inclusion, ReceiptProof,
+    CHANNEL_SETTLED_TOPIC, TRANSFER_TOPIC,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const PREDICATE_VERSION: u32 = 1;
+pub const PREDICATE_VERSION: u32 = 2;
 pub const BASE_CHAIN_ID: u64 = 8_453;
+pub const PERIOD_START_BLOCK: u64 = 44_471_575;
+pub const PERIOD_END_BLOCK_EXCLUSIVE: u64 = 49_936_173;
+pub const STATE_START_BLOCK: u64 = PERIOD_START_BLOCK - 1;
+pub const STATE_END_BLOCK: u64 = PERIOD_END_BLOCK_EXCLUSIVE - 1;
+pub const EMISSIONS_CUTOVER_BLOCK: u64 = 45_937_736;
+pub const PENALTY_BPS: u16 = 9_000;
+pub const MAX_BUYERS: usize = 160;
+pub const MAX_FUNDERS: usize = 160;
+pub const MAX_BLOCK_REFS: usize = 256;
+pub const MINIMUM_BUYERS: usize = 3;
+pub const MINIMUM_VOLUME_RAW: u128 = 1_000_000_000;
+pub const MINIMUM_USDC_FUNDING_RAW: u128 = 1_000_000;
+pub const MINIMUM_NATIVE_FUNDING_WEI: u128 = 50_000_000_000_000;
+pub const MINIMUM_CLOSURE_RAW: u128 = 1_000_000;
+pub const MINIMUM_RECIPROCAL_SETTLEMENTS: u32 = 100;
+pub const MINIMUM_RECIPROCAL_DIRECTION_SETTLEMENTS: u32 = 10;
+pub const MINIMUM_RECIPROCAL_DIRECTION_VOLUME_RAW: u128 = 10_000_000;
+pub const MAX_RELAY_SECONDS: u64 = 86_400;
+pub const MAX_RELAY_EARLY_DELTA_RAW: u128 = 1_000;
+pub const MIN_RELAY_RETAINED_BPS: u128 = 9_800;
+pub const MAX_RELAY_LOSS_RAW: u128 = 1_000_000;
+
 pub const USDC_ADDRESS: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
 pub const CHANNELS_ADDRESS: Address = address!("BA66d3b4fbCf472F6F11D6F9F96aaCE96516F09d");
 pub const DEPOSITS_ADDRESS: Address = address!("0F7a3a8f4Da01637d1202bb5443fcF7F88F99fD2");
-pub const PENALTY_BPS: u16 = 9_000;
-pub const MINIMUM_BUYERS: usize = 3;
-pub const MINIMUM_VOLUME_RAW: u128 = 1_000_000_000;
+pub const OLD_EMISSIONS_ADDRESS: Address = address!("36877fBa8Fa333aa46a1c57b66D132E4995C86b5");
+pub const NEW_EMISSIONS_ADDRESS: Address = address!("F13bE52c4A3afC6AE29536f073588d01A0564088");
+pub const SMART_ACCOUNT_IMPLEMENTATION: Address =
+    address!("d206ac7fef53d83ed4563e770b28dba90d0d9ec8");
+pub const SUPPORTED_SMART_ACCOUNT_A: Address = address!("ee7ae85f2fe2239e27d9c1e23fffe168d63b4055");
+pub const SUPPORTED_SMART_ACCOUNT_B: Address = address!("17fe9197970454875df742a74b74ed5f984b645a");
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct MerkleStep {
-    pub sibling: B256,
-    pub sibling_on_left: bool,
-}
+pub const DEPOSITS_CODE_HASH: B256 =
+    b256!("41f0965f0300d0ce16e2a5824ae52fecf4321f4083e62abfa309e64414f95955");
+pub const CHANNELS_CODE_HASH: B256 =
+    b256!("9d8c726d151e2257e2b4e50f46dcf0bc7c976786585ee3b902be55bd431f1ed8");
+pub const OLD_EMISSIONS_CODE_HASH: B256 =
+    b256!("5991d7a7f4d33f70e29ad71421820d37c8ae04eb99a720184b99a2b7d231876e");
+pub const NEW_EMISSIONS_CODE_HASH: B256 =
+    b256!("534c9513b91440044e12ad087f414f8ae0b59fd7cba3d892e1a522296bfcf464");
+pub const SMART_ACCOUNT_PROXY_CODE_HASH: B256 =
+    b256!("22bcbefe2dacbb6289d731af9eabb98fdfb6480f4c59c9b2f45f574f008ef68f");
+pub const SMART_ACCOUNT_IMPLEMENTATION_CODE_HASH: B256 =
+    b256!("491c065559650e64988c11ac6fb90a72bec27afa3b112a4962fded431a603352");
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct MembershipProof {
-    pub steps: Vec<MerkleStep>,
-}
+pub const DEPOSITS_BUYERS_SLOT: u64 = 9;
+pub const CHANNELS_CHANNELS_SLOT: u64 = 9;
+pub const OLD_EMISSIONS_SELLER_POINTS_SLOT: u64 = 10;
+pub const OLD_EMISSIONS_BUYER_POINTS_SLOT: u64 = 11;
+pub const NEW_EMISSIONS_SELLER_POINTS_SLOT: u64 = 14;
+pub const NEW_EMISSIONS_BUYER_POINTS_SLOT: u64 = 15;
+pub const MAX_EMISSIONS_EPOCH: u64 = 18;
+pub const ERC1967_IMPLEMENTATION_SLOT: B256 =
+    b256!("360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc");
+pub const SMART_ACCOUNT_PLUGIN_COUNT_SLOT: B256 =
+    b256!("c6a0cc20c824c4eecc4b0fbb7fb297d07492a7bd12c83d4fa4d27b4249f9bfca");
+pub const SMART_ACCOUNT_OWNER_SLOT: B256 =
+    b256!("c6a0cc20c824c4eecc4b0fbb7fb297d07492a7bd12c83d4fa4d27b4249f9bfd0");
+pub const DEPOSITED_TOPIC: B256 =
+    b256!("2da466a7b24304f47e87fa2e1e5a81b9831ce54fec19055ce277ca2f39ba42c4");
+
+pub const CLOSED_CYCLE_PROOF_TYPE: u8 = 1;
+pub const RECIPROCAL_PROOF_TYPE: u8 = 2;
+pub const COORDINATED_CONTROL_PROOF_TYPE: u8 = 3;
+pub const DIRECT_CLOSURE: u8 = 1;
+pub const RELAY_CLOSURE: u8 = 2;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct LogRef {
     pub block: usize,
     pub receipt: usize,
     pub log: usize,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct ReceiptRef {
+    pub block: usize,
+    pub receipt: usize,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -59,61 +113,178 @@ pub struct EnforcementBlock {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum EvidenceLocation {
-    Log(LogRef),
-    UsdcDeposit {
+pub struct Eip1186StorageProof {
+    pub slot: B256,
+    pub value: U256,
+    pub proof: Vec<Bytes>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Eip1186AccountProof {
+    pub block: usize,
+    pub address: Address,
+    pub exists: bool,
+    pub nonce: u64,
+    pub balance: U256,
+    pub storage_root: B256,
+    pub code_hash: B256,
+    pub account_proof: Vec<Bytes>,
+    pub storage_proofs: Vec<Eip1186StorageProof>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct StateValueRef {
+    pub account: usize,
+    pub slot: B256,
+    pub storage: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum FunderAuthentication {
+    Eoa {
+        account: usize,
+    },
+    Eip7702 {
+        account: usize,
+        delegation_code: Bytes,
+    },
+    SupportedSmartAccount {
+        proxy_account: usize,
+        implementation_account: usize,
+        implementation_slot: StateValueRef,
+        plugin_count_slot: StateValueRef,
+        owner_slot: StateValueRef,
+        owner: Address,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum FundingKind {
+    Usdc {
+        transfer: LogRef,
+    },
+    ProtocolDeposit {
         transfer: LogRef,
         deposited: LogRef,
     },
-    NativeTransaction(TransactionRef),
-    RelayPath {
-        seller_payment: LogRef,
-        relay_forward: LogRef,
-        funder_receipt: LogRef,
+    Native {
+        transaction: TransactionRef,
+        receipt: ReceiptRef,
     },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SelectedEvidence {
-    pub dependency_leaf: Bytes,
-    pub dependency_membership: MembershipProof,
-    pub location: EvidenceLocation,
+pub struct FundingEvidence {
+    pub buyer: Address,
+    pub first_channel_at: StateValueRef,
+    pub authentication: FunderAuthentication,
+    pub kind: FundingKind,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct CohortInput {
+pub struct SettlementEvidence {
+    pub settlement: LogRef,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RelayPathEvidence {
+    pub seller_payment: LogRef,
+    pub relay_forward: LogRef,
+    pub final_receipt: LogRef,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum ClosureEvidence {
+    Direct { transfer: LogRef },
+    Relay { paths: Vec<RelayPathEvidence> },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum CounterKind {
+    Seller,
+    Buyer,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CounterDelta {
+    pub kind: CounterKind,
+    pub subject: Address,
+    pub contract: Address,
+    pub epoch: u64,
+    pub start: StateValueRef,
+    pub end: StateValueRef,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ChannelDelta {
+    pub channel_id: B256,
+    pub buyer: Address,
+    pub seller: Address,
+    pub start_packed_amounts: StateValueRef,
+    pub end_buyer: StateValueRef,
+    pub end_seller: StateValueRef,
+    pub end_packed_amounts: StateValueRef,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FunderCohort {
+    pub funder: Address,
+    pub linked_buyers: Vec<Address>,
+    pub fundings: Vec<FundingEvidence>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ClosedCycleInput {
     pub chain_id: u64,
-    pub usdc: Address,
-    pub channels: Address,
-    pub deposits: Address,
-    pub report_root: B256,
-    pub claim_leaf: Bytes,
-    pub claim_membership: MembershipProof,
+    pub seller: Address,
+    pub funder: Address,
+    pub linked_buyers: Vec<Address>,
     pub blocks: Vec<EnforcementBlock>,
-    pub evidence: Vec<SelectedEvidence>,
+    pub state_proofs: Vec<Eip1186AccountProof>,
+    pub fundings: Vec<FundingEvidence>,
+    pub settlements: Vec<SettlementEvidence>,
+    pub buyer_counters: Vec<CounterDelta>,
+    pub closure: ClosureEvidence,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ReciprocalInput {
     pub chain_id: u64,
-    pub channels: Address,
-    pub report_root: B256,
-    pub claim_leaf: Bytes,
-    pub claim_membership: MembershipProof,
+    pub address_a: Address,
+    pub address_b: Address,
     pub blocks: Vec<EnforcementBlock>,
-    pub evidence: Vec<SelectedEvidence>,
+    pub state_proofs: Vec<Eip1186AccountProof>,
+    pub settlements: Vec<SettlementEvidence>,
+    pub buyer_counters: Vec<CounterDelta>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct CohortJournal {
-    pub predicate_version: u32,
-    pub claim_type: u8,
-    pub claim_id: B256,
-    pub report_root: B256,
+pub struct CoordinatedControlInput {
+    pub chain_id: u64,
     pub seller: Address,
-    pub penalty_bps: u16,
-    pub linked_buyer_count: u32,
+    pub funding_cohorts: Vec<FunderCohort>,
+    pub blocks: Vec<EnforcementBlock>,
+    pub state_proofs: Vec<Eip1186AccountProof>,
+    pub channels: Vec<ChannelDelta>,
+    pub seller_counters: Vec<CounterDelta>,
+    pub buyer_counters: Vec<CounterDelta>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ClosedCycleJournal {
+    pub predicate_version: u32,
+    pub claim_id: B256,
+    pub period_start_block: u64,
+    pub period_end_block_exclusive: u64,
+    pub seller: Address,
+    pub funder: Address,
+    pub cohort_hash: B256,
+    pub cohort_count: u32,
     pub qualified_volume_raw: u128,
+    pub closure_kind: u8,
+    pub closure_path_count: u32,
+    pub penalty_bps: u16,
+    pub penalized_buyers: Vec<Address>,
     pub block_refs: Vec<(u64, B256)>,
 }
 
@@ -121,60 +292,95 @@ pub struct CohortJournal {
 pub struct ReciprocalJournal {
     pub predicate_version: u32,
     pub claim_id: B256,
-    pub report_root: B256,
-    pub seller_a: Address,
-    pub seller_b: Address,
+    pub period_start_block: u64,
+    pub period_end_block_exclusive: u64,
+    pub address_a: Address,
+    pub address_b: Address,
+    pub settlement_count_a_to_b: u32,
+    pub settlement_count_b_to_a: u32,
+    pub volume_a_to_b_raw: u128,
+    pub volume_b_to_a_raw: u128,
     pub penalty_bps: u16,
-    pub settlement_count: u32,
-    pub qualified_volume_raw: u128,
+    pub penalized_buyers: Vec<Address>,
+    pub block_refs: Vec<(u64, B256)>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CoordinatedControlJournal {
+    pub predicate_version: u32,
+    pub claim_id: B256,
+    pub period_start_block: u64,
+    pub period_end_block_exclusive: u64,
+    pub seller: Address,
+    pub funder_cohort_hash: B256,
+    pub funder_count: u32,
+    pub cohort_hash: B256,
+    pub cohort_count: u32,
+    pub qualified_cohort_volume_raw: u128,
+    pub seller_period_volume_raw: u128,
+    pub penalty_bps: u16,
+    pub penalized_buyers: Vec<Address>,
     pub block_refs: Vec<(u64, B256)>,
 }
 
 alloy_sol_types::sol! {
     struct SolBlockRef { uint64 number; bytes32 blockHash; }
-    struct SolCohortJournal {
-        uint32 predicateVersion;
-        uint8 claimType;
-        bytes32 claimId;
-        bytes32 reportRoot;
-        address seller;
-        uint16 penaltyBps;
-        uint32 linkedBuyerCount;
-        uint128 qualifiedVolumeRaw;
-        SolBlockRef[] blockRefs;
+    struct SolClosedCycleJournal {
+        uint32 predicateVersion; bytes32 claimId; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
+        address seller; address funder; bytes32 cohortHash; uint32 cohortCount; uint128 qualifiedVolumeRaw;
+        uint8 closureKind; uint32 closurePathCount; uint16 penaltyBps; address[] penalizedBuyers; SolBlockRef[] blockRefs;
     }
     struct SolReciprocalJournal {
-        uint32 predicateVersion;
-        bytes32 claimId;
-        bytes32 reportRoot;
-        address sellerA;
-        address sellerB;
-        uint16 penaltyBps;
-        uint32 settlementCount;
-        uint128 qualifiedVolumeRaw;
-        SolBlockRef[] blockRefs;
+        uint32 predicateVersion; bytes32 claimId; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
+        address addressA; address addressB; uint32 settlementCountAToB; uint32 settlementCountBToA;
+        uint128 volumeAToBRaw; uint128 volumeBToARaw; uint16 penaltyBps; address[] penalizedBuyers; SolBlockRef[] blockRefs;
     }
+    struct SolCoordinatedControlJournal {
+        uint32 predicateVersion; bytes32 claimId; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
+        address seller; bytes32 funderCohortHash; uint32 funderCount; bytes32 cohortHash; uint32 cohortCount; uint128 qualifiedCohortVolumeRaw;
+        uint128 sellerPeriodVolumeRaw; uint16 penaltyBps; address[] penalizedBuyers; SolBlockRef[] blockRefs;
+    }
+    struct SolCohortClaimId {
+        uint256 chainId; uint8 proofType; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
+        address seller; address funder; bytes32 cohortHash;
+    }
+    struct SolReciprocalClaimId {
+        uint256 chainId; uint8 proofType; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
+        address addressA; address addressB;
+    }
+    struct SolCoordinatedControlClaimId {
+        uint256 chainId; uint8 proofType; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
+        address seller; bytes32 funderCohortHash; bytes32 cohortHash;
+    }
+    struct SolFunderCohort { address funder; address[] buyers; }
 }
 
-impl CohortJournal {
+fn sol_block_refs(refs: &[(u64, B256)]) -> Vec<SolBlockRef> {
+    refs.iter()
+        .map(|(number, block_hash)| SolBlockRef {
+            number: *number,
+            blockHash: *block_hash,
+        })
+        .collect()
+}
+
+impl ClosedCycleJournal {
     pub fn abi_encode(&self) -> Vec<u8> {
-        SolCohortJournal {
+        SolClosedCycleJournal {
             predicateVersion: self.predicate_version,
-            claimType: self.claim_type,
             claimId: self.claim_id,
-            reportRoot: self.report_root,
+            periodStartBlock: self.period_start_block,
+            periodEndBlockExclusive: self.period_end_block_exclusive,
             seller: self.seller,
-            penaltyBps: self.penalty_bps,
-            linkedBuyerCount: self.linked_buyer_count,
+            funder: self.funder,
+            cohortHash: self.cohort_hash,
+            cohortCount: self.cohort_count,
             qualifiedVolumeRaw: self.qualified_volume_raw,
-            blockRefs: self
-                .block_refs
-                .iter()
-                .map(|(number, block_hash)| SolBlockRef {
-                    number: *number,
-                    blockHash: *block_hash,
-                })
-                .collect(),
+            closureKind: self.closure_kind,
+            closurePathCount: self.closure_path_count,
+            penaltyBps: self.penalty_bps,
+            penalizedBuyers: self.penalized_buyers.clone(),
+            blockRefs: sol_block_refs(&self.block_refs),
         }
         .abi_encode()
     }
@@ -185,409 +391,383 @@ impl ReciprocalJournal {
         SolReciprocalJournal {
             predicateVersion: self.predicate_version,
             claimId: self.claim_id,
-            reportRoot: self.report_root,
-            sellerA: self.seller_a,
-            sellerB: self.seller_b,
+            periodStartBlock: self.period_start_block,
+            periodEndBlockExclusive: self.period_end_block_exclusive,
+            addressA: self.address_a,
+            addressB: self.address_b,
+            settlementCountAToB: self.settlement_count_a_to_b,
+            settlementCountBToA: self.settlement_count_b_to_a,
+            volumeAToBRaw: self.volume_a_to_b_raw,
+            volumeBToARaw: self.volume_b_to_a_raw,
             penaltyBps: self.penalty_bps,
-            settlementCount: self.settlement_count,
-            qualifiedVolumeRaw: self.qualified_volume_raw,
-            blockRefs: self
-                .block_refs
-                .iter()
-                .map(|(number, block_hash)| SolBlockRef {
-                    number: *number,
-                    blockHash: *block_hash,
-                })
-                .collect(),
+            penalizedBuyers: self.penalized_buyers.clone(),
+            blockRefs: sol_block_refs(&self.block_refs),
         }
         .abi_encode()
     }
 }
 
-pub fn verify_cohort(input: &CohortInput) -> Result<CohortJournal, String> {
-    validate_configuration(input.chain_id, input.usdc, input.channels, input.deposits)?;
-    let claim = verify_claim(
-        &input.claim_leaf,
-        &input.claim_membership,
-        input.report_root,
-    )?;
-    let claim_type = string_field(&claim, "type")?;
-    let claim_type_code = match claim_type {
-        "P0_CLOSED_LOOP" => 1,
-        "P1_COORDINATED_CONTROL" => 2,
-        _ => return Err("cohort: wrong claim type".into()),
-    };
-    let seller = address_field(&claim, "seller")?;
-    let claim_id = b256_field(&claim, "claimId")?;
-    let dependency_root = b256_field(&claim, "dependencyRoot")?;
-    let approved_buyers = address_array(&claim, "approvedBuyers")?;
-    let approved_funders = address_array(&claim, "approvedFunders")?;
-    let (period_start, period_end_exclusive) = period_bounds(&claim)?;
-    if approved_buyers.is_empty() || approved_funders.is_empty() {
-        return Err("cohort: empty approved buyer or funder set".into());
+impl CoordinatedControlJournal {
+    pub fn abi_encode(&self) -> Vec<u8> {
+        SolCoordinatedControlJournal {
+            predicateVersion: self.predicate_version,
+            claimId: self.claim_id,
+            periodStartBlock: self.period_start_block,
+            periodEndBlockExclusive: self.period_end_block_exclusive,
+            seller: self.seller,
+            funderCohortHash: self.funder_cohort_hash,
+            funderCount: self.funder_count,
+            cohortHash: self.cohort_hash,
+            cohortCount: self.cohort_count,
+            qualifiedCohortVolumeRaw: self.qualified_cohort_volume_raw,
+            sellerPeriodVolumeRaw: self.seller_period_volume_raw,
+            penaltyBps: self.penalty_bps,
+            penalizedBuyers: self.penalized_buyers.clone(),
+            blockRefs: sol_block_refs(&self.block_refs),
+        }
+        .abi_encode()
     }
+}
 
+pub fn verify_closed_cycle(input: &ClosedCycleInput) -> Result<ClosedCycleJournal, String> {
+    validate_common(
+        input.chain_id,
+        input.seller,
+        input.funder,
+        &input.linked_buyers,
+    )?;
     let block_refs = authenticate_blocks(&input.blocks)?;
-    let resolver = Resolver {
+    let state = StateResolver::authenticate(&input.blocks, &input.state_proofs)?;
+    let resolver = ChainResolver {
         blocks: &input.blocks,
     };
-    let mut funding_block_by_buyer = BTreeMap::<Address, u64>::new();
-    let mut settlement_buyers = BTreeSet::new();
-    let mut used_chain_evidence = BTreeSet::new();
-    let mut used_dependencies = BTreeSet::new();
-    let mut qualified_volume_raw = 0u128;
-    let mut cohort_funder = None;
-    let mut direct_funder_closures = BTreeSet::new();
-    let mut direct_buyer_closures = BTreeSet::new();
-    let mut relay_path_funders = Vec::new();
-
-    for selected in &input.evidence {
-        let dependency_id = dependency_hash(&selected.dependency_leaf);
-        if !used_dependencies.insert(dependency_id) {
-            return Err("duplicate report dependency".into());
-        }
-        let dependency = verify_dependency(selected, dependency_root)?;
-        let evidence_type = string_field(&dependency, "evidenceType")?;
-        match (evidence_type, &selected.location) {
-            ("USDC_FUNDING", EvidenceLocation::Log(reference)) => {
-                ensure_unique(&mut used_chain_evidence, resolver.log_identity(*reference)?)?;
-                let buyer = address_field(&dependency, "buyer")?;
-                let funder = address_field(&dependency, "funder")?;
-                ensure_approved(&approved_buyers, buyer)?;
-                set_cohort_funder(&mut cohort_funder, &approved_funders, funder)?;
-                resolver.bind_log_dependency(&dependency, *reference)?;
-                let expected_value = decimal_u128_field(&dependency, "amountRaw")?;
-                let (from, to, value, block) = resolver.usdc_transfer(*reference, input.usdc)?;
-                if from != funder || to != buyer || value == 0 || value != expected_value {
-                    return Err("cohort: invalid direct USDC funding".into());
-                }
-                funding_block_by_buyer
-                    .entry(buyer)
-                    .and_modify(|current| *current = (*current).min(block))
-                    .or_insert(block);
-            }
-            (
-                "USDC_FUNDING",
-                EvidenceLocation::UsdcDeposit {
-                    transfer,
-                    deposited,
-                },
-            ) => {
-                ensure_unique(&mut used_chain_evidence, resolver.log_identity(*transfer)?)?;
-                ensure_unique(&mut used_chain_evidence, resolver.log_identity(*deposited)?)?;
-                let buyer = address_field(&dependency, "buyer")?;
-                let funder = address_field(&dependency, "funder")?;
-                ensure_approved(&approved_buyers, buyer)?;
-                set_cohort_funder(&mut cohort_funder, &approved_funders, funder)?;
-                resolver.bind_log_dependency(&dependency, *transfer)?;
-                let expected_value = decimal_u128_field(&dependency, "amountRaw")?;
-                if optional_string_field(&dependency, "fundingKind")?
-                    .is_some_and(|kind| kind != "protocol_deposit")
-                {
-                    return Err("cohort: deposit dependency has wrong funding kind".into());
-                }
-                let (from, to, value, block) = resolver.usdc_transfer(*transfer, input.usdc)?;
-                if from != funder || to != input.deposits || value == 0 || value != expected_value {
-                    return Err("cohort: invalid deposit transfer".into());
-                }
-                let (log, deposit_block) = resolver.receipt_log(*deposited)?;
-                if transfer.block != deposited.block
-                    || transfer.receipt != deposited.receipt
-                    || deposit_block != block
-                    || log.address != input.deposits
-                    || log.topics.len() != 2
-                    || log.topics[0] != loop_core::DEPOSITED_TOPIC
-                    || topic_address(&log.topics[1]) != buyer
-                    || log.data.len() != 32
-                    || u128::try_from(U256::from_be_slice(&log.data))
-                        .map_err(|_| "deposit value overflow")?
-                        != value
-                {
-                    return Err("cohort: invalid Deposited event".into());
-                }
-                funding_block_by_buyer
-                    .entry(buyer)
-                    .and_modify(|current| *current = (*current).min(block))
-                    .or_insert(block);
-            }
-            ("NATIVE_FUNDING", EvidenceLocation::NativeTransaction(reference)) => {
-                ensure_unique(
-                    &mut used_chain_evidence,
-                    resolver.transaction_identity(*reference)?,
-                )?;
-                let buyer = address_field(&dependency, "buyer")?;
-                let funder = address_field(&dependency, "funder")?;
-                ensure_approved(&approved_buyers, buyer)?;
-                set_cohort_funder(&mut cohort_funder, &approved_funders, funder)?;
-                resolver.bind_transaction_dependency(&dependency, *reference)?;
-                let expected_value = decimal_u256_field(&dependency, "amountWei")?;
-                let (from, to, value, block) = resolver.native_transaction(*reference)?;
-                if from != funder || to != buyer || value == U256::ZERO || value != expected_value {
-                    return Err("cohort: invalid native funding".into());
-                }
-                funding_block_by_buyer
-                    .entry(buyer)
-                    .and_modify(|current| *current = (*current).min(block))
-                    .or_insert(block);
-            }
-            ("SETTLEMENT", EvidenceLocation::Log(reference)) => {
-                ensure_unique(&mut used_chain_evidence, resolver.log_identity(*reference)?)?;
-                let buyer = address_field(&dependency, "buyer")?;
-                let expected_seller = address_field(&dependency, "seller")?;
-                let expected_amount = decimal_u128_field(&dependency, "amountRaw")?;
-                let expected_channel = b256_field(&dependency, "channelId")?;
-                ensure_approved(&approved_buyers, buyer)?;
-                let funding_block = *funding_block_by_buyer
-                    .get(&buyer)
-                    .ok_or("cohort: settlement buyer is not funded")?;
-                resolver.bind_log_dependency(&dependency, *reference)?;
-                let (channel, actual_buyer, actual_seller, amount, block) =
-                    resolver.settlement(*reference, input.channels)?;
-                ensure_positive_settlement(amount, "cohort")?;
-                if block < period_start || block >= period_end_exclusive {
-                    return Err("cohort: settlement outside approved period".into());
-                }
-                if channel != expected_channel
-                    || actual_buyer != buyer
-                    || actual_seller != seller
-                    || expected_seller != seller
-                    || amount != expected_amount
-                    || block <= funding_block
-                {
-                    return Err("cohort: invalid post-funding settlement".into());
-                }
-                settlement_buyers.insert(buyer);
-                qualified_volume_raw = qualified_volume_raw
-                    .checked_add(amount)
-                    .ok_or("cohort: volume overflow")?;
-            }
-            ("DIRECT_SELLER_FUNDER", EvidenceLocation::Log(reference)) => {
-                ensure_unique(&mut used_chain_evidence, resolver.log_identity(*reference)?)?;
-                let dependency_seller = address_field(&dependency, "seller")?;
-                let funder = address_field(&dependency, "funder")?;
-                ensure_approved(&approved_funders, funder)?;
-                resolver.bind_log_dependency(&dependency, *reference)?;
-                let (from, to, value, _) = resolver.usdc_transfer(*reference, input.usdc)?;
-                if dependency_seller != seller
-                    || from != address_field(&dependency, "from")?
-                    || to != address_field(&dependency, "to")?
-                    || value != decimal_u128_field(&dependency, "amountRaw")?
-                    || value == 0
-                    || !((from == seller && to == funder) || (from == funder && to == seller))
-                {
-                    return Err("cohort: invalid direct seller-funder closure".into());
-                }
-                direct_funder_closures.insert(funder);
-            }
-            ("DIRECT_SELLER_BUYER", EvidenceLocation::Log(reference)) => {
-                ensure_unique(&mut used_chain_evidence, resolver.log_identity(*reference)?)?;
-                let dependency_seller = address_field(&dependency, "seller")?;
-                let buyer = address_field(&dependency, "buyer")?;
-                ensure_approved(&approved_buyers, buyer)?;
-                resolver.bind_log_dependency(&dependency, *reference)?;
-                let (from, to, value, _) = resolver.usdc_transfer(*reference, input.usdc)?;
-                if dependency_seller != seller
-                    || from != address_field(&dependency, "from")?
-                    || to != address_field(&dependency, "to")?
-                    || value != decimal_u128_field(&dependency, "amountRaw")?
-                    || value == 0
-                    || !((from == seller && to == buyer) || (from == buyer && to == seller))
-                {
-                    return Err("cohort: invalid direct seller-buyer closure".into());
-                }
-                direct_buyer_closures.insert(buyer);
-            }
-            (
-                "RELAY_PATH",
-                EvidenceLocation::RelayPath {
-                    seller_payment,
-                    relay_forward,
-                    funder_receipt,
-                },
-            ) => {
-                for reference in [seller_payment, relay_forward, funder_receipt] {
-                    ensure_unique(&mut used_chain_evidence, resolver.log_identity(*reference)?)?;
-                }
-                let dependency_seller = address_field(&dependency, "seller")?;
-                let funder = address_field(&dependency, "funder")?;
-                ensure_approved(&approved_funders, funder)?;
-                if dependency_seller != seller {
-                    return Err("cohort: relay seller mismatch".into());
-                }
-                let relay_parts = [
-                    (value_field(&dependency, "sellerPayment")?, *seller_payment),
-                    (value_field(&dependency, "relayForward")?, *relay_forward),
-                    (value_field(&dependency, "funderReceipt")?, *funder_receipt),
-                ];
-                for (part, reference) in relay_parts {
-                    resolver.bind_log_dependency(part, reference)?;
-                    let (from, to, value, _) = resolver.usdc_transfer(reference, input.usdc)?;
-                    if from != address_field(part, "from")?
-                        || to != address_field(part, "to")?
-                        || value != decimal_u128_field(part, "amountRaw")?
-                    {
-                        return Err("cohort: relay dependency mismatch".into());
-                    }
-                }
-                if !resolver.relay_path(
-                    *seller_payment,
-                    *relay_forward,
-                    *funder_receipt,
-                    seller,
-                    funder,
-                    input.usdc,
-                )? {
-                    return Err("cohort: invalid relay path".into());
-                }
-                relay_path_funders.push(funder);
-            }
-            _ => {
-                return Err(format!(
-                    "cohort: evidence/location mismatch for {evidence_type}"
-                ))
-            }
-        }
-    }
-
-    let cohort_funder = cohort_funder.ok_or("cohort: no common funder proven")?;
-    if settlement_buyers.len() < MINIMUM_BUYERS {
-        return Err("cohort: fewer than three linked buyers".into());
-    }
+    let funding_times = verify_fundings(
+        input.funder,
+        &input.linked_buyers,
+        &input.fundings,
+        &resolver,
+        &state,
+    )?;
+    let (qualified_volume_raw, target_volumes, crossing_key) = verify_settlements(
+        input.seller,
+        &input.linked_buyers,
+        &funding_times,
+        &input.settlements,
+        &resolver,
+    )?;
     if qualified_volume_raw < MINIMUM_VOLUME_RAW {
-        return Err("cohort: qualified volume below 1,000 USDC".into());
+        return Err("closed cycle: qualified volume below 1,000 USDC".into());
     }
-    if claim_type_code == 1 {
-        let direct_funder = direct_funder_closures.contains(&cohort_funder);
-        let direct_buyer = direct_buyer_closures
-            .iter()
-            .any(|buyer| settlement_buyers.contains(buyer));
-        let relay_count = relay_path_funders
-            .iter()
-            .filter(|funder| **funder == cohort_funder)
-            .count();
-        if !direct_funder && !direct_buyer && relay_count < 3 {
-            return Err("cohort: P0 closure not proven for common funder cohort".into());
-        }
-    }
-
-    Ok(CohortJournal {
+    let (closure_kind, closure_path_count) = verify_closure(
+        input.seller,
+        input.funder,
+        &input.linked_buyers,
+        crossing_key.ok_or("closed cycle: threshold was not crossed")?,
+        &input.closure,
+        &resolver,
+    )?;
+    let penalized_buyers = qualifying_buyers(
+        &input.linked_buyers,
+        &target_volumes,
+        &input.buyer_counters,
+        &state,
+    )?;
+    let cohort_hash = cohort_hash(&input.linked_buyers);
+    Ok(ClosedCycleJournal {
         predicate_version: PREDICATE_VERSION,
-        claim_type: claim_type_code,
-        claim_id,
-        report_root: input.report_root,
-        seller,
-        penalty_bps: PENALTY_BPS,
-        linked_buyer_count: settlement_buyers.len() as u32,
+        claim_id: cohort_claim_id(
+            CLOSED_CYCLE_PROOF_TYPE,
+            input.seller,
+            input.funder,
+            cohort_hash,
+        ),
+        period_start_block: PERIOD_START_BLOCK,
+        period_end_block_exclusive: PERIOD_END_BLOCK_EXCLUSIVE,
+        seller: input.seller,
+        funder: input.funder,
+        cohort_hash,
+        cohort_count: input.linked_buyers.len() as u32,
         qualified_volume_raw,
+        closure_kind,
+        closure_path_count,
+        penalty_bps: PENALTY_BPS,
+        penalized_buyers,
         block_refs,
     })
 }
 
 pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<ReciprocalJournal, String> {
-    if input.chain_id != BASE_CHAIN_ID || input.channels != CHANNELS_ADDRESS {
-        return Err("reciprocal: unrecognized configuration".into());
+    validate_chain(input.chain_id)?;
+    if input.address_a == Address::ZERO
+        || input.address_b == Address::ZERO
+        || input.address_a >= input.address_b
+    {
+        return Err("reciprocal: pair must be nonzero and normalized".into());
     }
-    let claim = verify_claim(
-        &input.claim_leaf,
-        &input.claim_membership,
-        input.report_root,
-    )?;
-    if string_field(&claim, "type")? != "P0_RECIPROCAL" {
-        return Err("reciprocal: wrong claim type".into());
-    }
-    let seller_a = address_field(&claim, "walletA")?;
-    let seller_b = address_field(&claim, "walletB")?;
-    let claim_id = b256_field(&claim, "claimId")?;
-    let dependency_root = b256_field(&claim, "dependencyRoot")?;
-    let (period_start, period_end_exclusive) = period_bounds(&claim)?;
     let block_refs = authenticate_blocks(&input.blocks)?;
-    let resolver = Resolver {
+    let state = StateResolver::authenticate(&input.blocks, &input.state_proofs)?;
+    let resolver = ChainResolver {
         blocks: &input.blocks,
     };
-    let mut used_chain_evidence = BTreeSet::new();
-    let mut used_dependencies = BTreeSet::new();
-    let mut directions = 0u8;
-    let mut settlements = 0u32;
-    let mut qualified_volume_raw = 0u128;
-    for selected in &input.evidence {
-        let dependency_id = dependency_hash(&selected.dependency_leaf);
-        if !used_dependencies.insert(dependency_id) {
-            return Err("duplicate report dependency".into());
+    let mut used = BTreeSet::new();
+    let (mut count_ab, mut count_ba, mut volume_ab, mut volume_ba) = (0u32, 0u32, 0u128, 0u128);
+    for evidence in &input.settlements {
+        let key = resolver.log_key(evidence.settlement)?;
+        if !used.insert(key) {
+            return Err("reciprocal: duplicate settlement evidence".into());
         }
-        let dependency = verify_dependency(selected, dependency_root)?;
-        if string_field(&dependency, "evidenceType")? != "RECIPROCAL_SETTLEMENT" {
-            return Err("reciprocal: wrong evidence type".into());
+        let (_, buyer, seller, amount, block) = resolver.settlement(evidence.settlement)?;
+        ensure_period_block(block, "reciprocal settlement")?;
+        if amount == 0 {
+            return Err("reciprocal: zero settlement".into());
         }
-        let reference = match selected.location {
-            EvidenceLocation::Log(reference) => reference,
-            _ => return Err("reciprocal: settlement requires a log".into()),
-        };
-        ensure_unique(&mut used_chain_evidence, resolver.log_identity(reference)?)?;
-        resolver.bind_log_dependency(&dependency, reference)?;
-        let expected_buyer = address_field(&dependency, "buyer")?;
-        let expected_seller = address_field(&dependency, "seller")?;
-        let expected_amount = decimal_u128_field(&dependency, "amountRaw")?;
-        let expected_channel = b256_field(&dependency, "channelId")?;
-        let (channel, buyer, seller, amount, block) =
-            resolver.settlement(reference, input.channels)?;
-        ensure_positive_settlement(amount, "reciprocal")?;
-        if block < period_start || block >= period_end_exclusive {
-            return Err("reciprocal: settlement outside approved period".into());
-        }
-        if channel != expected_channel
-            || buyer != expected_buyer
-            || seller != expected_seller
-            || amount != expected_amount
-        {
-            return Err("reciprocal: dependency does not match settlement".into());
-        }
-        if buyer == seller_a && seller == seller_b {
-            directions |= 1;
-        } else if buyer == seller_b && seller == seller_a {
-            directions |= 2;
+        if buyer == input.address_a && seller == input.address_b {
+            count_ab = count_ab
+                .checked_add(1)
+                .ok_or("reciprocal: count overflow")?;
+            volume_ab = volume_ab
+                .checked_add(amount)
+                .ok_or("reciprocal: volume overflow")?;
+        } else if buyer == input.address_b && seller == input.address_a {
+            count_ba = count_ba
+                .checked_add(1)
+                .ok_or("reciprocal: count overflow")?;
+            volume_ba = volume_ba
+                .checked_add(amount)
+                .ok_or("reciprocal: volume overflow")?;
         } else {
-            return Err("reciprocal: settlement outside ordered pair".into());
+            return Err("reciprocal: settlement does not belong to exact ordered pair".into());
         }
-        settlements += 1;
-        qualified_volume_raw = qualified_volume_raw
-            .checked_add(amount)
-            .ok_or("reciprocal: volume overflow")?;
     }
-    if settlements < 100 || directions != 3 {
-        return Err("reciprocal: requires 100 bidirectional settlements".into());
+    if count_ab
+        .checked_add(count_ba)
+        .ok_or("reciprocal: count overflow")?
+        < MINIMUM_RECIPROCAL_SETTLEMENTS
+        || count_ab < MINIMUM_RECIPROCAL_DIRECTION_SETTLEMENTS
+        || count_ba < MINIMUM_RECIPROCAL_DIRECTION_SETTLEMENTS
+        || volume_ab < MINIMUM_RECIPROCAL_DIRECTION_VOLUME_RAW
+        || volume_ba < MINIMUM_RECIPROCAL_DIRECTION_VOLUME_RAW
+    {
+        return Err("reciprocal: directional threshold not satisfied".into());
     }
+    let buyers = vec![input.address_a, input.address_b];
+    let target_volumes =
+        BTreeMap::from([(input.address_a, volume_ab), (input.address_b, volume_ba)]);
+    let penalized_buyers =
+        qualifying_buyers(&buyers, &target_volumes, &input.buyer_counters, &state)?;
     Ok(ReciprocalJournal {
         predicate_version: PREDICATE_VERSION,
-        claim_id,
-        report_root: input.report_root,
-        seller_a,
-        seller_b,
+        claim_id: reciprocal_claim_id(input.address_a, input.address_b),
+        period_start_block: PERIOD_START_BLOCK,
+        period_end_block_exclusive: PERIOD_END_BLOCK_EXCLUSIVE,
+        address_a: input.address_a,
+        address_b: input.address_b,
+        settlement_count_a_to_b: count_ab,
+        settlement_count_b_to_a: count_ba,
+        volume_a_to_b_raw: volume_ab,
+        volume_b_to_a_raw: volume_ba,
         penalty_bps: PENALTY_BPS,
-        settlement_count: settlements,
-        qualified_volume_raw,
+        penalized_buyers,
         block_refs,
     })
 }
 
-fn validate_configuration(
-    chain_id: u64,
-    usdc: Address,
-    channels: Address,
-    deposits: Address,
-) -> Result<(), String> {
-    if chain_id != BASE_CHAIN_ID
-        || usdc != USDC_ADDRESS
-        || channels != CHANNELS_ADDRESS
-        || deposits != DEPOSITS_ADDRESS
+pub fn verify_coordinated_control(
+    input: &CoordinatedControlInput,
+) -> Result<CoordinatedControlJournal, String> {
+    validate_chain(input.chain_id)?;
+    if input.seller == Address::ZERO {
+        return Err("coordinated control: zero seller".into());
+    }
+    let linked_buyers = validate_funding_cohorts(&input.funding_cohorts)?;
+    let block_refs = authenticate_blocks(&input.blocks)?;
+    let state = StateResolver::authenticate(&input.blocks, &input.state_proofs)?;
+    let resolver = ChainResolver {
+        blocks: &input.blocks,
+    };
+    for cohort in &input.funding_cohorts {
+        verify_fundings(
+            cohort.funder,
+            &cohort.linked_buyers,
+            &cohort.fundings,
+            &resolver,
+            &state,
+        )?;
+    }
+    let linked = linked_buyers.iter().copied().collect::<BTreeSet<_>>();
+    let mut channel_ids = BTreeSet::new();
+    let mut target_volumes = BTreeMap::<Address, u128>::new();
+    let mut cohort_volume = 0u128;
+    for channel in &input.channels {
+        if !channel_ids.insert(channel.channel_id) {
+            return Err("coordinated control: duplicate channel".into());
+        }
+        if channel.seller != input.seller || !linked.contains(&channel.buyer) {
+            return Err("coordinated control: channel subject mismatch".into());
+        }
+        let base = channel_base_slot(channel.channel_id);
+        let start_word = state.read_expected(
+            channel.start_packed_amounts,
+            STATE_START_BLOCK,
+            CHANNELS_ADDRESS,
+            Some(CHANNELS_CODE_HASH),
+            add_slot(base, 2)?,
+        )?;
+        let end_buyer = state.read_expected(
+            channel.end_buyer,
+            STATE_END_BLOCK,
+            CHANNELS_ADDRESS,
+            Some(CHANNELS_CODE_HASH),
+            base,
+        )?;
+        let end_seller = state.read_expected(
+            channel.end_seller,
+            STATE_END_BLOCK,
+            CHANNELS_ADDRESS,
+            Some(CHANNELS_CODE_HASH),
+            add_slot(base, 1)?,
+        )?;
+        let end_word = state.read_expected(
+            channel.end_packed_amounts,
+            STATE_END_BLOCK,
+            CHANNELS_ADDRESS,
+            Some(CHANNELS_CODE_HASH),
+            add_slot(base, 2)?,
+        )?;
+        if word_address(end_buyer) != channel.buyer || word_address(end_seller) != channel.seller {
+            return Err("coordinated control: authenticated channel parties differ".into());
+        }
+        let delta = packed_settled(end_word)
+            .checked_sub(packed_settled(start_word))
+            .ok_or("coordinated control: channel underflow")?;
+        cohort_volume = cohort_volume
+            .checked_add(delta)
+            .ok_or("coordinated control: cohort overflow")?;
+        let total = target_volumes.entry(channel.buyer).or_default();
+        *total = total
+            .checked_add(delta)
+            .ok_or("coordinated control: buyer overflow")?;
+    }
+    if cohort_volume < MINIMUM_VOLUME_RAW {
+        return Err("coordinated control: cohort volume below 1,000 USDC".into());
+    }
+    let seller_period_volume = counter_total(
+        CounterKind::Seller,
+        input.seller,
+        &input.seller_counters,
+        &state,
+    )?;
+    if cohort_volume
+        .checked_mul(2)
+        .ok_or("coordinated control: ratio overflow")?
+        < seller_period_volume
     {
-        return Err("cohort: unrecognized configuration".into());
+        return Err("coordinated control: cohort is below 50 percent".into());
+    }
+    let penalized_buyers = qualifying_buyers(
+        &linked_buyers,
+        &target_volumes,
+        &input.buyer_counters,
+        &state,
+    )?;
+    let cohort_hash = cohort_hash(&linked_buyers);
+    let funder_cohort_hash = funder_cohort_hash(&input.funding_cohorts);
+    Ok(CoordinatedControlJournal {
+        predicate_version: PREDICATE_VERSION,
+        claim_id: coordinated_control_claim_id(input.seller, funder_cohort_hash, cohort_hash),
+        period_start_block: PERIOD_START_BLOCK,
+        period_end_block_exclusive: PERIOD_END_BLOCK_EXCLUSIVE,
+        seller: input.seller,
+        funder_cohort_hash,
+        funder_count: input.funding_cohorts.len() as u32,
+        cohort_hash,
+        cohort_count: linked_buyers.len() as u32,
+        qualified_cohort_volume_raw: cohort_volume,
+        seller_period_volume_raw: seller_period_volume,
+        penalty_bps: PENALTY_BPS,
+        penalized_buyers,
+        block_refs,
+    })
+}
+
+fn validate_chain(chain_id: u64) -> Result<(), String> {
+    if chain_id != BASE_CHAIN_ID {
+        return Err("unrecognized chain".into());
+    }
+    Ok(())
+}
+
+fn validate_common(
+    chain_id: u64,
+    seller: Address,
+    funder: Address,
+    buyers: &[Address],
+) -> Result<(), String> {
+    validate_chain(chain_id)?;
+    if seller == Address::ZERO || funder == Address::ZERO {
+        return Err("cohort: zero seller or funder".into());
+    }
+    validate_sorted_unique_addresses(buyers, MINIMUM_BUYERS, MAX_BUYERS, "linked buyers")
+}
+
+fn validate_funding_cohorts(cohorts: &[FunderCohort]) -> Result<Vec<Address>, String> {
+    if cohorts.is_empty() || cohorts.len() > MAX_FUNDERS {
+        return Err("funding cohorts: invalid length".into());
+    }
+    let mut previous_funder = None;
+    let mut buyers = BTreeSet::new();
+    for cohort in cohorts {
+        if cohort.funder == Address::ZERO
+            || previous_funder.is_some_and(|previous| previous >= cohort.funder)
+        {
+            return Err("funding cohorts: funders must be nonzero, sorted, and unique".into());
+        }
+        validate_sorted_unique_addresses(
+            &cohort.linked_buyers,
+            MINIMUM_BUYERS,
+            MAX_BUYERS,
+            "funder cohort buyers",
+        )?;
+        for buyer in &cohort.linked_buyers {
+            if !buyers.insert(*buyer) {
+                return Err("funding cohorts: buyer assigned to multiple funders".into());
+            }
+        }
+        previous_funder = Some(cohort.funder);
+    }
+    if buyers.len() < MINIMUM_BUYERS || buyers.len() > MAX_BUYERS {
+        return Err("funding cohorts: invalid total buyer count".into());
+    }
+    Ok(buyers.into_iter().collect())
+}
+
+fn validate_sorted_unique_addresses(
+    values: &[Address],
+    minimum: usize,
+    maximum: usize,
+    label: &str,
+) -> Result<(), String> {
+    if values.len() < minimum || values.len() > maximum {
+        return Err(format!("{label}: invalid length"));
+    }
+    let mut previous = None;
+    for value in values {
+        if *value == Address::ZERO || previous.is_some_and(|prior| prior >= *value) {
+            return Err(format!(
+                "{label}: values must be nonzero, sorted, and unique"
+            ));
+        }
+        previous = Some(*value);
     }
     Ok(())
 }
 
 fn authenticate_blocks(blocks: &[EnforcementBlock]) -> Result<Vec<(u64, B256)>, String> {
+    if blocks.is_empty() || blocks.len() > MAX_BLOCK_REFS {
+        return Err("invalid block evidence count".into());
+    }
     let mut numbers = BTreeSet::new();
-    let mut refs = Vec::new();
+    let mut refs = Vec::with_capacity(blocks.len());
     for block in blocks {
         if !numbers.insert(block.header.number) {
             return Err("duplicate block evidence".into());
@@ -608,7 +788,7 @@ fn authenticate_blocks(blocks: &[EnforcementBlock]) -> Result<Vec<(u64, B256)>, 
         }
         refs.push((block.header.number, block.header.hash_slow()));
     }
-    refs.sort_unstable_by_key(|(number, _)| *number);
+    refs.sort_unstable_by_key(|value| value.0);
     Ok(refs)
 }
 
@@ -616,531 +796,1063 @@ fn verify_transaction_inclusion(
     header: &Header,
     transaction: &TransactionProof,
 ) -> Result<(), String> {
-    let key = alloy_trie::Nibbles::unpack(trie_index_key(transaction.tx_index));
-    alloy_trie::proof::verify_proof(
+    verify_proof(
         header.transactions_root,
-        key,
+        Nibbles::unpack(trie_index_key(transaction.tx_index)),
         Some(transaction.value.to_vec()),
         transaction.proof.iter(),
     )
     .map_err(|error| format!("transaction inclusion: {error}"))
 }
 
-fn verify_claim(bytes: &[u8], proof: &MembershipProof, report_root: B256) -> Result<Value, String> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|error| format!("claim JSON: {error}"))?;
-    verify_membership(domain_hash(b"claim-leaf\0", bytes), proof, report_root)?;
-    Ok(value)
+struct StateResolver<'a> {
+    blocks: &'a [EnforcementBlock],
+    proofs: &'a [Eip1186AccountProof],
 }
 
-fn verify_dependency(selected: &SelectedEvidence, dependency_root: B256) -> Result<Value, String> {
-    let value: Value = serde_json::from_slice(&selected.dependency_leaf)
-        .map_err(|error| format!("dependency JSON: {error}"))?;
-    verify_membership(
-        domain_hash(b"dependency\0", &selected.dependency_leaf),
-        &selected.dependency_membership,
-        dependency_root,
-    )?;
-    Ok(value)
-}
-
-fn dependency_hash(bytes: &[u8]) -> B256 {
-    domain_hash(b"dependency\0", bytes)
-}
-
-pub fn verify_membership(
-    mut hash: B256,
-    proof: &MembershipProof,
-    expected_root: B256,
-) -> Result<(), String> {
-    for step in &proof.steps {
-        let mut hasher = Sha256::new();
-        hasher.update([1]);
-        if step.sibling_on_left {
-            hasher.update(step.sibling);
-            hasher.update(hash);
-        } else {
-            hasher.update(hash);
-            hasher.update(step.sibling);
+impl<'a> StateResolver<'a> {
+    fn authenticate(
+        blocks: &'a [EnforcementBlock],
+        proofs: &'a [Eip1186AccountProof],
+    ) -> Result<Self, String> {
+        let mut accounts = BTreeSet::new();
+        for proof in proofs {
+            let block = blocks
+                .get(proof.block)
+                .ok_or("state proof block out of range")?;
+            if !accounts.insert((block.header.number, proof.address)) {
+                return Err("duplicate account proof".into());
+            }
+            let expected_account = if proof.exists {
+                Some(alloy_rlp::encode(TrieAccount {
+                    nonce: proof.nonce,
+                    balance: proof.balance,
+                    storage_root: proof.storage_root,
+                    code_hash: proof.code_hash,
+                }))
+            } else {
+                if proof.nonce != 0
+                    || proof.balance != U256::ZERO
+                    || proof.storage_root != EMPTY_ROOT_HASH
+                    || proof.code_hash != KECCAK_EMPTY
+                    || !proof.storage_proofs.is_empty()
+                {
+                    return Err("malformed non-inclusion account proof".into());
+                }
+                None
+            };
+            verify_proof(
+                block.header.state_root,
+                Nibbles::unpack(keccak256(proof.address)),
+                expected_account,
+                proof.account_proof.iter(),
+            )
+            .map_err(|error| format!("account proof: {error}"))?;
+            let mut slots = BTreeSet::new();
+            for storage in &proof.storage_proofs {
+                if !slots.insert(storage.slot) {
+                    return Err("duplicate storage slot proof".into());
+                }
+                let expected = if storage.value == U256::ZERO {
+                    None
+                } else {
+                    Some(alloy_rlp::encode(storage.value))
+                };
+                verify_proof(
+                    proof.storage_root,
+                    Nibbles::unpack(keccak256(storage.slot)),
+                    expected,
+                    storage.proof.iter(),
+                )
+                .map_err(|error| format!("storage proof: {error}"))?;
+            }
         }
-        hash = B256::from_slice(&hasher.finalize());
+        Ok(Self { blocks, proofs })
     }
-    if hash != expected_root {
-        return Err("Merkle membership mismatch".into());
+
+    fn account(&self, index: usize) -> Result<&Eip1186AccountProof, String> {
+        self.proofs
+            .get(index)
+            .ok_or("account reference out of range".into())
     }
-    Ok(())
+
+    fn read_expected(
+        &self,
+        reference: StateValueRef,
+        block_number: u64,
+        address: Address,
+        code_hash: Option<B256>,
+        expected_slot: B256,
+    ) -> Result<U256, String> {
+        if reference.slot != expected_slot {
+            return Err("wrong storage slot".into());
+        }
+        let account = self.account(reference.account)?;
+        let block = self
+            .blocks
+            .get(account.block)
+            .ok_or("state proof block out of range")?;
+        if block.header.number != block_number || account.address != address {
+            return Err("state proof subject or boundary mismatch".into());
+        }
+        if !account.exists {
+            if reference.storage.is_some() || code_hash.is_some() {
+                return Err("required account does not exist".into());
+            }
+            return Ok(U256::ZERO);
+        }
+        if code_hash.is_some_and(|expected| account.code_hash != expected) {
+            return Err("wrong contract code hash".into());
+        }
+        let storage = account
+            .storage_proofs
+            .get(reference.storage.ok_or("missing storage proof reference")?)
+            .ok_or("storage proof reference out of range")?;
+        if storage.slot != reference.slot {
+            return Err("storage proof reference points to wrong slot".into());
+        }
+        Ok(storage.value)
+    }
 }
 
-fn domain_hash(domain: &[u8], value: &[u8]) -> B256 {
-    let mut hasher = Sha256::new();
-    hasher.update(domain);
-    hasher.update(value);
-    B256::from_slice(&hasher.finalize())
-}
-
-struct Resolver<'a> {
+struct ChainResolver<'a> {
     blocks: &'a [EnforcementBlock],
 }
 
-impl Resolver<'_> {
-    fn receipt_log(&self, reference: LogRef) -> Result<(loop_core::ParsedLog, u64), String> {
-        let block = self
-            .blocks
-            .get(reference.block)
-            .ok_or("block reference out of range")?;
-        let receipt = block
-            .receipts
-            .get(reference.receipt)
-            .ok_or("receipt reference out of range")?;
+impl ChainResolver<'_> {
+    fn block(&self, index: usize) -> Result<&EnforcementBlock, String> {
+        self.blocks
+            .get(index)
+            .ok_or("block reference out of range".into())
+    }
+
+    fn receipt(&self, reference: ReceiptRef) -> Result<(&ReceiptProof, &EnforcementBlock), String> {
+        let block = self.block(reference.block)?;
         Ok((
-            receipt_log(&receipt.value, reference.log)?,
-            block.header.number,
+            block
+                .receipts
+                .get(reference.receipt)
+                .ok_or("receipt reference out of range")?,
+            block,
         ))
     }
 
-    fn log_identity(&self, reference: LogRef) -> Result<(u8, u64, u64, usize), String> {
-        let block = self
-            .blocks
-            .get(reference.block)
-            .ok_or("block reference out of range")?;
-        let receipt = block
-            .receipts
-            .get(reference.receipt)
-            .ok_or("receipt reference out of range")?;
-        Ok((0, block.header.number, receipt.tx_index, reference.log))
-    }
-
-    fn transaction_identity(
-        &self,
-        reference: TransactionRef,
-    ) -> Result<(u8, u64, u64, usize), String> {
-        let block = self
-            .blocks
-            .get(reference.block)
-            .ok_or("block reference out of range")?;
-        let transaction = block
-            .transactions
-            .get(reference.transaction)
-            .ok_or("transaction reference out of range")?;
-        Ok((1, block.header.number, transaction.tx_index, 0))
-    }
-
-    fn transaction_for_log(
+    fn log(
         &self,
         reference: LogRef,
-    ) -> Result<(TransactionRef, &TransactionProof), String> {
-        let block = self
-            .blocks
-            .get(reference.block)
-            .ok_or("block reference out of range")?;
-        let receipt = block
-            .receipts
-            .get(reference.receipt)
-            .ok_or("receipt reference out of range")?;
+    ) -> Result<(loop_core::ParsedLog, &ReceiptProof, &EnforcementBlock), String> {
+        let (receipt, block) = self.receipt(ReceiptRef {
+            block: reference.block,
+            receipt: reference.receipt,
+        })?;
+        if !receipt_success(&receipt.value)? {
+            return Err("referenced receipt reverted".into());
+        }
+        Ok((receipt_log(&receipt.value, reference.log)?, receipt, block))
+    }
+
+    fn log_key(&self, reference: LogRef) -> Result<(u64, u64, usize), String> {
+        let (_, receipt, block) = self.log(reference)?;
+        Ok((block.header.number, receipt.tx_index, reference.log))
+    }
+
+    fn transaction(
+        &self,
+        reference: TransactionRef,
+    ) -> Result<(&TransactionProof, &EnforcementBlock), String> {
+        let block = self.block(reference.block)?;
+        Ok((
+            block
+                .transactions
+                .get(reference.transaction)
+                .ok_or("transaction reference out of range")?,
+            block,
+        ))
+    }
+
+    fn transaction_for_log(&self, reference: LogRef) -> Result<TransactionRef, String> {
+        let (_, receipt, block) = self.log(reference)?;
         let mut matches = block
             .transactions
             .iter()
             .enumerate()
             .filter(|(_, transaction)| transaction.tx_index == receipt.tx_index);
-        let (position, transaction) = matches
+        let (position, _) = matches
             .next()
             .ok_or("authenticated transaction missing for receipt")?;
         if matches.next().is_some() {
             return Err("duplicate authenticated transaction for receipt".into());
         }
-        Ok((
-            TransactionRef {
-                block: reference.block,
-                transaction: position,
-            },
-            transaction,
-        ))
+        Ok(TransactionRef {
+            block: reference.block,
+            transaction: position,
+        })
     }
 
-    fn bind_log_dependency(&self, dependency: &Value, reference: LogRef) -> Result<(), String> {
-        let (transaction_ref, _) = self.transaction_for_log(reference)?;
-        self.bind_transaction_dependency(dependency, transaction_ref)
-    }
-
-    fn bind_transaction_dependency(
+    fn decoded_transaction(
         &self,
-        dependency: &Value,
         reference: TransactionRef,
-    ) -> Result<(), String> {
-        let block = self
-            .blocks
-            .get(reference.block)
-            .ok_or("block reference out of range")?;
-        let transaction = block
-            .transactions
-            .get(reference.transaction)
-            .ok_or("transaction reference out of range")?;
-        if b256_field(dependency, "transactionHash")? != keccak256(transaction.value.as_ref()) {
-            return Err("dependency transaction hash mismatch".into());
+    ) -> Result<(TxEnvelope, Address, &EnforcementBlock), String> {
+        let (proof, block) = self.transaction(reference)?;
+        let mut bytes = proof.value.as_ref();
+        let envelope = TxEnvelope::decode_2718(&mut bytes)
+            .map_err(|error| format!("transaction decode: {error}"))?;
+        if !bytes.is_empty() {
+            return Err("transaction has trailing bytes".into());
         }
-        if optional_u64_field(dependency, "blockNumber")?
-            .is_some_and(|number| number != block.header.number)
-        {
-            return Err("dependency block number mismatch".into());
-        }
-        if optional_u64_field(dependency, "transactionIndex")?
-            .is_some_and(|index| index != transaction.tx_index)
-        {
-            return Err("dependency transaction index mismatch".into());
-        }
-        if optional_u64_field(dependency, "timestamp")?
-            .is_some_and(|timestamp| timestamp != block.header.timestamp)
-        {
-            return Err("dependency block timestamp mismatch".into());
-        }
-        Ok(())
+        let signer = envelope
+            .recover_signer()
+            .map_err(|_| "transaction signer recovery failed")?;
+        Ok((envelope, signer, block))
     }
 
-    fn usdc_transfer(
-        &self,
-        reference: LogRef,
-        usdc: Address,
-    ) -> Result<(Address, Address, u128, u64), String> {
-        let (log, block) = self.receipt_log(reference)?;
-        if log.address != usdc
+    fn usdc_transfer(&self, reference: LogRef) -> Result<(Address, Address, u128, u64), String> {
+        let (log, _, block) = self.log(reference)?;
+        if log.address != USDC_ADDRESS
             || log.topics.len() != 3
             || log.topics[0] != TRANSFER_TOPIC
             || log.data.len() != 32
         {
             return Err("not a USDC transfer".into());
         }
-        let value =
-            u128::try_from(U256::from_be_slice(&log.data)).map_err(|_| "USDC value overflow")?;
         Ok((
-            topic_address(&log.topics[1]),
-            topic_address(&log.topics[2]),
-            value,
-            block,
+            topic_address(log.topics[1]),
+            topic_address(log.topics[2]),
+            u128::try_from(U256::from_be_slice(&log.data)).map_err(|_| "USDC amount overflow")?,
+            block.header.number,
         ))
     }
 
-    fn settlement(
-        &self,
-        reference: LogRef,
-        channels: Address,
-    ) -> Result<(B256, Address, Address, u128, u64), String> {
-        let (log, block) = self.receipt_log(reference)?;
-        if log.address != channels
+    fn settlement(&self, reference: LogRef) -> Result<(B256, Address, Address, u128, u64), String> {
+        let (log, _, block) = self.log(reference)?;
+        if log.address != CHANNELS_ADDRESS
             || log.topics.len() != 4
             || log.topics[0] != CHANNEL_SETTLED_TOPIC
             || log.data.len() < 64
         {
             return Err("not a ChannelSettled event".into());
         }
-        let amount = u128::try_from(U256::from_be_slice(&log.data[32..64]))
-            .map_err(|_| "settlement value overflow")?;
         Ok((
             log.topics[1],
-            topic_address(&log.topics[2]),
-            topic_address(&log.topics[3]),
-            amount,
-            block,
+            topic_address(log.topics[2]),
+            topic_address(log.topics[3]),
+            u128::try_from(U256::from_be_slice(&log.data[32..64]))
+                .map_err(|_| "settlement amount overflow")?,
+            block.header.number,
         ))
     }
 
-    fn native_transaction(
-        &self,
-        reference: TransactionRef,
-    ) -> Result<(Address, Address, U256, u64), String> {
-        let block = self
-            .blocks
-            .get(reference.block)
-            .ok_or("block reference out of range")?;
-        let proof = block
-            .transactions
-            .get(reference.transaction)
-            .ok_or("transaction reference out of range")?;
-        let mut bytes = proof.value.as_ref();
-        let envelope = TxEnvelope::decode_2718(&mut bytes)
-            .map_err(|error| format!("transaction decode: {error}"))?;
-        if !bytes.is_empty()
-            || !(envelope.is_legacy() || envelope.is_eip2930() || envelope.is_eip1559())
+    fn protocol_deposit(&self, reference: LogRef) -> Result<(Address, u128, u64), String> {
+        let (log, _, block) = self.log(reference)?;
+        if log.address != DEPOSITS_ADDRESS
+            || log.topics.len() != 2
+            || log.topics[0] != DEPOSITED_TOPIC
+            || log.data.len() != 32
         {
-            return Err("unsupported transaction type".into());
+            return Err("not an Antseed Deposited event".into());
         }
-        let signer = envelope
-            .recover_signer()
-            .map_err(|_| "transaction signer recovery failed")?;
-        let to = envelope
-            .to()
-            .ok_or("native funding cannot create a contract")?;
-        Ok((signer, to, envelope.value(), block.header.number))
-    }
-
-    fn relay_path(
-        &self,
-        first: LogRef,
-        second: LogRef,
-        third: LogRef,
-        seller: Address,
-        funder: Address,
-        usdc: Address,
-    ) -> Result<bool, String> {
-        let (from1, to1, amount1, block1) = self.usdc_transfer(first, usdc)?;
-        let (from2, to2, amount2, block2) = self.usdc_transfer(second, usdc)?;
-        let (from3, to3, amount3, block3) = self.usdc_transfer(third, usdc)?;
-        let timestamp1 = self.blocks[first.block].header.timestamp;
-        let timestamp2 = self.blocks[second.block].header.timestamp;
-        let timestamp3 = self.blocks[third.block].header.timestamp;
-        if !valid_relay_amounts(amount1, amount2, amount3)
-            || from1 != seller
-            || to1 != from2
-            || to2 != from3
-            || to3 != funder
-            || block2 < block1
-            || block3 < block2
-            || timestamp2 < timestamp1
-            || timestamp3 < timestamp2
-            || timestamp2 - timestamp1 > 86_400
-            || timestamp3 - timestamp2 > 86_400
-        {
-            return Ok(false);
-        }
-        Ok(true)
+        Ok((
+            topic_address(log.topics[1]),
+            u128::try_from(U256::from_be_slice(&log.data))
+                .map_err(|_| "deposit amount overflow")?,
+            block.header.number,
+        ))
     }
 }
 
-fn ensure_positive_settlement(amount: u128, context: &str) -> Result<(), String> {
-    if amount == 0 {
-        return Err(format!("{context}: zero-value settlement"));
+fn verify_fundings(
+    funder: Address,
+    linked_buyers: &[Address],
+    fundings: &[FundingEvidence],
+    resolver: &ChainResolver<'_>,
+    state: &StateResolver<'_>,
+) -> Result<BTreeMap<Address, u64>, String> {
+    if fundings.len() != linked_buyers.len() {
+        return Err("funding evidence must cover each linked buyer exactly once".into());
+    }
+    let linked = linked_buyers.iter().copied().collect::<BTreeSet<_>>();
+    let mut times = BTreeMap::new();
+    for evidence in fundings {
+        if !linked.contains(&evidence.buyer) || times.contains_key(&evidence.buyer) {
+            return Err("duplicate or unrelated funding buyer".into());
+        }
+        let first_channel = state.read_expected(
+            evidence.first_channel_at,
+            STATE_END_BLOCK,
+            DEPOSITS_ADDRESS,
+            Some(DEPOSITS_CODE_HASH),
+            first_channel_slot(evidence.buyer)?,
+        )?;
+        let first_channel_at =
+            u64::try_from(first_channel).map_err(|_| "firstChannelAt overflow")?;
+        if first_channel_at == 0 {
+            return Err("linked buyer has no first channel".into());
+        }
+        let funding_time = match evidence.kind {
+            FundingKind::Usdc { transfer } => {
+                let (from, to, amount, _) = resolver.usdc_transfer(transfer)?;
+                if from != funder || to != evidence.buyer || amount < MINIMUM_USDC_FUNDING_RAW {
+                    return Err("invalid direct USDC funding".into());
+                }
+                authenticate_funder(
+                    funder,
+                    &evidence.authentication,
+                    resolver.transaction_for_log(transfer)?,
+                    resolver,
+                    state,
+                )?;
+                resolver.block(transfer.block)?.header.timestamp
+            }
+            FundingKind::ProtocolDeposit {
+                transfer,
+                deposited,
+            } => {
+                if transfer.block != deposited.block || transfer.receipt != deposited.receipt {
+                    return Err("protocol deposit logs must share one receipt".into());
+                }
+                let transfer_key = resolver.log_key(transfer)?;
+                let deposited_key = resolver.log_key(deposited)?;
+                let (from, to, transferred_amount, _) = resolver.usdc_transfer(transfer)?;
+                let (deposit_buyer, deposited_amount, _) = resolver.protocol_deposit(deposited)?;
+                if !valid_protocol_deposit(
+                    transfer_key,
+                    deposited_key,
+                    from,
+                    to,
+                    transferred_amount,
+                    deposit_buyer,
+                    deposited_amount,
+                    funder,
+                    evidence.buyer,
+                ) {
+                    return Err("invalid protocol-deposit funding".into());
+                }
+                authenticate_funder(
+                    funder,
+                    &evidence.authentication,
+                    resolver.transaction_for_log(transfer)?,
+                    resolver,
+                    state,
+                )?;
+                resolver.block(transfer.block)?.header.timestamp
+            }
+            FundingKind::Native {
+                transaction,
+                receipt,
+            } => {
+                validate_native_funder_authentication(&evidence.authentication)?;
+                let (receipt_proof, receipt_block) = resolver.receipt(receipt)?;
+                if !receipt_success(&receipt_proof.value)? {
+                    return Err("native funding receipt reverted".into());
+                }
+                let (envelope, _, transaction_block) = resolver.decoded_transaction(transaction)?;
+                let (transaction_proof, _) = resolver.transaction(transaction)?;
+                if receipt.block != transaction.block
+                    || receipt_proof.tx_index != transaction_proof.tx_index
+                    || receipt_block.header.number != transaction_block.header.number
+                    || envelope.to() != Some(evidence.buyer)
+                    || envelope.value() < U256::from(MINIMUM_NATIVE_FUNDING_WEI)
+                {
+                    return Err("invalid native funding".into());
+                }
+                authenticate_funder(
+                    funder,
+                    &evidence.authentication,
+                    transaction,
+                    resolver,
+                    state,
+                )?;
+                transaction_block.header.timestamp
+            }
+        };
+        if funding_time >= first_channel_at {
+            return Err("funding is not before buyer first channel".into());
+        }
+        times.insert(evidence.buyer, funding_time);
+    }
+    Ok(times)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn valid_protocol_deposit(
+    transfer_key: (u64, u64, usize),
+    deposited_key: (u64, u64, usize),
+    from: Address,
+    to: Address,
+    transferred_amount: u128,
+    deposit_buyer: Address,
+    deposited_amount: u128,
+    expected_funder: Address,
+    expected_buyer: Address,
+) -> bool {
+    transfer_key < deposited_key
+        && transfer_key.0 == deposited_key.0
+        && transfer_key.1 == deposited_key.1
+        && from == expected_funder
+        && to == DEPOSITS_ADDRESS
+        && deposit_buyer == expected_buyer
+        && transferred_amount == deposited_amount
+        && deposited_amount >= MINIMUM_USDC_FUNDING_RAW
+}
+
+fn validate_native_funder_authentication(
+    authentication: &FunderAuthentication,
+) -> Result<(), String> {
+    if matches!(
+        authentication,
+        FunderAuthentication::SupportedSmartAccount { .. }
+    ) {
+        return Err("native funding cannot be attributed to a smart-account transaction".into());
     }
     Ok(())
 }
 
-fn valid_relay_amounts(seller_amount: u128, forwarded_amount: u128, received_amount: u128) -> bool {
-    if seller_amount == 0
-        || forwarded_amount == 0
-        || received_amount == 0
-        || received_amount > forwarded_amount
+fn authenticate_funder(
+    funder: Address,
+    authentication: &FunderAuthentication,
+    transaction: TransactionRef,
+    resolver: &ChainResolver<'_>,
+    state: &StateResolver<'_>,
+) -> Result<(), String> {
+    let (envelope, signer, block) = resolver.decoded_transaction(transaction)?;
+    match authentication {
+        FunderAuthentication::Eoa { account } => {
+            require_account_at(
+                state.account(*account)?,
+                state.blocks,
+                block.header.number,
+                funder,
+                KECCAK_EMPTY,
+            )?;
+            if signer != funder {
+                return Err("EOA funding signer mismatch".into());
+            }
+        }
+        FunderAuthentication::Eip7702 {
+            account,
+            delegation_code,
+        } => {
+            if delegation_code.len() != 23 || delegation_code[..3] != [0xef, 0x01, 0x00] {
+                return Err("invalid EIP-7702 delegation code".into());
+            }
+            require_account_at(
+                state.account(*account)?,
+                state.blocks,
+                block.header.number,
+                funder,
+                keccak256(delegation_code),
+            )?;
+            if signer != funder {
+                return Err("EIP-7702 funding signer mismatch".into());
+            }
+        }
+        FunderAuthentication::SupportedSmartAccount {
+            proxy_account,
+            implementation_account,
+            implementation_slot,
+            plugin_count_slot,
+            owner_slot,
+            owner,
+        } => {
+            if funder != SUPPORTED_SMART_ACCOUNT_A && funder != SUPPORTED_SMART_ACCOUNT_B {
+                return Err("unsupported smart-account funder".into());
+            }
+            require_account_at(
+                state.account(*proxy_account)?,
+                state.blocks,
+                block.header.number,
+                funder,
+                SMART_ACCOUNT_PROXY_CODE_HASH,
+            )?;
+            require_account_at(
+                state.account(*implementation_account)?,
+                state.blocks,
+                block.header.number,
+                SMART_ACCOUNT_IMPLEMENTATION,
+                SMART_ACCOUNT_IMPLEMENTATION_CODE_HASH,
+            )?;
+            let implementation = state.read_expected(
+                *implementation_slot,
+                block.header.number,
+                funder,
+                Some(SMART_ACCOUNT_PROXY_CODE_HASH),
+                ERC1967_IMPLEMENTATION_SLOT,
+            )?;
+            let plugins = state.read_expected(
+                *plugin_count_slot,
+                block.header.number,
+                funder,
+                Some(SMART_ACCOUNT_PROXY_CODE_HASH),
+                SMART_ACCOUNT_PLUGIN_COUNT_SLOT,
+            )?;
+            let owner_word = state.read_expected(
+                *owner_slot,
+                block.header.number,
+                funder,
+                Some(SMART_ACCOUNT_PROXY_CODE_HASH),
+                SMART_ACCOUNT_OWNER_SLOT,
+            )?;
+            if word_address(implementation) != SMART_ACCOUNT_IMPLEMENTATION
+                || plugins != U256::ZERO
+                || *owner == Address::ZERO
+                || packed_smart_account_owner(owner_word) != *owner
+            {
+                return Err("smart-account implementation, owner, or plugins mismatch".into());
+            }
+            if envelope.to().is_none() {
+                return Err("smart-account funding transaction cannot create a contract".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn require_account_at(
+    proof: &Eip1186AccountProof,
+    blocks: &[EnforcementBlock],
+    block_number: u64,
+    address: Address,
+    code_hash: B256,
+) -> Result<(), String> {
+    let block = blocks
+        .get(proof.block)
+        .ok_or("account block reference out of range")?;
+    if block.header.number != block_number
+        || proof.address != address
+        || !proof.exists
+        || proof.code_hash != code_hash
+    {
+        return Err("account identity or code hash mismatch".into());
+    }
+    Ok(())
+}
+
+fn verify_settlements(
+    seller: Address,
+    linked_buyers: &[Address],
+    funding_times: &BTreeMap<Address, u64>,
+    settlements: &[SettlementEvidence],
+    resolver: &ChainResolver<'_>,
+) -> Result<(u128, BTreeMap<Address, u128>, Option<(u64, u64, usize)>), String> {
+    let linked = linked_buyers.iter().copied().collect::<BTreeSet<_>>();
+    let mut ordered = Vec::with_capacity(settlements.len());
+    let mut used = BTreeSet::new();
+    for evidence in settlements {
+        let key = resolver.log_key(evidence.settlement)?;
+        if !used.insert(key) {
+            return Err("duplicate settlement evidence".into());
+        }
+        ordered.push((key, evidence.settlement));
+    }
+    ordered.sort_unstable_by_key(|entry| entry.0);
+    let mut total = 0u128;
+    let mut target_volumes = BTreeMap::<Address, u128>::new();
+    let mut crossing = None;
+    for (key, reference) in ordered {
+        let (_, buyer, actual_seller, amount, block_number) = resolver.settlement(reference)?;
+        ensure_period_block(block_number, "cohort settlement")?;
+        if actual_seller != seller || !linked.contains(&buyer) || amount == 0 {
+            return Err("settlement subject or amount mismatch".into());
+        }
+        if resolver.block(reference.block)?.header.timestamp <= funding_times[&buyer] {
+            return Err("settlement is not after funding".into());
+        }
+        total = total
+            .checked_add(amount)
+            .ok_or("settlement volume overflow")?;
+        let buyer_total = target_volumes.entry(buyer).or_default();
+        *buyer_total = buyer_total
+            .checked_add(amount)
+            .ok_or("buyer settlement overflow")?;
+        if crossing.is_none() && total >= MINIMUM_VOLUME_RAW {
+            crossing = Some(key);
+        }
+    }
+    if target_volumes.len() < MINIMUM_BUYERS {
+        return Err("fewer than three funded buyers settled".into());
+    }
+    Ok((total, target_volumes, crossing))
+}
+
+fn verify_closure(
+    seller: Address,
+    funder: Address,
+    linked_buyers: &[Address],
+    crossing_key: (u64, u64, usize),
+    closure: &ClosureEvidence,
+    resolver: &ChainResolver<'_>,
+) -> Result<(u8, u32), String> {
+    match closure {
+        ClosureEvidence::Direct { transfer } => {
+            let key = resolver.log_key(*transfer)?;
+            let (from, to, amount, block) = resolver.usdc_transfer(*transfer)?;
+            ensure_period_block(block, "direct closure")?;
+            if key <= crossing_key
+                || from != seller
+                || (to != funder && linked_buyers.binary_search(&to).is_err())
+                || amount < MINIMUM_CLOSURE_RAW
+            {
+                return Err("invalid seller-outward direct closure".into());
+            }
+            Ok((DIRECT_CLOSURE, 1))
+        }
+        ClosureEvidence::Relay { paths } => {
+            if paths.len() < 3 {
+                return Err("relay closure requires at least three paths".into());
+            }
+            let mut used = BTreeSet::new();
+            for path in paths {
+                let refs = [path.seller_payment, path.relay_forward, path.final_receipt];
+                let mut keys = Vec::with_capacity(3);
+                for reference in refs {
+                    let key = resolver.log_key(reference)?;
+                    if !used.insert(key) {
+                        return Err("relay closure reuses a transfer".into());
+                    }
+                    keys.push(key);
+                }
+                if keys[0] <= crossing_key || keys[0] >= keys[1] || keys[1] >= keys[2] {
+                    return Err("relay path ordering mismatch".into());
+                }
+                let (from1, to1, amount1, block1) = resolver.usdc_transfer(path.seller_payment)?;
+                let (from2, to2, amount2, block2) = resolver.usdc_transfer(path.relay_forward)?;
+                let (from3, to3, amount3, block3) = resolver.usdc_transfer(path.final_receipt)?;
+                ensure_period_block(block1, "relay seller payment")?;
+                ensure_period_block(block2, "relay forward")?;
+                ensure_period_block(block3, "relay receipt")?;
+                let first_time = resolver.block(path.seller_payment.block)?.header.timestamp;
+                let final_time = resolver.block(path.final_receipt.block)?.header.timestamp;
+                if from1 != seller
+                    || to1 != from2
+                    || to2 != from3
+                    || to3 != funder
+                    || final_time < first_time
+                    || final_time - first_time > MAX_RELAY_SECONDS
+                    || !valid_relay_amounts(amount1, amount2, amount3)
+                {
+                    return Err("invalid relay closure path".into());
+                }
+            }
+            Ok((RELAY_CLOSURE, paths.len() as u32))
+        }
+    }
+}
+
+fn valid_relay_amounts(seller_amount: u128, forwarded: u128, received: u128) -> bool {
+    if seller_amount < MINIMUM_CLOSURE_RAW
+        || forwarded == 0
+        || received == 0
+        || received > seller_amount
+        || received > forwarded
     {
         return false;
     }
-    let amount_delta = seller_amount.abs_diff(forwarded_amount);
-    let retained = forwarded_amount - received_amount;
-    amount_delta <= 1_000
-        && (retained <= 1_000_000
-            || received_amount.saturating_mul(10_000) >= forwarded_amount.saturating_mul(9_800))
+    seller_amount.abs_diff(forwarded) <= MAX_RELAY_EARLY_DELTA_RAW
+        && (seller_amount - received <= MAX_RELAY_LOSS_RAW
+            || received.saturating_mul(10_000)
+                >= seller_amount.saturating_mul(MIN_RELAY_RETAINED_BPS))
 }
 
-fn ensure_unique(
-    set: &mut BTreeSet<(u8, u64, u64, usize)>,
-    identity: (u8, u64, u64, usize),
-) -> Result<(), String> {
-    if !set.insert(identity) {
-        return Err("duplicate authenticated evidence".into());
+fn qualifying_buyers(
+    buyers: &[Address],
+    target_volumes: &BTreeMap<Address, u128>,
+    counters: &[CounterDelta],
+    state: &StateResolver<'_>,
+) -> Result<Vec<Address>, String> {
+    let mut result = Vec::new();
+    for buyer in buyers {
+        let target = target_volumes.get(buyer).copied().unwrap_or(0);
+        let total = counter_total(CounterKind::Buyer, *buyer, counters, state)?;
+        if total == 0 {
+            if target != 0 {
+                return Err("buyer counter is zero despite authenticated target volume".into());
+            }
+            continue;
+        }
+        if target > total {
+            return Err("target seller volume exceeds complete buyer volume".into());
+        }
+        if buyer_share_qualifies(target, total)? {
+            result.push(*buyer);
+        }
     }
-    Ok(())
+    Ok(result)
 }
 
-fn ensure_approved(approved: &[Address], buyer: Address) -> Result<(), String> {
-    if !approved.contains(&buyer) {
-        return Err("buyer is not approved by report claim".into());
-    }
-    Ok(())
+fn buyer_share_qualifies(target: u128, total: u128) -> Result<bool, String> {
+    Ok(target.checked_mul(100).ok_or("buyer share overflow")?
+        >= total.checked_mul(99).ok_or("buyer share overflow")?)
 }
 
-fn set_cohort_funder(
-    cohort_funder: &mut Option<Address>,
-    approved_funders: &[Address],
-    funder: Address,
-) -> Result<(), String> {
-    ensure_approved(approved_funders, funder)
-        .map_err(|_| "cohort: funder is not approved by report claim")?;
-    if cohort_funder.is_some_and(|expected| expected != funder) {
-        return Err("cohort: buyers do not share one approved funder".into());
-    }
-    *cohort_funder = Some(funder);
-    Ok(())
-}
-
-fn period_bounds(claim: &Value) -> Result<(u64, u64), String> {
-    let period = value_field(claim, "period")?;
-    let start = u64_field(period, "startBlock")?;
-    let end_exclusive = u64_field(period, "endBlockExclusive")?;
-    if start >= end_exclusive {
-        return Err("invalid claim period".into());
-    }
-    Ok((start, end_exclusive))
-}
-
-fn value_field<'a>(value: &'a Value, field: &str) -> Result<&'a Value, String> {
-    value
-        .get(field)
-        .ok_or_else(|| format!("missing value field {field}"))
-}
-
-fn u64_field(value: &Value, field: &str) -> Result<u64, String> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("missing u64 field {field}"))
-}
-
-fn optional_u64_field(value: &Value, field: &str) -> Result<Option<u64>, String> {
-    match value.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_u64()
-            .map(Some)
-            .ok_or_else(|| format!("invalid optional u64 field {field}")),
-    }
-}
-
-fn optional_string_field<'a>(value: &'a Value, field: &str) -> Result<Option<&'a str>, String> {
-    match value.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_str()
-            .map(Some)
-            .ok_or_else(|| format!("invalid optional string field {field}")),
-    }
-}
-
-fn decimal_u128_field(value: &Value, field: &str) -> Result<u128, String> {
-    string_field(value, field)?
-        .parse()
-        .map_err(|_| format!("invalid decimal u128 field {field}"))
-}
-
-fn decimal_u256_field(value: &Value, field: &str) -> Result<U256, String> {
-    U256::from_str_radix(string_field(value, field)?, 10)
-        .map_err(|_| format!("invalid decimal U256 field {field}"))
-}
-
-fn string_field<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("missing string field {field}"))
-}
-
-fn address_field(value: &Value, field: &str) -> Result<Address, String> {
-    string_field(value, field)?
-        .parse()
-        .map_err(|_| format!("invalid address field {field}"))
-}
-
-fn b256_field(value: &Value, field: &str) -> Result<B256, String> {
-    string_field(value, field)?
-        .parse()
-        .map_err(|_| format!("invalid bytes32 field {field}"))
-}
-
-fn address_array(value: &Value, field: &str) -> Result<Vec<Address>, String> {
-    value
-        .get(field)
-        .and_then(Value::as_array)
-        .ok_or_else(|| format!("missing address array {field}"))?
+fn counter_total(
+    kind: CounterKind,
+    subject: Address,
+    counters: &[CounterDelta],
+    state: &StateResolver<'_>,
+) -> Result<u128, String> {
+    let selected = counters
         .iter()
-        .map(|entry| {
-            entry
-                .as_str()
-                .ok_or_else(|| format!("invalid address in {field}"))?
-                .parse()
-                .map_err(|_| format!("invalid address in {field}"))
-        })
-        .collect()
+        .filter(|counter| counter.kind == kind && counter.subject == subject)
+        .collect::<Vec<_>>();
+    if selected.len() != 2 * (MAX_EMISSIONS_EPOCH as usize + 1) {
+        return Err("counter evidence does not cover both contracts and epochs 0-18".into());
+    }
+    let mut identities = BTreeSet::new();
+    let mut total = 0u128;
+    for counter in selected {
+        if counter.epoch > MAX_EMISSIONS_EPOCH
+            || !identities.insert((counter.contract, counter.epoch))
+            || (counter.contract != OLD_EMISSIONS_ADDRESS
+                && counter.contract != NEW_EMISSIONS_ADDRESS)
+        {
+            return Err("duplicate or unsupported counter evidence".into());
+        }
+        let slot = counter_slot(kind, subject, counter.epoch, counter.contract)?;
+        let code_hash = if counter.contract == OLD_EMISSIONS_ADDRESS {
+            OLD_EMISSIONS_CODE_HASH
+        } else {
+            NEW_EMISSIONS_CODE_HASH
+        };
+        let start_account = state.account(counter.start.account)?;
+        let start_code_hash = if start_account.exists {
+            Some(code_hash)
+        } else {
+            None
+        };
+        if counter.contract == OLD_EMISSIONS_ADDRESS && start_code_hash.is_none() {
+            return Err("old emissions contract missing at start boundary".into());
+        }
+        let start = state.read_expected(
+            counter.start,
+            STATE_START_BLOCK,
+            counter.contract,
+            start_code_hash,
+            slot,
+        )?;
+        let end = state.read_expected(
+            counter.end,
+            STATE_END_BLOCK,
+            counter.contract,
+            Some(code_hash),
+            slot,
+        )?;
+        let delta = u128::try_from(end.checked_sub(start).ok_or("counter underflow")?)
+            .map_err(|_| "counter delta exceeds uint128")?;
+        total = total
+            .checked_add(delta)
+            .ok_or("counter total exceeds uint128")?;
+    }
+    Ok(total)
 }
 
-fn topic_address(topic: &B256) -> Address {
+fn ensure_period_block(block: u64, label: &str) -> Result<(), String> {
+    if !(PERIOD_START_BLOCK..PERIOD_END_BLOCK_EXCLUSIVE).contains(&block) {
+        return Err(format!("{label} is outside fixed period"));
+    }
+    Ok(())
+}
+
+pub fn cohort_hash(buyers: &[Address]) -> B256 {
+    keccak256(buyers.to_vec().abi_encode())
+}
+
+pub fn funder_cohort_hash(cohorts: &[FunderCohort]) -> B256 {
+    keccak256(
+        cohorts
+            .iter()
+            .map(|cohort| SolFunderCohort {
+                funder: cohort.funder,
+                buyers: cohort.linked_buyers.clone(),
+            })
+            .collect::<Vec<_>>()
+            .abi_encode(),
+    )
+}
+
+pub fn cohort_claim_id(
+    proof_type: u8,
+    seller: Address,
+    funder: Address,
+    cohort_hash: B256,
+) -> B256 {
+    keccak256(
+        SolCohortClaimId {
+            chainId: U256::from(BASE_CHAIN_ID),
+            proofType: proof_type,
+            periodStartBlock: PERIOD_START_BLOCK,
+            periodEndBlockExclusive: PERIOD_END_BLOCK_EXCLUSIVE,
+            seller,
+            funder,
+            cohortHash: cohort_hash,
+        }
+        .abi_encode(),
+    )
+}
+
+pub fn reciprocal_claim_id(address_a: Address, address_b: Address) -> B256 {
+    keccak256(
+        SolReciprocalClaimId {
+            chainId: U256::from(BASE_CHAIN_ID),
+            proofType: RECIPROCAL_PROOF_TYPE,
+            periodStartBlock: PERIOD_START_BLOCK,
+            periodEndBlockExclusive: PERIOD_END_BLOCK_EXCLUSIVE,
+            addressA: address_a,
+            addressB: address_b,
+        }
+        .abi_encode(),
+    )
+}
+
+pub fn coordinated_control_claim_id(
+    seller: Address,
+    funder_cohort_hash: B256,
+    cohort_hash: B256,
+) -> B256 {
+    keccak256(
+        SolCoordinatedControlClaimId {
+            chainId: U256::from(BASE_CHAIN_ID),
+            proofType: COORDINATED_CONTROL_PROOF_TYPE,
+            periodStartBlock: PERIOD_START_BLOCK,
+            periodEndBlockExclusive: PERIOD_END_BLOCK_EXCLUSIVE,
+            seller,
+            funderCohortHash: funder_cohort_hash,
+            cohortHash: cohort_hash,
+        }
+        .abi_encode(),
+    )
+}
+
+pub fn first_channel_slot(buyer: Address) -> Result<B256, String> {
+    add_slot(
+        keccak256((buyer, U256::from(DEPOSITS_BUYERS_SLOT)).abi_encode()),
+        3,
+    )
+}
+
+pub fn channel_base_slot(channel_id: B256) -> B256 {
+    keccak256((channel_id, U256::from(CHANNELS_CHANNELS_SLOT)).abi_encode())
+}
+
+pub fn counter_slot(
+    kind: CounterKind,
+    subject: Address,
+    epoch: u64,
+    contract: Address,
+) -> Result<B256, String> {
+    let mapping_slot = match (contract, kind) {
+        (OLD_EMISSIONS_ADDRESS, CounterKind::Seller) => OLD_EMISSIONS_SELLER_POINTS_SLOT,
+        (OLD_EMISSIONS_ADDRESS, CounterKind::Buyer) => OLD_EMISSIONS_BUYER_POINTS_SLOT,
+        (NEW_EMISSIONS_ADDRESS, CounterKind::Seller) => NEW_EMISSIONS_SELLER_POINTS_SLOT,
+        (NEW_EMISSIONS_ADDRESS, CounterKind::Buyer) => NEW_EMISSIONS_BUYER_POINTS_SLOT,
+        _ => return Err("unsupported emissions contract".into()),
+    };
+    let outer = keccak256((subject, U256::from(mapping_slot)).abi_encode());
+    Ok(keccak256((U256::from(epoch), outer).abi_encode()))
+}
+
+fn add_slot(slot: B256, offset: u64) -> Result<B256, String> {
+    let value = U256::from_be_slice(slot.as_slice())
+        .checked_add(U256::from(offset))
+        .ok_or("storage slot overflow")?;
+    Ok(B256::from(value.to_be_bytes::<32>()))
+}
+
+fn packed_settled(word: U256) -> u128 {
+    u128::try_from(word >> 128).unwrap()
+}
+fn word_address(word: U256) -> Address {
+    Address::from_slice(&word.to_be_bytes::<32>()[12..])
+}
+fn packed_smart_account_owner(word: U256) -> Address {
+    word_address(word >> 16)
+}
+fn topic_address(topic: B256) -> Address {
     Address::from_slice(&topic.as_slice()[12..])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
-    fn verifies_ordered_sha256_merkle_membership() {
-        let left = domain_hash(b"dependency\0", br#"{"id":1}"#);
-        let right = domain_hash(b"dependency\0", br#"{"id":2}"#);
-        let mut hasher = Sha256::new();
-        hasher.update([1]);
-        hasher.update(left);
-        hasher.update(right);
-        let root = B256::from_slice(&hasher.finalize());
-        let proof = MembershipProof {
-            steps: vec![MerkleStep {
-                sibling: right,
-                sibling_on_left: false,
-            }],
-        };
-        assert!(verify_membership(left, &proof, root).is_ok());
-        assert!(verify_membership(right, &proof, root).is_err());
+    fn relay_boundaries_are_exact() {
+        assert!(valid_relay_amounts(1_000_000, 999_000, 999_000));
+        assert!(!valid_relay_amounts(1_000_000, 998_999, 998_999));
+        assert!(valid_relay_amounts(50_000_000, 50_001_000, 49_000_000));
+        assert!(!valid_relay_amounts(50_000_000, 50_001_001, 49_000_000));
+        assert!(valid_relay_amounts(100_000_000, 100_000_000, 98_000_000));
+        assert!(!valid_relay_amounts(100_000_000, 100_000_000, 97_999_999));
     }
 
     #[test]
-    fn rejects_unapproved_and_mixed_cohort_funders() {
-        let approved = [address!("0000000000000000000000000000000000000001")];
-        let mut cohort_funder = None;
-        assert!(set_cohort_funder(&mut cohort_funder, &approved, approved[0]).is_ok());
-        assert_eq!(cohort_funder, Some(approved[0]));
-        assert!(set_cohort_funder(
-            &mut cohort_funder,
-            &[
-                approved[0],
-                address!("0000000000000000000000000000000000000002")
-            ],
-            address!("0000000000000000000000000000000000000002"),
-        )
-        .is_err());
-        assert!(set_cohort_funder(
-            &mut None,
-            &approved,
-            address!("0000000000000000000000000000000000000003"),
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn rejects_zero_value_settlements() {
-        assert!(ensure_positive_settlement(0, "cohort").is_err());
-        assert!(ensure_positive_settlement(1, "cohort").is_ok());
-    }
-
-    #[test]
-    fn rejects_zero_or_amplifying_relay_paths() {
-        assert!(!valid_relay_amounts(0, 1, 1));
-        assert!(!valid_relay_amounts(1, 1, 2));
-        assert!(valid_relay_amounts(1_000_000, 1_000_000, 990_000));
-    }
-
-    #[test]
-    fn rejects_dependency_transaction_hash_mismatch() {
-        let transaction = TransactionProof {
-            tx_index: 0,
-            value: Bytes::from(vec![1, 2, 3]),
-            proof: Vec::new(),
-        };
-        let blocks = [EnforcementBlock {
-            header: Header::default(),
-            receipts: Vec::new(),
-            transactions: vec![transaction],
-        }];
-        let resolver = Resolver { blocks: &blocks };
-        let dependency = json!({
-            "transactionHash": B256::ZERO.to_string(),
-            "blockNumber": null,
-            "transactionIndex": null,
-            "timestamp": null,
-        });
-        assert_eq!(
-            resolver
-                .bind_transaction_dependency(
-                    &dependency,
-                    TransactionRef {
-                        block: 0,
-                        transaction: 0,
-                    },
-                )
-                .unwrap_err(),
-            "dependency transaction hash mismatch"
+    fn claim_ids_bind_predicate_and_order() {
+        let a = address!("0000000000000000000000000000000000000001");
+        let b = address!("0000000000000000000000000000000000000002");
+        let hash = cohort_hash(&[a, b]);
+        assert_ne!(hash, cohort_hash(&[b, a]));
+        assert_ne!(
+            cohort_claim_id(CLOSED_CYCLE_PROOF_TYPE, a, b, hash),
+            cohort_claim_id(COORDINATED_CONTROL_PROOF_TYPE, a, b, hash)
         );
+        assert_ne!(reciprocal_claim_id(a, b), reciprocal_claim_id(b, a));
+    }
+
+    #[test]
+    fn storage_slots_match_foundry_layout_rules() {
+        let buyer = address!("0000000000000000000000000000000000000001");
+        let base = keccak256((buyer, U256::from(DEPOSITS_BUYERS_SLOT)).abi_encode());
+        assert_eq!(
+            first_channel_slot(buyer).unwrap(),
+            add_slot(base, 3).unwrap()
+        );
+        let expected = |mapping_slot| {
+            let outer = keccak256((buyer, U256::from(mapping_slot)).abi_encode());
+            keccak256((U256::ZERO, outer).abi_encode())
+        };
+        assert_eq!(
+            counter_slot(CounterKind::Seller, buyer, 0, OLD_EMISSIONS_ADDRESS).unwrap(),
+            expected(10)
+        );
+        assert_eq!(
+            counter_slot(CounterKind::Buyer, buyer, 0, OLD_EMISSIONS_ADDRESS).unwrap(),
+            expected(11)
+        );
+        assert_eq!(
+            counter_slot(CounterKind::Seller, buyer, 0, NEW_EMISSIONS_ADDRESS).unwrap(),
+            expected(14)
+        );
+        assert_eq!(
+            counter_slot(CounterKind::Buyer, buyer, 0, NEW_EMISSIONS_ADDRESS).unwrap(),
+            expected(15)
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_emissions_layout() {
+        assert!(counter_slot(
+            CounterKind::Seller,
+            address!("0000000000000000000000000000000000000001"),
+            0,
+            Address::ZERO,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn rejects_smart_account_native_funding_attribution() {
+        let reference = StateValueRef {
+            account: 0,
+            slot: B256::ZERO,
+            storage: None,
+        };
+        let authentication = FunderAuthentication::SupportedSmartAccount {
+            proxy_account: 0,
+            implementation_account: 0,
+            implementation_slot: reference,
+            plugin_count_slot: reference,
+            owner_slot: reference,
+            owner: address!("0000000000000000000000000000000000000001"),
+        };
+        assert!(validate_native_funder_authentication(&authentication).is_err());
+        assert!(
+            validate_native_funder_authentication(&FunderAuthentication::Eoa { account: 0 })
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn exact_ratio_boundaries_do_not_round() {
+        assert!(1_000_000_000u128 * 2 >= 2_000_000_000u128);
+        assert!(999_999_999u128 * 2 < 2_000_000_000u128);
+        assert!(99u128 * 100 >= 100u128 * 99);
+        assert!(98u128 * 100 < 100u128 * 99);
+        assert!(buyer_share_qualifies(99, 100).unwrap());
+        assert!(!buyer_share_qualifies(98, 100).unwrap());
+        assert!(buyer_share_qualifies(99_000_000, 100_000_000).unwrap());
+        assert!(!buyer_share_qualifies(98_999_999, 100_000_000).unwrap());
+    }
+
+    #[test]
+    fn multi_funder_cohorts_each_require_three_buyers() {
+        let funder_a = address!("0000000000000000000000000000000000000010");
+        let funder_b = address!("0000000000000000000000000000000000000020");
+        let buyers = [
+            address!("0000000000000000000000000000000000000001"),
+            address!("0000000000000000000000000000000000000002"),
+            address!("0000000000000000000000000000000000000003"),
+            address!("0000000000000000000000000000000000000004"),
+            address!("0000000000000000000000000000000000000005"),
+        ];
+        let cohorts = vec![
+            FunderCohort {
+                funder: funder_a,
+                linked_buyers: buyers[..3].to_vec(),
+                fundings: Vec::new(),
+            },
+            FunderCohort {
+                funder: funder_b,
+                linked_buyers: buyers[3..].to_vec(),
+                fundings: Vec::new(),
+            },
+        ];
+        assert!(validate_funding_cohorts(&cohorts).is_err());
+    }
+
+    #[test]
+    fn protocol_deposit_requires_exact_same_receipt_flow() {
+        let funder = address!("0000000000000000000000000000000000000010");
+        let buyer = address!("0000000000000000000000000000000000000001");
+        let valid = |transfer_key, deposited_key, amount| {
+            valid_protocol_deposit(
+                transfer_key,
+                deposited_key,
+                funder,
+                DEPOSITS_ADDRESS,
+                amount,
+                buyer,
+                amount,
+                funder,
+                buyer,
+            )
+        };
+        assert!(valid((1, 2, 3), (1, 2, 4), MINIMUM_USDC_FUNDING_RAW));
+        assert!(!valid((1, 2, 4), (1, 2, 3), MINIMUM_USDC_FUNDING_RAW));
+        assert!(!valid((1, 2, 3), (1, 3, 4), MINIMUM_USDC_FUNDING_RAW));
+        assert!(!valid((1, 2, 3), (1, 2, 4), MINIMUM_USDC_FUNDING_RAW - 1));
+        assert_eq!(keccak256("Deposited(address,uint256)"), DEPOSITED_TOPIC);
+    }
+
+    #[test]
+    fn rejects_duplicate_and_malformed_account_proofs() {
+        let address = address!("0000000000000000000000000000000000000001");
+        let block = EnforcementBlock {
+            header: Header {
+                number: STATE_START_BLOCK,
+                state_root: EMPTY_ROOT_HASH,
+                ..Default::default()
+            },
+            receipts: Vec::new(),
+            transactions: Vec::new(),
+        };
+        let missing = Eip1186AccountProof {
+            block: 0,
+            address,
+            exists: false,
+            nonce: 0,
+            balance: U256::ZERO,
+            storage_root: EMPTY_ROOT_HASH,
+            code_hash: KECCAK_EMPTY,
+            account_proof: Vec::new(),
+            storage_proofs: Vec::new(),
+        };
+        assert!(
+            StateResolver::authenticate(&[block.clone()], &[missing.clone(), missing.clone()])
+                .is_err()
+        );
+
+        let mut malformed = missing;
+        malformed.exists = true;
+        malformed.code_hash = DEPOSITS_CODE_HASH;
+        assert!(StateResolver::authenticate(&[block], &[malformed]).is_err());
     }
 }

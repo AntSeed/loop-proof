@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["core", "enforcement-core", "host", "methods", "cohort-methods", "reciprocal-methods"]
+members = [
+  "core",
+  "enforcement-core",
+  "host",
+  "methods",
+  "closed-cycle-methods",
+  "reciprocal-methods",
+  "coordinated-control-methods",
+]
 
 [workspace.dependencies]
 loop-core = { path = "core" }
@@ -11,7 +19,8 @@ alloy-consensus = { version = "=1.1.0", default-features = false, features = ["s
 alloy-eips = { version = "=1.1.0", default-features = false }
 alloy-network = { version = "=1.1.0" }
 alloy-rlp = { version = "0.3", default-features = false }
-alloy-trie = { version = "0.9", default-features = false }
+alloy-trie = { version = "0.9", default-features = false, features = ["ethereum"] }
+alloy-tx-macros = { version = "=1.1.0" }
 op-alloy-consensus = { version = "=0.18.0", features = ["alloy-compat"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
