@@ -1193,13 +1193,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "coordinated-control-methods"
-version = "0.1.0"
-dependencies = [
- "risc0-build",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1726,10 +1719,8 @@ dependencies = [
  "alloy-consensus",
  "alloy-eips",
  "alloy-primitives",
- "alloy-rlp",
  "alloy-sol-types",
  "alloy-trie",
- "alloy-tx-macros",
  "loop-core",
  "serde",
 ]
@@ -2648,7 +2639,6 @@ dependencies = [
  "alloy-trie",
  "anyhow",
  "closed-cycle-methods",
- "coordinated-control-methods",
  "dotenvy",
  "enforcement-core",
  "loop-core",

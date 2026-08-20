@@ -9,7 +9,5 @@ alloy-primitives = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-eips = { workspace = true }
 alloy-trie = { workspace = true }
-alloy-tx-macros = { workspace = true }
-alloy-rlp = { workspace = true }
 alloy-sol-types = { version = "=1.4.1", default-features = false }
 serde = { workspace = true }

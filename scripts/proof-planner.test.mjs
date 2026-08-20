@@ -40,8 +40,8 @@ test("closed-loop planner prioritizes direct seller-funder over relays", () => {
   assert.equal(plan.selectedEvidence.filter((entry) => entry.evidenceType.startsWith("RELAY")).length, 0);
 });
 
-test("closed-loop planner rejects seller self-transfer closure", () => {
-  const claim = { claimId: "claim", type: "P0_CLOSED_LOOP", subjects: ["seller"], approvedBuyers: ["a", "b", "c"], approvedFunders: ["seller"], dependencyRoot: "0x1" };
+test("closed-loop planner uses authenticated self-funded closure without self-transfer evidence", () => {
+  const claim = { claimId: "claim", type: "P0_CLOSED_LOOP", subjects: ["SeLlEr"], approvedBuyers: ["a", "b", "c"], approvedFunders: ["seller"], dependencyRoot: "0x1" };
   const dependencies = [
     { ...evidence("direct", null, 46_303_100, 1n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "seller", from: "seller", to: "seller" },
     ...["a", "b", "c"].flatMap((buyer, index) => [
@@ -49,18 +49,9 @@ test("closed-loop planner rejects seller self-transfer closure", () => {
       { ...evidence(`s${buyer}`, buyer, 46_303_031 + index, index === 0 ? 400_000_000n : 300_000_000n), evidenceType: "SETTLEMENT" },
     ]),
   ];
-  assert.throws(() => planClaim(claim, dependencies, { reportRoot: "0x2" }), /no valid cohort funding strategy/);
-});
-
-test("native cohort funding is never aggregated across funders", () => {
-  const claim = { claimId: "claim", type: "P1_COORDINATED_CONTROL", subjects: ["seller"], approvedBuyers: ["a", "b", "c"], approvedFunders: ["f1", "f2"], dependencyRoot: "0x1" };
-  const dependencies = [
-    { ...evidence("fa", "a", 46_303_001, 1n), evidenceType: "NATIVE_FUNDING", funder: "f1" },
-    { ...evidence("fb", "b", 46_303_002, 1n), evidenceType: "NATIVE_FUNDING", funder: "f1" },
-    { ...evidence("fc", "c", 46_303_003, 1n), evidenceType: "NATIVE_FUNDING", funder: "f2" },
-    ...["a", "b", "c"].map((buyer, index) => evidence(`s${buyer}`, buyer, 46_303_031 + index, index === 0 ? 400_000_000n : 300_000_000n)),
-  ];
-  assert.throws(() => planClaim(claim, dependencies, { reportRoot: "0x2" }), /no valid cohort funding strategy/);
+  const plan = planClaim(claim, dependencies, { reportRoot: "0x2" });
+  assert.equal(plan.closureType, "SELF_FUNDED");
+  assert.equal(plan.selectedEvidence.some((entry) => entry.dependencyId === "direct"), false);
 });
 
 test("closed-loop closure must match the selected cohort funder", () => {
@@ -101,6 +92,16 @@ test("reciprocal planner enforces the exact 80 percent volume boundary", () => {
 
   const below = qualifying.map((entry) => entry.dependencyId.startsWith("ba") ? { ...entry, amountRaw: "799999" } : entry);
   assert.throws(() => planClaim(claim, below, { reportRoot: "0x2" }), /80% reciprocity/);
+});
+
+test("reciprocal planner may select more than 100 receipts to reach directional volume", () => {
+  const claim = { claimId: "pair", type: "P0_RECIPROCAL", walletA: "a", walletB: "b", subjects: ["a", "b"], dependencyRoot: "0x1" };
+  const dependencies = [
+    ...Array.from({ length: 100 }, (_, index) => ({ ...evidence(`ab${index}`, "a", 46_303_001 + index, 100_000n), evidenceType: "RECIPROCAL_SETTLEMENT", seller: "b" })),
+    ...Array.from({ length: 100 }, (_, index) => ({ ...evidence(`ba${index}`, "b", 46_303_201 + index, 100_000n), evidenceType: "RECIPROCAL_SETTLEMENT", seller: "a" })),
+  ];
+  const plan = planClaim(claim, dependencies, { reportRoot: "0x2" });
+  assert.equal(plan.selectedEvidence.length, 200);
 });
 
 test("planner rejects unknown claim types", () => {

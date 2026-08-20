@@ -2,7 +2,7 @@ use alloy_consensus::{transaction::SignerRecoverable, Header, Transaction, TxEnv
 use alloy_eips::eip2718::Decodable2718;
 use alloy_primitives::{address, b256, keccak256, Address, Bytes, B256, U256};
 use alloy_sol_types::SolValue;
-use alloy_trie::{proof::verify_proof, Nibbles, TrieAccount, EMPTY_ROOT_HASH, KECCAK_EMPTY};
+use alloy_trie::{proof::verify_proof, Nibbles};
 use loop_core::{
     receipt_log, receipt_success, trie_index_key, verify_receipt_inclusion, ReceiptProof,
     CHANNEL_SETTLED_TOPIC, TRANSFER_TOPIC,
@@ -14,13 +14,8 @@ pub const PREDICATE_VERSION: u32 = 3;
 pub const BASE_CHAIN_ID: u64 = 8_453;
 pub const PERIOD_START_BLOCK: u64 = 44_471_575;
 pub const PERIOD_END_BLOCK_EXCLUSIVE: u64 = 49_936_173;
-pub const STATE_START_BLOCK: u64 = PERIOD_START_BLOCK - 1;
-pub const STATE_END_BLOCK: u64 = PERIOD_END_BLOCK_EXCLUSIVE - 1;
-pub const EMISSIONS_CUTOVER_BLOCK: u64 = 45_937_736;
-pub const PENALTY_BPS: u16 = 9_000;
 pub const MAX_BUYERS: usize = 160;
-pub const MAX_FUNDERS: usize = 1;
-pub const MAX_BLOCK_REFS: usize = 256;
+pub const MAX_BLOCK_REFS: usize = 2_048;
 pub const MINIMUM_BUYERS: usize = 3;
 pub const MINIMUM_VOLUME_RAW: u128 = 1_000_000_000;
 pub const MINIMUM_USDC_FUNDING_RAW: u128 = 1_000_000;
@@ -38,47 +33,14 @@ pub const MAX_RELAY_LOSS_RAW: u128 = 1_000_000;
 pub const USDC_ADDRESS: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
 pub const CHANNELS_ADDRESS: Address = address!("BA66d3b4fbCf472F6F11D6F9F96aaCE96516F09d");
 pub const DEPOSITS_ADDRESS: Address = address!("0F7a3a8f4Da01637d1202bb5443fcF7F88F99fD2");
-pub const OLD_EMISSIONS_ADDRESS: Address = address!("36877fBa8Fa333aa46a1c57b66D132E4995C86b5");
-pub const NEW_EMISSIONS_ADDRESS: Address = address!("F13bE52c4A3afC6AE29536f073588d01A0564088");
-pub const SMART_ACCOUNT_IMPLEMENTATION: Address =
-    address!("d206ac7fef53d83ed4563e770b28dba90d0d9ec8");
-pub const SUPPORTED_SMART_ACCOUNT_A: Address = address!("ee7ae85f2fe2239e27d9c1e23fffe168d63b4055");
-pub const SUPPORTED_SMART_ACCOUNT_B: Address = address!("17fe9197970454875df742a74b74ed5f984b645a");
-
-pub const DEPOSITS_CODE_HASH: B256 =
-    b256!("41f0965f0300d0ce16e2a5824ae52fecf4321f4083e62abfa309e64414f95955");
-pub const CHANNELS_CODE_HASH: B256 =
-    b256!("9d8c726d151e2257e2b4e50f46dcf0bc7c976786585ee3b902be55bd431f1ed8");
-pub const OLD_EMISSIONS_CODE_HASH: B256 =
-    b256!("5991d7a7f4d33f70e29ad71421820d37c8ae04eb99a720184b99a2b7d231876e");
-pub const NEW_EMISSIONS_CODE_HASH: B256 =
-    b256!("534c9513b91440044e12ad087f414f8ae0b59fd7cba3d892e1a522296bfcf464");
-pub const SMART_ACCOUNT_PROXY_CODE_HASH: B256 =
-    b256!("22bcbefe2dacbb6289d731af9eabb98fdfb6480f4c59c9b2f45f574f008ef68f");
-pub const SMART_ACCOUNT_IMPLEMENTATION_CODE_HASH: B256 =
-    b256!("491c065559650e64988c11ac6fb90a72bec27afa3b112a4962fded431a603352");
-
-pub const DEPOSITS_BUYERS_SLOT: u64 = 9;
-pub const CHANNELS_CHANNELS_SLOT: u64 = 9;
-pub const OLD_EMISSIONS_SELLER_POINTS_SLOT: u64 = 10;
-pub const OLD_EMISSIONS_BUYER_POINTS_SLOT: u64 = 11;
-pub const NEW_EMISSIONS_SELLER_POINTS_SLOT: u64 = 14;
-pub const NEW_EMISSIONS_BUYER_POINTS_SLOT: u64 = 15;
-pub const MAX_EMISSIONS_EPOCH: u64 = 18;
-pub const ERC1967_IMPLEMENTATION_SLOT: B256 =
-    b256!("360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc");
-pub const SMART_ACCOUNT_PLUGIN_COUNT_SLOT: B256 =
-    b256!("c6a0cc20c824c4eecc4b0fbb7fb297d07492a7bd12c83d4fa4d27b4249f9bfca");
-pub const SMART_ACCOUNT_OWNER_SLOT: B256 =
-    b256!("c6a0cc20c824c4eecc4b0fbb7fb297d07492a7bd12c83d4fa4d27b4249f9bfd0");
 pub const DEPOSITED_TOPIC: B256 =
     b256!("2da466a7b24304f47e87fa2e1e5a81b9831ce54fec19055ce277ca2f39ba42c4");
 
 pub const CLOSED_CYCLE_PROOF_TYPE: u8 = 1;
 pub const RECIPROCAL_PROOF_TYPE: u8 = 2;
-pub const COORDINATED_CONTROL_PROOF_TYPE: u8 = 3;
 pub const DIRECT_CLOSURE: u8 = 1;
 pub const RELAY_CLOSURE: u8 = 2;
+pub const SELF_FUNDED_CLOSURE: u8 = 3;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct LogRef {
@@ -114,52 +76,6 @@ pub struct EnforcementBlock {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Eip1186StorageProof {
-    pub slot: B256,
-    pub value: U256,
-    pub proof: Vec<Bytes>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Eip1186AccountProof {
-    pub block: usize,
-    pub address: Address,
-    pub exists: bool,
-    pub nonce: u64,
-    pub balance: U256,
-    pub storage_root: B256,
-    pub code_hash: B256,
-    pub account_proof: Vec<Bytes>,
-    pub storage_proofs: Vec<Eip1186StorageProof>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-pub struct StateValueRef {
-    pub account: usize,
-    pub slot: B256,
-    pub storage: Option<usize>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum FunderAuthentication {
-    Eoa {
-        account: usize,
-    },
-    Eip7702 {
-        account: usize,
-        delegation_code: Bytes,
-    },
-    SupportedSmartAccount {
-        proxy_account: usize,
-        implementation_account: usize,
-        implementation_slot: StateValueRef,
-        plugin_count_slot: StateValueRef,
-        owner_slot: StateValueRef,
-        owner: Address,
-    },
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum FundingKind {
     Usdc {
         transfer: LogRef,
@@ -172,14 +88,6 @@ pub enum FundingKind {
         transaction: TransactionRef,
         receipt: ReceiptRef,
     },
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct FundingEvidence {
-    pub buyer: Address,
-    pub first_channel_at: StateValueRef,
-    pub authentication: FunderAuthentication,
-    pub kind: FundingKind,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -202,42 +110,9 @@ pub struct RelayPathEvidence {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum ClosureEvidence {
+    SelfFunded,
     Direct { transfer: LogRef },
     Relay { paths: Vec<RelayPathEvidence> },
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub enum CounterKind {
-    Seller,
-    Buyer,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct CounterDelta {
-    pub kind: CounterKind,
-    pub subject: Address,
-    pub contract: Address,
-    pub epoch: u64,
-    pub start: StateValueRef,
-    pub end: StateValueRef,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ChannelDelta {
-    pub channel_id: B256,
-    pub buyer: Address,
-    pub seller: Address,
-    pub start_packed_amounts: StateValueRef,
-    pub end_buyer: StateValueRef,
-    pub end_seller: StateValueRef,
-    pub end_packed_amounts: StateValueRef,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct FunderCohort {
-    pub funder: Address,
-    pub linked_buyers: Vec<Address>,
-    pub fundings: Vec<FundingEvidence>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -262,18 +137,6 @@ pub struct ReciprocalInput {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct CoordinatedControlInput {
-    pub chain_id: u64,
-    pub seller: Address,
-    pub funding_cohorts: Vec<FunderCohort>,
-    pub blocks: Vec<EnforcementBlock>,
-    pub state_proofs: Vec<Eip1186AccountProof>,
-    pub channels: Vec<ChannelDelta>,
-    pub seller_counters: Vec<CounterDelta>,
-    pub buyer_counters: Vec<CounterDelta>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ClosedCycleJournal {
     pub predicate_version: u32,
     pub claim_id: B256,
@@ -286,7 +149,6 @@ pub struct ClosedCycleJournal {
     pub qualified_volume_raw: u128,
     pub closure_kind: u8,
     pub closure_path_count: u32,
-    pub penalty_bps: u16,
     pub block_refs: Vec<(u64, B256)>,
 }
 
@@ -302,25 +164,6 @@ pub struct ReciprocalJournal {
     pub settlement_count_b_to_a: u32,
     pub volume_a_to_b_raw: u128,
     pub volume_b_to_a_raw: u128,
-    pub penalty_bps: u16,
-    pub block_refs: Vec<(u64, B256)>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct CoordinatedControlJournal {
-    pub predicate_version: u32,
-    pub claim_id: B256,
-    pub period_start_block: u64,
-    pub period_end_block_exclusive: u64,
-    pub seller: Address,
-    pub funder_cohort_hash: B256,
-    pub funder_count: u32,
-    pub cohort_hash: B256,
-    pub cohort_count: u32,
-    pub qualified_cohort_volume_raw: u128,
-    pub seller_period_volume_raw: u128,
-    pub penalty_bps: u16,
-    pub penalized_buyers: Vec<Address>,
     pub block_refs: Vec<(u64, B256)>,
 }
 
@@ -329,17 +172,12 @@ alloy_sol_types::sol! {
     struct SolClosedCycleJournal {
         uint32 predicateVersion; bytes32 claimId; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
         address seller; address funder; bytes32 cohortHash; uint32 cohortCount; uint128 qualifiedVolumeRaw;
-        uint8 closureKind; uint32 closurePathCount; uint16 penaltyBps; SolBlockRef[] blockRefs;
+        uint8 closureKind; uint32 closurePathCount; SolBlockRef[] blockRefs;
     }
     struct SolReciprocalJournal {
         uint32 predicateVersion; bytes32 claimId; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
         address addressA; address addressB; uint32 settlementCountAToB; uint32 settlementCountBToA;
-        uint128 volumeAToBRaw; uint128 volumeBToARaw; uint16 penaltyBps; SolBlockRef[] blockRefs;
-    }
-    struct SolCoordinatedControlJournal {
-        uint32 predicateVersion; bytes32 claimId; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
-        address seller; bytes32 funderCohortHash; uint32 funderCount; bytes32 cohortHash; uint32 cohortCount; uint128 qualifiedCohortVolumeRaw;
-        uint128 sellerPeriodVolumeRaw; uint16 penaltyBps; address[] penalizedBuyers; SolBlockRef[] blockRefs;
+        uint128 volumeAToBRaw; uint128 volumeBToARaw; SolBlockRef[] blockRefs;
     }
     struct SolCohortClaimId {
         uint256 chainId; uint8 proofType; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
@@ -349,11 +187,6 @@ alloy_sol_types::sol! {
         uint256 chainId; uint8 proofType; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
         address addressA; address addressB;
     }
-    struct SolCoordinatedControlClaimId {
-        uint256 chainId; uint8 proofType; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
-        address seller; bytes32 funderCohortHash; bytes32 cohortHash;
-    }
-    struct SolFunderCohort { address funder; address[] buyers; }
 }
 
 fn sol_block_refs(refs: &[(u64, B256)]) -> Vec<SolBlockRef> {
@@ -379,7 +212,6 @@ impl ClosedCycleJournal {
             qualifiedVolumeRaw: self.qualified_volume_raw,
             closureKind: self.closure_kind,
             closurePathCount: self.closure_path_count,
-            penaltyBps: self.penalty_bps,
             blockRefs: sol_block_refs(&self.block_refs),
         }
         .abi_encode()
@@ -399,29 +231,6 @@ impl ReciprocalJournal {
             settlementCountBToA: self.settlement_count_b_to_a,
             volumeAToBRaw: self.volume_a_to_b_raw,
             volumeBToARaw: self.volume_b_to_a_raw,
-            penaltyBps: self.penalty_bps,
-            blockRefs: sol_block_refs(&self.block_refs),
-        }
-        .abi_encode()
-    }
-}
-
-impl CoordinatedControlJournal {
-    pub fn abi_encode(&self) -> Vec<u8> {
-        SolCoordinatedControlJournal {
-            predicateVersion: self.predicate_version,
-            claimId: self.claim_id,
-            periodStartBlock: self.period_start_block,
-            periodEndBlockExclusive: self.period_end_block_exclusive,
-            seller: self.seller,
-            funderCohortHash: self.funder_cohort_hash,
-            funderCount: self.funder_count,
-            cohortHash: self.cohort_hash,
-            cohortCount: self.cohort_count,
-            qualifiedCohortVolumeRaw: self.qualified_cohort_volume_raw,
-            sellerPeriodVolumeRaw: self.seller_period_volume_raw,
-            penaltyBps: self.penalty_bps,
-            penalizedBuyers: self.penalized_buyers.clone(),
             blockRefs: sol_block_refs(&self.block_refs),
         }
         .abi_encode()
@@ -445,7 +254,7 @@ pub fn verify_closed_cycle(input: &ClosedCycleInput) -> Result<ClosedCycleJourna
         &input.fundings,
         &resolver,
     )?;
-    let (qualified_volume_raw, _, crossing_key) = verify_settlements(
+    let (qualified_volume_raw, target_volumes, crossing_key) = verify_settlements(
         input.seller,
         &input.linked_buyers,
         &funding_times,
@@ -459,6 +268,7 @@ pub fn verify_closed_cycle(input: &ClosedCycleInput) -> Result<ClosedCycleJourna
         input.seller,
         input.funder,
         &input.linked_buyers,
+        target_volumes.len(),
         crossing_key.ok_or("closed cycle: threshold was not crossed")?,
         &input.closure,
         &resolver,
@@ -481,7 +291,6 @@ pub fn verify_closed_cycle(input: &ClosedCycleInput) -> Result<ClosedCycleJourna
         qualified_volume_raw,
         closure_kind,
         closure_path_count,
-        penalty_bps: PENALTY_BPS,
         block_refs,
     })
 }
@@ -542,7 +351,6 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<ReciprocalJournal, S
         settlement_count_b_to_a: count_ba,
         volume_a_to_b_raw: volume_ab,
         volume_b_to_a_raw: volume_ba,
-        penalty_bps: PENALTY_BPS,
         block_refs,
     })
 }
@@ -572,124 +380,6 @@ fn reciprocal_thresholds_satisfied(
         && reciprocal)
 }
 
-pub fn verify_coordinated_control(
-    input: &CoordinatedControlInput,
-) -> Result<CoordinatedControlJournal, String> {
-    validate_chain(input.chain_id)?;
-    if input.seller == Address::ZERO {
-        return Err("coordinated control: zero seller".into());
-    }
-    let linked_buyers = validate_funding_cohorts(&input.funding_cohorts)?;
-    let block_refs = authenticate_blocks(&input.blocks)?;
-    let state = StateResolver::authenticate(&input.blocks, &input.state_proofs)?;
-    let resolver = ChainResolver {
-        blocks: &input.blocks,
-    };
-    for cohort in &input.funding_cohorts {
-        verify_state_fundings(
-            cohort.funder,
-            &cohort.linked_buyers,
-            &cohort.fundings,
-            &resolver,
-            &state,
-        )?;
-    }
-    let linked = linked_buyers.iter().copied().collect::<BTreeSet<_>>();
-    let mut channel_ids = BTreeSet::new();
-    let mut target_volumes = BTreeMap::<Address, u128>::new();
-    let mut cohort_volume = 0u128;
-    for channel in &input.channels {
-        if !channel_ids.insert(channel.channel_id) {
-            return Err("coordinated control: duplicate channel".into());
-        }
-        if channel.seller != input.seller || !linked.contains(&channel.buyer) {
-            return Err("coordinated control: channel subject mismatch".into());
-        }
-        let base = channel_base_slot(channel.channel_id);
-        let start_word = state.read_expected(
-            channel.start_packed_amounts,
-            STATE_START_BLOCK,
-            CHANNELS_ADDRESS,
-            Some(CHANNELS_CODE_HASH),
-            add_slot(base, 2)?,
-        )?;
-        let end_buyer = state.read_expected(
-            channel.end_buyer,
-            STATE_END_BLOCK,
-            CHANNELS_ADDRESS,
-            Some(CHANNELS_CODE_HASH),
-            base,
-        )?;
-        let end_seller = state.read_expected(
-            channel.end_seller,
-            STATE_END_BLOCK,
-            CHANNELS_ADDRESS,
-            Some(CHANNELS_CODE_HASH),
-            add_slot(base, 1)?,
-        )?;
-        let end_word = state.read_expected(
-            channel.end_packed_amounts,
-            STATE_END_BLOCK,
-            CHANNELS_ADDRESS,
-            Some(CHANNELS_CODE_HASH),
-            add_slot(base, 2)?,
-        )?;
-        if word_address(end_buyer) != channel.buyer || word_address(end_seller) != channel.seller {
-            return Err("coordinated control: authenticated channel parties differ".into());
-        }
-        let delta = packed_settled(end_word)
-            .checked_sub(packed_settled(start_word))
-            .ok_or("coordinated control: channel underflow")?;
-        cohort_volume = cohort_volume
-            .checked_add(delta)
-            .ok_or("coordinated control: cohort overflow")?;
-        let total = target_volumes.entry(channel.buyer).or_default();
-        *total = total
-            .checked_add(delta)
-            .ok_or("coordinated control: buyer overflow")?;
-    }
-    if cohort_volume < MINIMUM_VOLUME_RAW {
-        return Err("coordinated control: cohort volume below 1,000 USDC".into());
-    }
-    let seller_period_volume = counter_total(
-        CounterKind::Seller,
-        input.seller,
-        &input.seller_counters,
-        &state,
-    )?;
-    if cohort_volume
-        .checked_mul(2)
-        .ok_or("coordinated control: ratio overflow")?
-        < seller_period_volume
-    {
-        return Err("coordinated control: cohort is below 50 percent".into());
-    }
-    let penalized_buyers = qualifying_buyers(
-        &linked_buyers,
-        &target_volumes,
-        &input.buyer_counters,
-        &state,
-    )?;
-    let cohort_hash = cohort_hash(&linked_buyers);
-    let funder_cohort_hash = funder_cohort_hash(&input.funding_cohorts);
-    Ok(CoordinatedControlJournal {
-        predicate_version: PREDICATE_VERSION,
-        claim_id: coordinated_control_claim_id(input.seller, funder_cohort_hash, cohort_hash),
-        period_start_block: PERIOD_START_BLOCK,
-        period_end_block_exclusive: PERIOD_END_BLOCK_EXCLUSIVE,
-        seller: input.seller,
-        funder_cohort_hash,
-        funder_count: input.funding_cohorts.len() as u32,
-        cohort_hash,
-        cohort_count: linked_buyers.len() as u32,
-        qualified_cohort_volume_raw: cohort_volume,
-        seller_period_volume_raw: seller_period_volume,
-        penalty_bps: PENALTY_BPS,
-        penalized_buyers,
-        block_refs,
-    })
-}
-
 fn validate_chain(chain_id: u64) -> Result<(), String> {
     if chain_id != BASE_CHAIN_ID {
         return Err("unrecognized chain".into());
@@ -708,37 +398,6 @@ fn validate_common(
         return Err("cohort: zero seller or funder".into());
     }
     validate_sorted_unique_addresses(buyers, MINIMUM_BUYERS, MAX_BUYERS, "linked buyers")
-}
-
-fn validate_funding_cohorts(cohorts: &[FunderCohort]) -> Result<Vec<Address>, String> {
-    if cohorts.len() != MAX_FUNDERS {
-        return Err("funding cohorts: exactly one funder is required".into());
-    }
-    let mut previous_funder = None;
-    let mut buyers = BTreeSet::new();
-    for cohort in cohorts {
-        if cohort.funder == Address::ZERO
-            || previous_funder.is_some_and(|previous| previous >= cohort.funder)
-        {
-            return Err("funding cohorts: funders must be nonzero, sorted, and unique".into());
-        }
-        validate_sorted_unique_addresses(
-            &cohort.linked_buyers,
-            MINIMUM_BUYERS,
-            MAX_BUYERS,
-            "funder cohort buyers",
-        )?;
-        for buyer in &cohort.linked_buyers {
-            if !buyers.insert(*buyer) {
-                return Err("funding cohorts: buyer assigned to multiple funders".into());
-            }
-        }
-        previous_funder = Some(cohort.funder);
-    }
-    if buyers.len() < MINIMUM_BUYERS || buyers.len() > MAX_BUYERS {
-        return Err("funding cohorts: invalid total buyer count".into());
-    }
-    Ok(buyers.into_iter().collect())
 }
 
 fn validate_sorted_unique_addresses(
@@ -803,116 +462,6 @@ fn verify_transaction_inclusion(
         transaction.proof.iter(),
     )
     .map_err(|error| format!("transaction inclusion: {error}"))
-}
-
-struct StateResolver<'a> {
-    blocks: &'a [EnforcementBlock],
-    proofs: &'a [Eip1186AccountProof],
-}
-
-impl<'a> StateResolver<'a> {
-    fn authenticate(
-        blocks: &'a [EnforcementBlock],
-        proofs: &'a [Eip1186AccountProof],
-    ) -> Result<Self, String> {
-        let mut accounts = BTreeSet::new();
-        for proof in proofs {
-            let block = blocks
-                .get(proof.block)
-                .ok_or("state proof block out of range")?;
-            if !accounts.insert((block.header.number, proof.address)) {
-                return Err("duplicate account proof".into());
-            }
-            let expected_account = if proof.exists {
-                Some(alloy_rlp::encode(TrieAccount {
-                    nonce: proof.nonce,
-                    balance: proof.balance,
-                    storage_root: proof.storage_root,
-                    code_hash: proof.code_hash,
-                }))
-            } else {
-                if proof.nonce != 0
-                    || proof.balance != U256::ZERO
-                    || proof.storage_root != EMPTY_ROOT_HASH
-                    || proof.code_hash != KECCAK_EMPTY
-                    || !proof.storage_proofs.is_empty()
-                {
-                    return Err("malformed non-inclusion account proof".into());
-                }
-                None
-            };
-            verify_proof(
-                block.header.state_root,
-                Nibbles::unpack(keccak256(proof.address)),
-                expected_account,
-                proof.account_proof.iter(),
-            )
-            .map_err(|error| format!("account proof: {error}"))?;
-            let mut slots = BTreeSet::new();
-            for storage in &proof.storage_proofs {
-                if !slots.insert(storage.slot) {
-                    return Err("duplicate storage slot proof".into());
-                }
-                let expected = if storage.value == U256::ZERO {
-                    None
-                } else {
-                    Some(alloy_rlp::encode(storage.value))
-                };
-                verify_proof(
-                    proof.storage_root,
-                    Nibbles::unpack(keccak256(storage.slot)),
-                    expected,
-                    storage.proof.iter(),
-                )
-                .map_err(|error| format!("storage proof: {error}"))?;
-            }
-        }
-        Ok(Self { blocks, proofs })
-    }
-
-    fn account(&self, index: usize) -> Result<&Eip1186AccountProof, String> {
-        self.proofs
-            .get(index)
-            .ok_or("account reference out of range".into())
-    }
-
-    fn read_expected(
-        &self,
-        reference: StateValueRef,
-        block_number: u64,
-        address: Address,
-        code_hash: Option<B256>,
-        expected_slot: B256,
-    ) -> Result<U256, String> {
-        if reference.slot != expected_slot {
-            return Err("wrong storage slot".into());
-        }
-        let account = self.account(reference.account)?;
-        let block = self
-            .blocks
-            .get(account.block)
-            .ok_or("state proof block out of range")?;
-        if block.header.number != block_number || account.address != address {
-            return Err("state proof subject or boundary mismatch".into());
-        }
-        if !account.exists {
-            if reference.storage.is_some() || code_hash.is_some() {
-                return Err("required account does not exist".into());
-            }
-            return Ok(U256::ZERO);
-        }
-        if code_hash.is_some_and(|expected| account.code_hash != expected) {
-            return Err("wrong contract code hash".into());
-        }
-        let storage = account
-            .storage_proofs
-            .get(reference.storage.ok_or("missing storage proof reference")?)
-            .ok_or("storage proof reference out of range")?;
-        if storage.slot != reference.slot {
-            return Err("storage proof reference points to wrong slot".into());
-        }
-        Ok(storage.value)
-    }
 }
 
 struct ChainResolver<'a> {
@@ -1159,120 +708,6 @@ fn require_transaction_signer(
     Ok(())
 }
 
-fn verify_state_fundings(
-    funder: Address,
-    linked_buyers: &[Address],
-    fundings: &[FundingEvidence],
-    resolver: &ChainResolver<'_>,
-    state: &StateResolver<'_>,
-) -> Result<BTreeMap<Address, u64>, String> {
-    if fundings.len() != linked_buyers.len() {
-        return Err("funding evidence must cover each linked buyer exactly once".into());
-    }
-    let linked = linked_buyers.iter().copied().collect::<BTreeSet<_>>();
-    let mut times = BTreeMap::new();
-    for evidence in fundings {
-        if !linked.contains(&evidence.buyer) || times.contains_key(&evidence.buyer) {
-            return Err("duplicate or unrelated funding buyer".into());
-        }
-        let first_channel = state.read_expected(
-            evidence.first_channel_at,
-            STATE_END_BLOCK,
-            DEPOSITS_ADDRESS,
-            Some(DEPOSITS_CODE_HASH),
-            first_channel_slot(evidence.buyer)?,
-        )?;
-        let first_channel_at =
-            u64::try_from(first_channel).map_err(|_| "firstChannelAt overflow")?;
-        if first_channel_at == 0 {
-            return Err("linked buyer has no first channel".into());
-        }
-        let funding_time = match evidence.kind {
-            FundingKind::Usdc { transfer } => {
-                let (from, to, amount, _) = resolver.usdc_transfer(transfer)?;
-                if from != funder || to != evidence.buyer || amount < MINIMUM_USDC_FUNDING_RAW {
-                    return Err("invalid direct USDC funding".into());
-                }
-                authenticate_funder(
-                    funder,
-                    &evidence.authentication,
-                    resolver.transaction_for_log(transfer)?,
-                    resolver,
-                    state,
-                )?;
-                resolver.block(transfer.block)?.header.timestamp
-            }
-            FundingKind::ProtocolDeposit {
-                transfer,
-                deposited,
-            } => {
-                if transfer.block != deposited.block || transfer.receipt != deposited.receipt {
-                    return Err("protocol deposit logs must share one receipt".into());
-                }
-                let transfer_key = resolver.log_key(transfer)?;
-                let deposited_key = resolver.log_key(deposited)?;
-                let (from, to, transferred_amount, _) = resolver.usdc_transfer(transfer)?;
-                let (deposit_buyer, deposited_amount, _) = resolver.protocol_deposit(deposited)?;
-                if !valid_protocol_deposit(
-                    transfer_key,
-                    deposited_key,
-                    from,
-                    to,
-                    transferred_amount,
-                    deposit_buyer,
-                    deposited_amount,
-                    funder,
-                    evidence.buyer,
-                ) {
-                    return Err("invalid protocol-deposit funding".into());
-                }
-                authenticate_funder(
-                    funder,
-                    &evidence.authentication,
-                    resolver.transaction_for_log(transfer)?,
-                    resolver,
-                    state,
-                )?;
-                resolver.block(transfer.block)?.header.timestamp
-            }
-            FundingKind::Native {
-                transaction,
-                receipt,
-            } => {
-                validate_native_funder_authentication(&evidence.authentication)?;
-                let (receipt_proof, receipt_block) = resolver.receipt(receipt)?;
-                if !receipt_success(&receipt_proof.value)? {
-                    return Err("native funding receipt reverted".into());
-                }
-                let (envelope, _, transaction_block) = resolver.decoded_transaction(transaction)?;
-                let (transaction_proof, _) = resolver.transaction(transaction)?;
-                if receipt.block != transaction.block
-                    || receipt_proof.tx_index != transaction_proof.tx_index
-                    || receipt_block.header.number != transaction_block.header.number
-                    || envelope.to() != Some(evidence.buyer)
-                    || envelope.value() < U256::from(MINIMUM_NATIVE_FUNDING_WEI)
-                {
-                    return Err("invalid native funding".into());
-                }
-                authenticate_funder(
-                    funder,
-                    &evidence.authentication,
-                    transaction,
-                    resolver,
-                    state,
-                )?;
-                transaction_block.header.timestamp
-            }
-        };
-        if funding_time >= first_channel_at {
-            return Err("funding is not before buyer first channel".into());
-        }
-        times.insert(evidence.buyer, funding_time);
-    }
-    Ok(times)
-}
-
-#[allow(clippy::too_many_arguments)]
 fn valid_protocol_deposit(
     transfer_key: (u64, u64, usize),
     deposited_key: (u64, u64, usize),
@@ -1292,138 +727,6 @@ fn valid_protocol_deposit(
         && deposit_buyer == expected_buyer
         && transferred_amount == deposited_amount
         && deposited_amount >= MINIMUM_USDC_FUNDING_RAW
-}
-
-fn validate_native_funder_authentication(
-    authentication: &FunderAuthentication,
-) -> Result<(), String> {
-    if matches!(
-        authentication,
-        FunderAuthentication::SupportedSmartAccount { .. }
-    ) {
-        return Err("native funding cannot be attributed to a smart-account transaction".into());
-    }
-    Ok(())
-}
-
-fn authenticate_funder(
-    funder: Address,
-    authentication: &FunderAuthentication,
-    transaction: TransactionRef,
-    resolver: &ChainResolver<'_>,
-    state: &StateResolver<'_>,
-) -> Result<(), String> {
-    let (envelope, signer, block) = resolver.decoded_transaction(transaction)?;
-    match authentication {
-        FunderAuthentication::Eoa { account } => {
-            require_account_at(
-                state.account(*account)?,
-                state.blocks,
-                block.header.number,
-                funder,
-                KECCAK_EMPTY,
-            )?;
-            if signer != funder {
-                return Err("EOA funding signer mismatch".into());
-            }
-        }
-        FunderAuthentication::Eip7702 {
-            account,
-            delegation_code,
-        } => {
-            if delegation_code.len() != 23 || delegation_code[..3] != [0xef, 0x01, 0x00] {
-                return Err("invalid EIP-7702 delegation code".into());
-            }
-            require_account_at(
-                state.account(*account)?,
-                state.blocks,
-                block.header.number,
-                funder,
-                keccak256(delegation_code),
-            )?;
-            if signer != funder {
-                return Err("EIP-7702 funding signer mismatch".into());
-            }
-        }
-        FunderAuthentication::SupportedSmartAccount {
-            proxy_account,
-            implementation_account,
-            implementation_slot,
-            plugin_count_slot,
-            owner_slot,
-            owner,
-        } => {
-            if funder != SUPPORTED_SMART_ACCOUNT_A && funder != SUPPORTED_SMART_ACCOUNT_B {
-                return Err("unsupported smart-account funder".into());
-            }
-            require_account_at(
-                state.account(*proxy_account)?,
-                state.blocks,
-                block.header.number,
-                funder,
-                SMART_ACCOUNT_PROXY_CODE_HASH,
-            )?;
-            require_account_at(
-                state.account(*implementation_account)?,
-                state.blocks,
-                block.header.number,
-                SMART_ACCOUNT_IMPLEMENTATION,
-                SMART_ACCOUNT_IMPLEMENTATION_CODE_HASH,
-            )?;
-            let implementation = state.read_expected(
-                *implementation_slot,
-                block.header.number,
-                funder,
-                Some(SMART_ACCOUNT_PROXY_CODE_HASH),
-                ERC1967_IMPLEMENTATION_SLOT,
-            )?;
-            let plugins = state.read_expected(
-                *plugin_count_slot,
-                block.header.number,
-                funder,
-                Some(SMART_ACCOUNT_PROXY_CODE_HASH),
-                SMART_ACCOUNT_PLUGIN_COUNT_SLOT,
-            )?;
-            let owner_word = state.read_expected(
-                *owner_slot,
-                block.header.number,
-                funder,
-                Some(SMART_ACCOUNT_PROXY_CODE_HASH),
-                SMART_ACCOUNT_OWNER_SLOT,
-            )?;
-            if word_address(implementation) != SMART_ACCOUNT_IMPLEMENTATION
-                || plugins != U256::ZERO
-                || *owner == Address::ZERO
-                || packed_smart_account_owner(owner_word) != *owner
-            {
-                return Err("smart-account implementation, owner, or plugins mismatch".into());
-            }
-            if envelope.to().is_none() {
-                return Err("smart-account funding transaction cannot create a contract".into());
-            }
-        }
-    }
-    Ok(())
-}
-
-fn require_account_at(
-    proof: &Eip1186AccountProof,
-    blocks: &[EnforcementBlock],
-    block_number: u64,
-    address: Address,
-    code_hash: B256,
-) -> Result<(), String> {
-    let block = blocks
-        .get(proof.block)
-        .ok_or("account block reference out of range")?;
-    if block.header.number != block_number
-        || proof.address != address
-        || !proof.exists
-        || proof.code_hash != code_hash
-    {
-        return Err("account identity or code hash mismatch".into());
-    }
-    Ok(())
 }
 
 fn verify_settlements(
@@ -1477,16 +780,24 @@ fn verify_closure(
     seller: Address,
     funder: Address,
     linked_buyers: &[Address],
+    settled_buyer_count: usize,
     crossing_key: (u64, u64, usize),
     closure: &ClosureEvidence,
     resolver: &ChainResolver<'_>,
 ) -> Result<(u8, u32), String> {
     match closure {
+        ClosureEvidence::SelfFunded => {
+            if seller != funder || settled_buyer_count < MINIMUM_BUYERS {
+                return Err("invalid self-funded closed cycle".into());
+            }
+            Ok((SELF_FUNDED_CLOSURE, settled_buyer_count as u32))
+        }
         ClosureEvidence::Direct { transfer } => {
             let key = resolver.log_key(*transfer)?;
             let (from, to, amount, block) = resolver.usdc_transfer(*transfer)?;
             ensure_period_block(block, "direct closure")?;
             if key <= crossing_key
+                || seller == funder
                 || from != seller
                 || from == to
                 || (to != funder && linked_buyers.binary_search(&to).is_err())
@@ -1497,7 +808,7 @@ fn verify_closure(
             Ok((DIRECT_CLOSURE, 1))
         }
         ClosureEvidence::Relay { paths } => {
-            if paths.len() < 3 {
+            if seller == funder || paths.len() < 3 {
                 return Err("relay closure requires at least three paths".into());
             }
             let mut used = BTreeSet::new();
@@ -1556,98 +867,6 @@ fn valid_relay_amounts(seller_amount: u128, forwarded: u128, received: u128) -> 
                 >= seller_amount.saturating_mul(MIN_RELAY_RETAINED_BPS))
 }
 
-fn qualifying_buyers(
-    buyers: &[Address],
-    target_volumes: &BTreeMap<Address, u128>,
-    counters: &[CounterDelta],
-    state: &StateResolver<'_>,
-) -> Result<Vec<Address>, String> {
-    let mut result = Vec::new();
-    for buyer in buyers {
-        let target = target_volumes.get(buyer).copied().unwrap_or(0);
-        let total = counter_total(CounterKind::Buyer, *buyer, counters, state)?;
-        if total == 0 {
-            if target != 0 {
-                return Err("buyer counter is zero despite authenticated target volume".into());
-            }
-            continue;
-        }
-        if target > total {
-            return Err("target seller volume exceeds complete buyer volume".into());
-        }
-        if buyer_share_qualifies(target, total)? {
-            result.push(*buyer);
-        }
-    }
-    Ok(result)
-}
-
-fn buyer_share_qualifies(target: u128, total: u128) -> Result<bool, String> {
-    Ok(target.checked_mul(100).ok_or("buyer share overflow")?
-        >= total.checked_mul(99).ok_or("buyer share overflow")?)
-}
-
-fn counter_total(
-    kind: CounterKind,
-    subject: Address,
-    counters: &[CounterDelta],
-    state: &StateResolver<'_>,
-) -> Result<u128, String> {
-    let selected = counters
-        .iter()
-        .filter(|counter| counter.kind == kind && counter.subject == subject)
-        .collect::<Vec<_>>();
-    if selected.len() != 2 * (MAX_EMISSIONS_EPOCH as usize + 1) {
-        return Err("counter evidence does not cover both contracts and epochs 0-18".into());
-    }
-    let mut identities = BTreeSet::new();
-    let mut total = 0u128;
-    for counter in selected {
-        if counter.epoch > MAX_EMISSIONS_EPOCH
-            || !identities.insert((counter.contract, counter.epoch))
-            || (counter.contract != OLD_EMISSIONS_ADDRESS
-                && counter.contract != NEW_EMISSIONS_ADDRESS)
-        {
-            return Err("duplicate or unsupported counter evidence".into());
-        }
-        let slot = counter_slot(kind, subject, counter.epoch, counter.contract)?;
-        let code_hash = if counter.contract == OLD_EMISSIONS_ADDRESS {
-            OLD_EMISSIONS_CODE_HASH
-        } else {
-            NEW_EMISSIONS_CODE_HASH
-        };
-        let start_account = state.account(counter.start.account)?;
-        let start_code_hash = if start_account.exists {
-            Some(code_hash)
-        } else {
-            None
-        };
-        if counter.contract == OLD_EMISSIONS_ADDRESS && start_code_hash.is_none() {
-            return Err("old emissions contract missing at start boundary".into());
-        }
-        let start = state.read_expected(
-            counter.start,
-            STATE_START_BLOCK,
-            counter.contract,
-            start_code_hash,
-            slot,
-        )?;
-        let end = state.read_expected(
-            counter.end,
-            STATE_END_BLOCK,
-            counter.contract,
-            Some(code_hash),
-            slot,
-        )?;
-        let delta = u128::try_from(end.checked_sub(start).ok_or("counter underflow")?)
-            .map_err(|_| "counter delta exceeds uint128")?;
-        total = total
-            .checked_add(delta)
-            .ok_or("counter total exceeds uint128")?;
-    }
-    Ok(total)
-}
-
 fn ensure_period_block(block: u64, label: &str) -> Result<(), String> {
     if !(PERIOD_START_BLOCK..PERIOD_END_BLOCK_EXCLUSIVE).contains(&block) {
         return Err(format!("{label} is outside fixed period"));
@@ -1657,19 +876,6 @@ fn ensure_period_block(block: u64, label: &str) -> Result<(), String> {
 
 pub fn cohort_hash(buyers: &[Address]) -> B256 {
     keccak256(buyers.to_vec().abi_encode())
-}
-
-pub fn funder_cohort_hash(cohorts: &[FunderCohort]) -> B256 {
-    keccak256(
-        cohorts
-            .iter()
-            .map(|cohort| SolFunderCohort {
-                funder: cohort.funder,
-                buyers: cohort.linked_buyers.clone(),
-            })
-            .collect::<Vec<_>>()
-            .abi_encode(),
-    )
 }
 
 pub fn cohort_claim_id(
@@ -1706,69 +912,6 @@ pub fn reciprocal_claim_id(address_a: Address, address_b: Address) -> B256 {
     )
 }
 
-pub fn coordinated_control_claim_id(
-    seller: Address,
-    funder_cohort_hash: B256,
-    cohort_hash: B256,
-) -> B256 {
-    keccak256(
-        SolCoordinatedControlClaimId {
-            chainId: U256::from(BASE_CHAIN_ID),
-            proofType: COORDINATED_CONTROL_PROOF_TYPE,
-            periodStartBlock: PERIOD_START_BLOCK,
-            periodEndBlockExclusive: PERIOD_END_BLOCK_EXCLUSIVE,
-            seller,
-            funderCohortHash: funder_cohort_hash,
-            cohortHash: cohort_hash,
-        }
-        .abi_encode(),
-    )
-}
-
-pub fn first_channel_slot(buyer: Address) -> Result<B256, String> {
-    add_slot(
-        keccak256((buyer, U256::from(DEPOSITS_BUYERS_SLOT)).abi_encode()),
-        3,
-    )
-}
-
-pub fn channel_base_slot(channel_id: B256) -> B256 {
-    keccak256((channel_id, U256::from(CHANNELS_CHANNELS_SLOT)).abi_encode())
-}
-
-pub fn counter_slot(
-    kind: CounterKind,
-    subject: Address,
-    epoch: u64,
-    contract: Address,
-) -> Result<B256, String> {
-    let mapping_slot = match (contract, kind) {
-        (OLD_EMISSIONS_ADDRESS, CounterKind::Seller) => OLD_EMISSIONS_SELLER_POINTS_SLOT,
-        (OLD_EMISSIONS_ADDRESS, CounterKind::Buyer) => OLD_EMISSIONS_BUYER_POINTS_SLOT,
-        (NEW_EMISSIONS_ADDRESS, CounterKind::Seller) => NEW_EMISSIONS_SELLER_POINTS_SLOT,
-        (NEW_EMISSIONS_ADDRESS, CounterKind::Buyer) => NEW_EMISSIONS_BUYER_POINTS_SLOT,
-        _ => return Err("unsupported emissions contract".into()),
-    };
-    let outer = keccak256((subject, U256::from(mapping_slot)).abi_encode());
-    Ok(keccak256((U256::from(epoch), outer).abi_encode()))
-}
-
-fn add_slot(slot: B256, offset: u64) -> Result<B256, String> {
-    let value = U256::from_be_slice(slot.as_slice())
-        .checked_add(U256::from(offset))
-        .ok_or("storage slot overflow")?;
-    Ok(B256::from(value.to_be_bytes::<32>()))
-}
-
-fn packed_settled(word: U256) -> u128 {
-    u128::try_from(word >> 128).unwrap()
-}
-fn word_address(word: U256) -> Address {
-    Address::from_slice(&word.to_be_bytes::<32>()[12..])
-}
-fn packed_smart_account_owner(word: U256) -> Address {
-    word_address(word >> 16)
-}
 fn topic_address(topic: B256) -> Address {
     Address::from_slice(&topic.as_slice()[12..])
 }
@@ -1794,86 +937,13 @@ mod tests {
         let b = address!("0000000000000000000000000000000000000002");
         let hash = cohort_hash(&[a, b]);
         assert_ne!(hash, cohort_hash(&[b, a]));
-        assert_ne!(
-            cohort_claim_id(CLOSED_CYCLE_PROOF_TYPE, a, b, hash),
-            cohort_claim_id(COORDINATED_CONTROL_PROOF_TYPE, a, b, hash)
-        );
         assert_ne!(reciprocal_claim_id(a, b), reciprocal_claim_id(b, a));
-    }
-
-    #[test]
-    fn storage_slots_match_foundry_layout_rules() {
-        let buyer = address!("0000000000000000000000000000000000000001");
-        let base = keccak256((buyer, U256::from(DEPOSITS_BUYERS_SLOT)).abi_encode());
-        assert_eq!(
-            first_channel_slot(buyer).unwrap(),
-            add_slot(base, 3).unwrap()
-        );
-        let expected = |mapping_slot| {
-            let outer = keccak256((buyer, U256::from(mapping_slot)).abi_encode());
-            keccak256((U256::ZERO, outer).abi_encode())
-        };
-        assert_eq!(
-            counter_slot(CounterKind::Seller, buyer, 0, OLD_EMISSIONS_ADDRESS).unwrap(),
-            expected(10)
-        );
-        assert_eq!(
-            counter_slot(CounterKind::Buyer, buyer, 0, OLD_EMISSIONS_ADDRESS).unwrap(),
-            expected(11)
-        );
-        assert_eq!(
-            counter_slot(CounterKind::Seller, buyer, 0, NEW_EMISSIONS_ADDRESS).unwrap(),
-            expected(14)
-        );
-        assert_eq!(
-            counter_slot(CounterKind::Buyer, buyer, 0, NEW_EMISSIONS_ADDRESS).unwrap(),
-            expected(15)
-        );
-    }
-
-    #[test]
-    fn rejects_unknown_emissions_layout() {
-        assert!(counter_slot(
-            CounterKind::Seller,
-            address!("0000000000000000000000000000000000000001"),
-            0,
-            Address::ZERO,
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn rejects_smart_account_native_funding_attribution() {
-        let reference = StateValueRef {
-            account: 0,
-            slot: B256::ZERO,
-            storage: None,
-        };
-        let authentication = FunderAuthentication::SupportedSmartAccount {
-            proxy_account: 0,
-            implementation_account: 0,
-            implementation_slot: reference,
-            plugin_count_slot: reference,
-            owner_slot: reference,
-            owner: address!("0000000000000000000000000000000000000001"),
-        };
-        assert!(validate_native_funder_authentication(&authentication).is_err());
-        assert!(
-            validate_native_funder_authentication(&FunderAuthentication::Eoa { account: 0 })
-                .is_ok()
-        );
     }
 
     #[test]
     fn exact_ratio_boundaries_do_not_round() {
         assert!(1_000_000_000u128 * 2 >= 2_000_000_000u128);
         assert!(999_999_999u128 * 2 < 2_000_000_000u128);
-        assert!(99u128 * 100 >= 100u128 * 99);
-        assert!(98u128 * 100 < 100u128 * 99);
-        assert!(buyer_share_qualifies(99, 100).unwrap());
-        assert!(!buyer_share_qualifies(98, 100).unwrap());
-        assert!(buyer_share_qualifies(99_000_000, 100_000_000).unwrap());
-        assert!(!buyer_share_qualifies(98_999_999, 100_000_000).unwrap());
         assert!(reciprocal_thresholds_satisfied(50, 50, 50_000_000, 40_000_000).unwrap());
         assert!(!reciprocal_thresholds_satisfied(50, 50, 50_000_000, 39_999_999).unwrap());
     }
@@ -1980,35 +1050,6 @@ mod tests {
     }
 
     #[test]
-    fn coordinated_control_rejects_multiple_funders() {
-        let funder_a = address!("0000000000000000000000000000000000000010");
-        let funder_b = address!("0000000000000000000000000000000000000020");
-        let buyers = [
-            address!("0000000000000000000000000000000000000001"),
-            address!("0000000000000000000000000000000000000002"),
-            address!("0000000000000000000000000000000000000003"),
-            address!("0000000000000000000000000000000000000004"),
-            address!("0000000000000000000000000000000000000005"),
-            address!("0000000000000000000000000000000000000006"),
-        ];
-        let cohorts = vec![
-            FunderCohort {
-                funder: funder_a,
-                linked_buyers: buyers[..3].to_vec(),
-                fundings: Vec::new(),
-            },
-            FunderCohort {
-                funder: funder_b,
-                linked_buyers: buyers[3..].to_vec(),
-                fundings: Vec::new(),
-            },
-        ];
-        assert!(validate_funding_cohorts(&cohorts)
-            .unwrap_err()
-            .contains("exactly one funder"));
-    }
-
-    #[test]
     fn closed_cycle_rejects_zero_movement_self_transfer_closure() {
         let mut input = closed_cycle_input(400_000_000);
         input.seller = input.funder;
@@ -2033,6 +1074,26 @@ mod tests {
         assert!(verify_closed_cycle(&input)
             .unwrap_err()
             .contains("invalid seller-outward direct closure"));
+    }
+
+    #[test]
+    fn closed_cycle_accepts_authenticated_self_funded_loop() {
+        let mut input = closed_cycle_input(400_000_000);
+        input.seller = input.funder;
+        for (index, buyer) in input.linked_buyers.iter().copied().enumerate() {
+            input.blocks[input.linked_buyers.len() + index] = settlement_block(
+                PERIOD_START_BLOCK + index as u64,
+                buyer,
+                input.seller,
+                400_000_000,
+                true,
+            );
+        }
+        input.closure = ClosureEvidence::SelfFunded;
+
+        let journal = verify_closed_cycle(&input).unwrap();
+        assert_eq!(journal.closure_kind, SELF_FUNDED_CLOSURE);
+        assert_eq!(journal.closure_path_count, 3);
     }
 
     #[test]
@@ -2115,40 +1176,6 @@ mod tests {
         assert!(!valid((1, 2, 3), (1, 3, 4), MINIMUM_USDC_FUNDING_RAW));
         assert!(!valid((1, 2, 3), (1, 2, 4), MINIMUM_USDC_FUNDING_RAW - 1));
         assert_eq!(keccak256("Deposited(address,uint256)"), DEPOSITED_TOPIC);
-    }
-
-    #[test]
-    fn rejects_duplicate_and_malformed_account_proofs() {
-        let address = address!("0000000000000000000000000000000000000001");
-        let block = EnforcementBlock {
-            header: Header {
-                number: STATE_START_BLOCK,
-                state_root: EMPTY_ROOT_HASH,
-                ..Default::default()
-            },
-            receipts: Vec::new(),
-            transactions: Vec::new(),
-        };
-        let missing = Eip1186AccountProof {
-            block: 0,
-            address,
-            exists: false,
-            nonce: 0,
-            balance: U256::ZERO,
-            storage_root: EMPTY_ROOT_HASH,
-            code_hash: KECCAK_EMPTY,
-            account_proof: Vec::new(),
-            storage_proofs: Vec::new(),
-        };
-        assert!(
-            StateResolver::authenticate(&[block.clone()], &[missing.clone(), missing.clone()])
-                .is_err()
-        );
-
-        let mut malformed = missing;
-        malformed.exists = true;
-        malformed.code_hash = DEPOSITS_CODE_HASH;
-        assert!(StateResolver::authenticate(&[block], &[malformed]).is_err());
     }
 
     fn reciprocal_input(

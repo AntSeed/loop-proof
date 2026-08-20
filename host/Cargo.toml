@@ -8,7 +8,6 @@ loop-core = { workspace = true }
 enforcement-core = { path = "../enforcement-core" }
 closed-cycle-methods = { path = "../closed-cycle-methods" }
 reciprocal-methods = { path = "../reciprocal-methods" }
-coordinated-control-methods = { path = "../coordinated-control-methods" }
 risc0-zkvm = { version = "3.0" }
 alloy-primitives = { workspace = true }
 alloy-consensus = { workspace = true }

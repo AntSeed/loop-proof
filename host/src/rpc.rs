@@ -79,7 +79,7 @@ impl Client {
         Err(last_err.unwrap_or_else(|| anyhow!("{method}: all endpoints failed")))
     }
 
-    /// Fetch and authenticate the consensus header used by state witnesses.
+    /// Fetch and authenticate a consensus header used by proof evidence.
     pub fn header(&self, number: u64) -> Result<alloy_consensus::Header> {
         let block = self.call(
             "eth_getBlockByNumber",
@@ -92,138 +92,6 @@ impl Client {
             bail!("block {number}: recomputed header hash differs from RPC hash");
         }
         Ok(header)
-    }
-
-    /// Fetch one EIP-1186 account/storage witness at an exact block.
-    /// Duplicate storage keys are removed before the RPC request and response.
-    pub fn state_proof(
-        &self,
-        block_position: usize,
-        block_number: u64,
-        address: Address,
-        slots: &[B256],
-    ) -> Result<enforcement_core::Eip1186AccountProof> {
-        let slots = slots
-            .iter()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>();
-        let response = self.call(
-            "eth_getProof",
-            json!([
-                format!("{address}"),
-                slots.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                format!("0x{block_number:x}")
-            ]),
-        )?;
-        let nonce = hex_u64(&response["nonce"])?;
-        let balance = parse_u256(&response["balance"])?;
-        let storage_root = parse_b256(&response["storageHash"])?;
-        let code_hash = parse_b256(&response["codeHash"])?;
-        let exists = nonce != 0
-            || balance != U256::ZERO
-            || storage_root != alloy_trie::EMPTY_ROOT_HASH
-            || code_hash != alloy_trie::KECCAK_EMPTY;
-        let account_proof = response["accountProof"]
-            .as_array()
-            .context("eth_getProof accountProof missing")?
-            .iter()
-            .map(|value| parse_hex_bytes(value).map(Bytes::from))
-            .collect::<Result<Vec<_>>>()?;
-        let mut storage_proofs = Vec::new();
-        let mut returned_slots = std::collections::BTreeSet::new();
-        for proof in response["storageProof"]
-            .as_array()
-            .context("eth_getProof storageProof missing")?
-        {
-            let slot = parse_b256(&proof["key"])?;
-            if !slots.contains(&slot) || !returned_slots.insert(slot) {
-                bail!("eth_getProof returned an unexpected or duplicate storage key");
-            }
-            storage_proofs.push(enforcement_core::Eip1186StorageProof {
-                slot,
-                value: parse_u256(&proof["value"])?,
-                proof: proof["proof"]
-                    .as_array()
-                    .context("eth_getProof storage proof nodes missing")?
-                    .iter()
-                    .map(|value| parse_hex_bytes(value).map(Bytes::from))
-                    .collect::<Result<Vec<_>>>()?,
-            });
-        }
-        if exists && returned_slots.len() != slots.len() {
-            bail!("eth_getProof omitted requested storage keys");
-        }
-        if !exists {
-            storage_proofs.clear();
-        }
-        storage_proofs.sort_unstable_by_key(|proof| proof.slot);
-        Ok(enforcement_core::Eip1186AccountProof {
-            block: block_position,
-            address,
-            exists,
-            nonce,
-            balance,
-            storage_root,
-            code_hash,
-            account_proof,
-            storage_proofs,
-        })
-    }
-
-    /// Fetch a large account witness in bounded RPC requests and merge the
-    /// storage paths into the single account proof expected by the guest.
-    pub fn state_proof_chunked(
-        &self,
-        block_position: usize,
-        block_number: u64,
-        address: Address,
-        slots: &[B256],
-        chunk_size: usize,
-    ) -> Result<enforcement_core::Eip1186AccountProof> {
-        if slots.is_empty() {
-            return self.state_proof(block_position, block_number, address, slots);
-        }
-        if chunk_size == 0 {
-            bail!("state proof chunk size must be nonzero");
-        }
-        let slots = slots
-            .iter()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let mut merged: Option<enforcement_core::Eip1186AccountProof> = None;
-        for chunk in slots.chunks(chunk_size) {
-            let proof = self.state_proof(block_position, block_number, address, chunk)?;
-            if let Some(existing) = merged.as_mut() {
-                if existing.block != proof.block
-                    || existing.address != proof.address
-                    || existing.exists != proof.exists
-                    || existing.nonce != proof.nonce
-                    || existing.balance != proof.balance
-                    || existing.storage_root != proof.storage_root
-                    || existing.code_hash != proof.code_hash
-                    || existing.account_proof != proof.account_proof
-                {
-                    bail!("eth_getProof account changed between chunked requests");
-                }
-                existing.storage_proofs.extend(proof.storage_proofs);
-            } else {
-                merged = Some(proof);
-            }
-        }
-        let mut merged = merged.context("chunked state proof produced no result")?;
-        merged
-            .storage_proofs
-            .sort_unstable_by_key(|proof| proof.slot);
-        if merged
-            .storage_proofs
-            .windows(2)
-            .any(|pair| pair[0].slot >= pair[1].slot)
-        {
-            bail!("chunked state proof contains duplicate storage keys");
-        }
-        Ok(merged)
     }
 
     /// Locate a transaction by its successful or reverted receipt.
@@ -239,15 +107,6 @@ impl Client {
             hex_u64(&receipt["blockNumber"])?,
             hex_u64(&receipt["transactionIndex"])?,
         ))
-    }
-
-    /// Fetch the exact account code at a historical block.
-    pub fn code_at(&self, address: Address, block_number: u64) -> Result<Bytes> {
-        let value = self.call(
-            "eth_getCode",
-            json!([format!("{address}"), format!("0x{block_number:x}")]),
-        )?;
-        Ok(parse_hex_bytes(&value)?.into())
     }
 
     // ── log discovery ──────────────────────────────────────────────────

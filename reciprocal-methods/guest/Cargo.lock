@@ -1055,10 +1055,8 @@ dependencies = [
  "alloy-consensus",
  "alloy-eips",
  "alloy-primitives",
- "alloy-rlp",
  "alloy-sol-types",
  "alloy-trie",
- "alloy-tx-macros",
  "loop-core",
  "serde",
 ]

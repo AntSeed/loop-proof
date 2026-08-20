@@ -16,7 +16,7 @@ test("coverage report deduplicates settlement logs across policies", () => {
     reportRoot: `0x${"2".repeat(64)}`,
     period: { startBlock: 1, endBlockExclusive: 2 },
     claims: [
-      { claimId: "cohort", type: "P1_COORDINATED_CONTROL", subjects: ["seller"], metrics: { qualifiedVolumeRaw: "2000000000" } },
+      { claimId: "cohort", type: "P0_CLOSED_LOOP", subjects: ["seller"], metrics: { qualifiedVolumeRaw: "2000000000" } },
       { claimId: "pair", type: "P0_RECIPROCAL", subjects: ["a", "b"], metrics: { volumeAToBRaw: "600000000", volumeBToARaw: "400000000" } },
     ],
   };
@@ -26,7 +26,7 @@ test("coverage report deduplicates settlement logs across policies", () => {
     reportRoot: bundle.reportRoot,
     claimCount: 2,
     claims: [
-      { claimId: "cohort", type: "P1_COORDINATED_CONTROL", subjects: ["seller"], selectedEvidence: [selected], selectedBlocks: [1], checkpointWindows: [] },
+      { claimId: "cohort", type: "P0_CLOSED_LOOP", subjects: ["seller"], selectedEvidence: [selected], selectedBlocks: [1], checkpointWindows: [] },
       { claimId: "pair", type: "P0_RECIPROCAL", subjects: ["a", "b"], selectedEvidence: [{ ...selected, evidenceType: "RECIPROCAL_SETTLEMENT" }], selectedBlocks: [1], checkpointWindows: [] },
     ],
   };
@@ -63,13 +63,13 @@ function coverageFixture() {
     chainId: 8_453,
     reportRoot,
     period: { startBlock: 1, endBlockExclusive: 2 },
-    claims: [{ claimId: "cohort", type: "P1_COORDINATED_CONTROL", subjects: ["seller"], metrics: { qualifiedVolumeRaw: "1000000000" } }],
+    claims: [{ claimId: "cohort", type: "P0_CLOSED_LOOP", subjects: ["seller"], metrics: { qualifiedVolumeRaw: "1000000000" } }],
   };
   const plan = {
     version: 1,
     reportRoot,
     claimCount: 1,
-    claims: [{ claimId: "cohort", type: "P1_COORDINATED_CONTROL", subjects: ["seller"], selectedEvidence, selectedBlocks: [1], checkpointWindows: [] }],
+    claims: [{ claimId: "cohort", type: "P0_CLOSED_LOOP", subjects: ["seller"], selectedEvidence, selectedBlocks: [1], checkpointWindows: [] }],
   };
   const journalBytes = "0x01";
   const journalDigest = `0x${createHash("sha256").update(Buffer.from("01", "hex")).digest("hex")}`;
@@ -81,7 +81,7 @@ function coverageFixture() {
     securityMode: "execute-only",
     entries: [{
       claimId: "cohort",
-      claimType: "P1_COORDINATED_CONTROL",
+      claimType: "P0_CLOSED_LOOP",
       subjects: ["seller"],
       imageId: "1".repeat(64),
       journalBytes,

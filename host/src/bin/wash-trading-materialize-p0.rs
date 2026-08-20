@@ -3,7 +3,6 @@ use anyhow::{bail, Context, Result};
 use enforcement_core::{
     ClosedCycleInput, ClosureEvidence, FundingKind, LogRef, PositiveFundingEvidence, ReceiptRef,
     ReciprocalInput, RelayPathEvidence, SettlementEvidence, TransactionRef, BASE_CHAIN_ID,
-    PREDICATE_VERSION,
 };
 use loop_host::rpc::Client;
 use serde::Deserialize;
@@ -27,6 +26,8 @@ struct PlannedClaim {
     #[serde(rename = "type")]
     claim_type: String,
     subjects: Vec<Address>,
+    #[serde(default)]
+    closure_type: Option<String>,
     selected_evidence: Vec<PlannedEvidence>,
 }
 
@@ -111,7 +112,7 @@ fn main() -> Result<()> {
                 journal.qualified_volume_raw as f64 / 1_000_000.0
             );
             (
-                "P0_CLOSED_CYCLE",
+                "P0_CLOSED_LOOP",
                 serde_json::to_value(input)?,
                 journal.claim_id,
             )
@@ -144,7 +145,7 @@ fn main() -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     let package = serde_json::json!({
-        "version": PREDICATE_VERSION,
+        "version": 1,
         "kind": "antseed-wash-trading-proof-witness",
         "enforceable": true,
         "proofType": proof_type,
@@ -308,7 +309,12 @@ fn build_closed_cycle(
         .iter()
         .filter(|entry| entry.evidence_type == "RELAY_PATH")
         .collect::<Vec<_>>();
-    let closure = if let Some(entry) = direct {
+    let closure = if claim.closure_type.as_deref() == Some("SELF_FUNDED") {
+        if seller != funder {
+            bail!("self-funded closure requires seller to equal funder");
+        }
+        ClosureEvidence::SelfFunded
+    } else if let Some(entry) = direct {
         ClosureEvidence::Direct {
             transfer: log_ref(
                 entry,
@@ -498,6 +504,25 @@ fn arg(args: &[String], flag: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proof_plan_deserializes_self_funded_closure_type() {
+        let plan: ProofPlan = serde_json::from_str(
+            r#"{
+                "chainId": 8453,
+                "claims": [{
+                    "claimId": "claim",
+                    "type": "P0_CLOSED_LOOP",
+                    "subjects": ["0x0000000000000000000000000000000000000001"],
+                    "closureType": "SELF_FUNDED",
+                    "selectedEvidence": []
+                }]
+            }"#,
+        )
+        .expect("self-funded proof plan should deserialize");
+
+        assert_eq!(plan.claims[0].closure_type.as_deref(), Some("SELF_FUNDED"));
+    }
 
     #[test]
     fn relay_evidence_flattens_without_state_proofs() {

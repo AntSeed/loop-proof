@@ -18,12 +18,10 @@ struct WitnessPackage {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "proofType", content = "input")]
 enum ProofInput {
-    #[serde(rename = "P0_CLOSED_CYCLE")]
+    #[serde(rename = "P0_CLOSED_LOOP")]
     ClosedCycle(enforcement_core::ClosedCycleInput),
     #[serde(rename = "P0_RECIPROCAL")]
     Reciprocal(enforcement_core::ReciprocalInput),
-    #[serde(rename = "P1_COORDINATED_CONTROL")]
-    CoordinatedControl(enforcement_core::CoordinatedControlInput),
 }
 
 #[derive(Debug, Serialize)]
@@ -75,9 +73,7 @@ fn main() -> Result<()> {
         &fs::read(&input_path).with_context(|| format!("read {input_path}"))?,
     )
     .with_context(|| format!("decode {input_path}"))?;
-    if package.version != enforcement_core::PREDICATE_VERSION
-        || package.kind != "antseed-wash-trading-proof-witness"
-    {
+    if package.version != 1 || package.kind != "antseed-wash-trading-proof-witness" {
         bail!("expected the current self-contained witness package");
     }
     if !package.enforceable {
@@ -96,7 +92,7 @@ fn main() -> Result<()> {
                 closed_cycle_methods::CLOSED_CYCLE_GUEST_ID,
                 prove,
             )?;
-            entry(journal.claim_id, "P0_CLOSED_CYCLE", execution)
+            entry(journal.claim_id, "P0_CLOSED_LOOP", execution)
         }
         ProofInput::Reciprocal(input) => {
             let journal =
@@ -111,23 +107,10 @@ fn main() -> Result<()> {
             )?;
             entry(journal.claim_id, "P0_RECIPROCAL", execution)
         }
-        ProofInput::CoordinatedControl(input) => {
-            let journal =
-                enforcement_core::verify_coordinated_control(&input).map_err(anyhow::Error::msg)?;
-            let expected = journal.abi_encode();
-            let execution = execute_or_prove(
-                &input,
-                expected,
-                coordinated_control_methods::COORDINATED_CONTROL_GUEST_ELF,
-                coordinated_control_methods::COORDINATED_CONTROL_GUEST_ID,
-                prove,
-            )?;
-            entry(journal.claim_id, "P1_COORDINATED_CONTROL", execution)
-        }
     };
 
     let manifest = ProofManifest {
-        version: enforcement_core::PREDICATE_VERSION,
+        version: 1,
         kind: "antseed-wash-trading-proof-results",
         chain_id: enforcement_core::BASE_CHAIN_ID,
         security_mode: if production {

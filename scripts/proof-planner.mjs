@@ -109,7 +109,7 @@ function uniqueRpcRequests(dependencies, method) {
 
 export function planClaim(claim, dependencies, bundle) {
   if (claim.type === "P0_RECIPROCAL") return planReciprocal(claim, dependencies, bundle);
-  if (!["P0_CLOSED_LOOP", "P1_COORDINATED_CONTROL"].includes(claim.type)) throw new Error(`${claim.claimId}: unsupported claim type ${claim.type}`);
+  if (claim.type !== "P0_CLOSED_LOOP") throw new Error(`${claim.claimId}: unsupported claim type ${claim.type}`);
   return planCohort(claim, dependencies, bundle);
 }
 
@@ -198,10 +198,9 @@ async function resolveDependency(dependency, bundle, callRpc) {
 }
 
 function planCohort(claim, dependencies, bundle) {
-  const requiresClosure = claim.type === "P0_CLOSED_LOOP";
   const strategyCandidates = [
-    ...buildCohortStrategies("USDC", claim, dependencies, requiresClosure),
-    ...buildCohortStrategies("NATIVE", claim, dependencies, requiresClosure),
+    ...buildCohortStrategies("USDC", claim, dependencies),
+    ...buildCohortStrategies("NATIVE", claim, dependencies),
   ];
   if (strategyCandidates.length === 0) throw new Error(`${claim.claimId}: no valid cohort funding strategy; ${cohortDiagnostics(claim, dependencies)}`);
   strategyCandidates.sort(compareCost);
@@ -229,15 +228,13 @@ function cohortDiagnostics(claim, dependencies) {
   }).join("; ");
 }
 
-function buildCohortStrategies(strategy, claim, dependencies, requiresClosure) {
+function buildCohortStrategies(strategy, claim, dependencies) {
   const fundingType = strategy === "USDC" ? "USDC_FUNDING" : "NATIVE_FUNDING";
   const fundings = dependencies.filter((entry) => entry.evidenceType === fundingType && claim.approvedBuyers.includes(entry.buyer) && claim.approvedFunders.includes(entry.funder));
   const settlements = dependencies.filter((entry) => entry.evidenceType === "SETTLEMENT" && claim.approvedBuyers.includes(entry.buyer));
   const funderGroups = [...new Set(fundings.map((entry) => entry.funder))].sort();
   return funderGroups.flatMap((selectedFunder) => {
-    const closure = requiresClosure
-      ? selectClosureForFunder(dependencies, selectedFunder, claim.approvedBuyers, claim.subjects[0])
-      : { evidence: [], evidenceClass: null, rejected: [] };
+    const closure = selectClosureForFunder(dependencies, selectedFunder, claim.approvedBuyers, claim.subjects[0]);
     if (!closure) return [];
     const candidate = buildCohortStrategy(strategy, fundings.filter((entry) => entry.funder === selectedFunder), settlements, closure);
     return candidate ? [candidate] : [];
@@ -465,14 +462,13 @@ function planReciprocal(claim, dependencies, bundle) {
 }
 
 function selectClosureForFunder(dependencies, funder, approvedBuyers, seller) {
+  if (normalize(funder) === normalize(seller)) return { evidence: [], evidenceClass: "SELF_FUNDED", rejected: [] };
   const classes = ["DIRECT_SELLER_FUNDER", "DIRECT_SELLER_BUYER", "RELAY_PATH"];
   const rejected = [];
   for (const evidenceClass of classes) {
     const candidates = dependencies.filter((entry) => entry.evidenceType === evidenceClass
       && (evidenceClass !== "DIRECT_SELLER_BUYER" || approvedBuyers.includes(entry.buyer))
       && (evidenceClass === "DIRECT_SELLER_BUYER" || entry.funder === funder)
-      && (evidenceClass !== "DIRECT_SELLER_FUNDER" || funder !== seller)
-      && (evidenceClass !== "DIRECT_SELLER_BUYER" || entry.buyer !== seller)
       && atomicEvidence(entry).every(nonSelfTransfer)
       && (evidenceClass === "RELAY_PATH" || BigInt(entry.amountRaw) > 0n));
     if (candidates.length === 0) continue;
@@ -618,21 +614,24 @@ function minimumReciprocalReceipts(entries, claim) {
   const byAmount = (left, right) => BigInt(right.amountRaw) > BigInt(left.amountRaw) ? 1 : BigInt(right.amountRaw) < BigInt(left.amountRaw) ? -1 : compareEvidence(left, right);
   const aToB = entries.filter((entry) => entry.buyer === claim.walletA && entry.seller === claim.walletB).sort(byAmount);
   const bToA = entries.filter((entry) => entry.buyer === claim.walletB && entry.seller === claim.walletA).sort(byAmount);
-  let best = null;
-  for (let countAToB = 10; countAToB <= 90; countAToB += 1) {
-    const countBToA = 100 - countAToB;
-    if (aToB.length < countAToB || bToA.length < countBToA) continue;
-    const selectedAToB = aToB.slice(0, countAToB);
-    const selectedBToA = bToA.slice(0, countBToA);
-    const volumeAToB = sumRaw(selectedAToB);
-    const volumeBToA = sumRaw(selectedBToA);
-    if (!reciprocalVolumesQualify(volumeAToB, volumeBToA)) continue;
-    const selected = [...selectedAToB, ...selectedBToA].sort(compareEvidence);
-    const candidate = { selected, cost: costTuple(selected) };
-    if (!best || compareCost(candidate, best) < 0) best = candidate;
+  for (let totalCount = 100; totalCount <= aToB.length + bToA.length; totalCount += 1) {
+    let best = null;
+    const minimumAToB = Math.max(10, totalCount - bToA.length);
+    const maximumAToB = Math.min(aToB.length, totalCount - 10);
+    for (let countAToB = minimumAToB; countAToB <= maximumAToB; countAToB += 1) {
+      const countBToA = totalCount - countAToB;
+      const selectedAToB = aToB.slice(0, countAToB);
+      const selectedBToA = bToA.slice(0, countBToA);
+      const volumeAToB = sumRaw(selectedAToB);
+      const volumeBToA = sumRaw(selectedBToA);
+      if (!reciprocalVolumesQualify(volumeAToB, volumeBToA)) continue;
+      const selected = [...selectedAToB, ...selectedBToA].sort(compareEvidence);
+      const candidate = { selected, cost: costTuple(selected) };
+      if (!best || compareCost(candidate, best) < 0) best = candidate;
+    }
+    if (best) return best.selected;
   }
-  if (!best) throw new Error("reciprocal selection cannot satisfy count, directional volume, and 80% reciprocity");
-  return best.selected;
+  throw new Error("reciprocal selection cannot satisfy count, directional volume, and 80% reciprocity");
 }
 
 function reciprocalVolumesQualify(volumeAToB, volumeBToA) {
