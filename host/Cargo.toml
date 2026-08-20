@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 loop-core = { workspace = true }
-methods = { workspace = true }
 enforcement-core = { path = "../enforcement-core" }
 closed-cycle-methods = { path = "../closed-cycle-methods" }
 reciprocal-methods = { path = "../reciprocal-methods" }

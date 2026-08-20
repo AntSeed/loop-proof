@@ -1,7 +1,7 @@
-# AntSeed Wash-Trading Proofs — Predicate v3
+# AntSeed Wash-Trading Proofs
 
-This workspace contains the three RISC Zero predicates used by AntSeed's
-wash-trading enforcement path:
+This workspace contains the single active AntSeed wash-trading proof system.
+It exposes three RISC Zero predicate images:
 
 1. **P0 closed cycle** — a common funder bootstraps buyers, those buyers settle
    with one seller, and value later returns outward from that seller.
@@ -28,10 +28,9 @@ The onchain registry is
 
 ## Fixed Scope and Constants
 
-| Item | Predicate-v3 value |
+| Item | Value |
 |---|---:|
 | Base chain ID | `8453` |
-| Predicate version | `3` |
 | Included settlement blocks | `44,471,575` through `49,936,172` |
 | Journal period | `[44,471,575, 49,936,173)` |
 | Start state boundary | `44,471,574` |
@@ -104,7 +103,7 @@ P1-only pinned storage derivations are:
 - Seller and buyer counter evidence must cover both emissions contracts and
   every epoch `0` through `18` exactly once for the requested subject.
 
-The observed first new-emissions pointer block is `45,937,736`. Predicate v3
+The observed first new-emissions pointer block is `45,937,736`. The predicate
 does not trust the pointer as a volume oracle: it authenticates and sums the
 boundary deltas from both pinned emissions contracts directly.
 
@@ -169,7 +168,7 @@ For them, the proof requires:
 - The pinned owner slot decodes to a nonzero owner.
 - The pinned plugin-count slot is zero.
 
-The smart-account address—not its owner—is the funder identity. Predicate v3
+The smart-account address—not its owner—is the funder identity. The predicate
 does not merge the owner and smart-account addresses into one funder.
 
 #### Native ETH funding
@@ -184,7 +183,7 @@ does not merge the owner and smart-account addresses into one funder.
 
 Native ETH funding is intentionally **not** supported for smart-contract
 funders. A top-level Ethereum transaction cannot originate from a contract
-account, and predicate v3 does not authenticate internal native-value call
+account, and the predicate does not authenticate internal native-value call
 traces.
 
 ## P0 Closed-Cycle Guarantee
@@ -222,6 +221,7 @@ A direct closure proves one successful Base USDC transfer:
 
 - `from = seller`;
 - `to = exact funder` or `to = one linked buyer`;
+- `from != to`, so an ERC-20 self-transfer cannot close the cycle;
 - `amount >= 1 USDC`;
 - the transfer is inside the fixed period; and
 - the transfer occurs strictly after the threshold-crossing settlement.
@@ -238,6 +238,7 @@ successful Base USDC transfer logs with this exact shape:
 
 For every path:
 
+- every transfer moves between different addresses;
 - the seller payment occurs after the threshold crossing;
 - all three transfers are in strict chain order and inside the fixed period;
 - no transfer log is reused in any relay path;
@@ -251,7 +252,7 @@ For every path:
 - the final funder receipt either loses no more than `1 USDC` or preserves at
   least `98%` of the seller payment.
 
-Predicate v3 prevents transfer-log reuse; it does not require relay addresses
+The predicate prevents transfer-log reuse; it does not require relay addresses
 to be distinct within one path or across different paths.
 
 ### Closed-cycle journal and penalties
@@ -437,7 +438,7 @@ Emergency policy removal remains available through the existing points-policy
 registry. There is no claim-level owner override or mutable enforcement
 allowlist in the wash-trading registry.
 
-## What Predicate v3 Does Not Prove
+## What The predicate Does Not Prove
 
 These limitations are intentional and security-relevant:
 
@@ -475,7 +476,7 @@ BASE_RPC_URL="$BASE_RPC_URL" \
   cargo run --release -p loop-host --bin wash-trading-materialize-p0 -- \
   --plan /absolute/path/to/proof-plan.json \
   --claim-id 0xClaimId \
-  --output cases/p0-witness-v3.json
+  --output out/p0-witness.json
 ```
 
 Materialize a P1 coordinated-control witness from the frozen scan with a Base
@@ -489,13 +490,13 @@ BASE_ARCHIVE_RPC_URL="$ARCHIVE_BASE_RPC_URL" \
   cargo run --release -p loop-host --bin wash-trading-materialize -- \
   --scan-dir /absolute/path/to/scan \
   --seller 0xSeller \
-  --output cases/p1-witness-v3.json
+  --output out/p1-witness.json
 ```
 
-Use `--funders 0xFunderA,0xFunderB` to restrict materialization to specific
-exact funders. Without it, the materializer chooses threshold-sufficient
-cohorts deterministically. Every included funder must fund at least three
-selected buyers. Native funding and protocol deposits are supported; a
+Use `--funders 0xFunderA,0xFunderB` to provide an allowlist of candidate exact
+funders. Without it, the materializer considers every supported candidate. It
+then chooses one threshold-sufficient exact-funder cohort deterministically;
+cohorts from different funders are never aggregated. Native funding and protocol deposits are supported; a
 seller may be its own exact funder. The materializer authenticates receipt,
 transaction, account, channel, deposit, and emissions-counter proofs and runs
 native predicate verification before writing the package.
@@ -509,20 +510,19 @@ reads while limiting archive-node usage to missing witness data. Without
 fixed boundary fails the initial archive preflight and cannot produce a valid
 witness.
 
-The predicate-v3 prover accepts one self-contained witness package per
+The current prover accepts one self-contained witness package per
 invocation:
 
 ```bash
 cd loop-proof
 
 cargo run -p loop-host --bin wash-trading-prove -- \
-  --input proof-witness-v3.json \
-  --output proof-result-v3.json
+  --input proof-witness.json \
+  --output proof-result.json
 ```
 
-The witness package must have:
+The materializers produce the only supported witness package shape. It has:
 
-- `version: 3`;
 - `kind: "antseed-wash-trading-proof-witness"`;
 - `enforceable: true`; and
 - exactly one `proofType` and corresponding predicate input.
@@ -532,8 +532,8 @@ both `--production` and `RISC0_DEV_MODE=0`:
 
 ```bash
 RISC0_DEV_MODE=0 cargo run --release -p loop-host --bin wash-trading-prove -- \
-  --input proof-witness-v3.json \
-  --output proof-result-v3.json \
+  --input proof-witness.json \
+  --output proof-result.json \
   --prove \
   --production
 ```
@@ -548,13 +548,13 @@ Submit production results sequentially with the resumable script:
 cd ../antseed/packages/contracts
 
 node scripts/submit-wash-trading-proofs.mjs \
-  --manifest /absolute/path/proof-result-v3.json \
+  --manifest /absolute/path/proof-result.json \
   --registry 0xRegistryAddress \
   --rpc-url "$ANTSEED_BASE_RPC_URL" \
   --dry-run
 
 node scripts/submit-wash-trading-proofs.mjs \
-  --manifest /absolute/path/proof-result-v3.json \
+  --manifest /absolute/path/proof-result.json \
   --registry 0xRegistryAddress \
   --rpc-url "$ANTSEED_BASE_RPC_URL" \
   --submit
@@ -571,7 +571,7 @@ case can be submitted independently with its own result manifest.
 
 Analysis classifies cases as:
 
-- `proof-ready` — eligible for predicate-v3 production proving;
+- `proof-ready` — eligible for current production proving;
 - `analysis-only-router-attribution` — retained in analytics but refused by
   production proving and submission; or
 - `fails-predicate` — does not meet the predicate thresholds.
@@ -585,10 +585,12 @@ cycle, 24 reciprocal pairs, and 14 coordinated-control cohorts.
 
 | Responsibility | File |
 |---|---|
+| Shared receipt parsing and trie verification | [`core/src/lib.rs`](core/src/lib.rs) |
 | Predicate constants, witnesses, state/receipt proofs, thresholds, journals | [`enforcement-core/src/lib.rs`](enforcement-core/src/lib.rs) |
 | Closed-cycle guest | [`closed-cycle-methods/guest/src/main.rs`](closed-cycle-methods/guest/src/main.rs) |
 | Reciprocal guest | [`reciprocal-methods/guest/src/main.rs`](reciprocal-methods/guest/src/main.rs) |
 | Coordinated-control guest | [`coordinated-control-methods/guest/src/main.rs`](coordinated-control-methods/guest/src/main.rs) |
+| P0 plan-to-witness materializer | [`host/src/bin/wash-trading-materialize-p0.rs`](host/src/bin/wash-trading-materialize-p0.rs) |
 | P1 scan-to-witness materializer | [`host/src/bin/wash-trading-materialize.rs`](host/src/bin/wash-trading-materialize.rs) |
 | Witness execution and proof packaging | [`host/src/bin/wash-trading-prove.rs`](host/src/bin/wash-trading-prove.rs) |
 | EIP-1186 RPC fetching | [`host/src/rpc.rs`](host/src/rpc.rs) |

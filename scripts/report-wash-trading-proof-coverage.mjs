@@ -10,7 +10,7 @@ async function main() {
   const planPath = value("--plan");
   const resultsPath = value("--results");
   const outPath = value("--out");
-  if (!bundlePath || !planPath || !outPath) throw new Error("usage: node report-wash-trading-proof-coverage.mjs --bundle proof-bundle-v1.json --plan proof-plan-v1.json [--results proof-results-v1.json] --out proof-coverage-v1.json");
+  if (!bundlePath || !planPath || !outPath) throw new Error("usage: node report-wash-trading-proof-coverage.mjs --bundle proof-bundle.json --plan proof-plan.json [--results proof-results.json] --out proof-coverage.json");
   const bundle = JSON.parse(await readFile(bundlePath, "utf8"));
   const plan = JSON.parse(await readFile(planPath, "utf8"));
   const results = resultsPath ? JSON.parse(await readFile(resultsPath, "utf8")) : null;
@@ -20,7 +20,7 @@ async function main() {
 }
 
 export function buildCoverageReport(bundle, plan, results = null) {
-  if (bundle?.version !== 1 || plan?.version !== 1 || bundle.reportRoot !== plan.reportRoot) throw new Error("bundle and plan do not share a v1 report root");
+  if (bundle?.version !== 1 || plan?.version !== 1 || bundle.reportRoot !== plan.reportRoot) throw new Error("bundle and plan do not share the current report root");
   const bundleClaims = new Map(bundle.claims.map((claim) => [claim.claimId, claim]));
   const plannedClaims = new Map(plan.claims.map((claim) => [claim.claimId, claim]));
   if (bundleClaims.size !== bundle.claims.length) throw new Error("proof bundle contains duplicate claim IDs");
@@ -126,7 +126,7 @@ export function buildCoverageReport(bundle, plan, results = null) {
     interpretation: [
       "Every completed claim proves its compact enforcement predicate and approved-report membership.",
       "Authenticated selected volume is the unique USDC settlement amount actually included in the compact proofs.",
-      "Report-root classified volume is governance-approved completeness data; v1 does not authenticate every contributing settlement.",
+      "Report-root classified volume is governance-approved completeness data; the report bundle does not authenticate every contributing settlement.",
       "Development receipts are execution tests and cannot be submitted as production zk proofs.",
     ],
     perClaim,

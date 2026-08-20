@@ -39,9 +39,10 @@ BEACON_API_URL=https://ethereum-beacon-api.publicnode.com
 cargo test -p checkpoint-core
 
 # Read-only planning: resolve selected windows at finalized Ethereum state.
+jq '.checkpointSelection' ../out/proof-plan.json > ../out/checkpoint-selection.json
 cargo run --release -p checkpoint-host --bin checkpoint-plan -- \
-  --selection ../cases/flash-selection.json \
-  --out ../cases/flash-checkpoint-plan.json
+  --selection ../out/checkpoint-selection.json \
+  --out ../out/checkpoint-plan.json
 
 cargo run --release -p checkpoint-host -- --journal-out checkpoint-journal.hex
 RISC0_DEV_MODE=1 cargo run --release -p checkpoint-host -- \
@@ -92,10 +93,10 @@ cargo run --release -p checkpoint-host --bin checkpoint-history -- \
   --artifact-dir history-artifacts tx-plan \
   --oracle 0x...
 
-# Materialize only historical blocks referenced by accepted seller fixtures.
+# Materialize only historical blocks referenced by an accepted current witness.
 cargo run --release -p checkpoint-host --bin checkpoint-history -- \
   --artifact-dir history-artifacts materialize-plan \
-  --oracle 0x... --seller-fixture ../cases/flash-fixture.json
+  --oracle 0x... --seller-fixture ../out/proof-witness.json
 ```
 
 Every fetch, dry run, and proof transition is persisted in `manifest.json`.

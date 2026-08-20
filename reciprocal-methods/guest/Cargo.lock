@@ -1386,7 +1386,6 @@ dependencies = [
  "alloy-consensus",
  "alloy-primitives",
  "alloy-rlp",
- "alloy-sol-types",
  "alloy-trie",
  "serde",
 ]

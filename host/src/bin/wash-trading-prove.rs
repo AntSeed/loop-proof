@@ -60,8 +60,8 @@ struct GuestExecution {
 fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let args = env::args().skip(1).collect::<Vec<_>>();
-    let input_path = arg(&args, "--input").context("missing --input <proof-witness-v3.json>")?;
-    let output_path = arg(&args, "--output").context("missing --output <proof-result-v3.json>")?;
+    let input_path = arg(&args, "--input").context("missing --input <proof-witness.json>")?;
+    let output_path = arg(&args, "--output").context("missing --output <proof-result.json>")?;
     let prove = args.iter().any(|value| value == "--prove");
     let production = args.iter().any(|value| value == "--production");
     if production && !prove {
@@ -78,7 +78,7 @@ fn main() -> Result<()> {
     if package.version != enforcement_core::PREDICATE_VERSION
         || package.kind != "antseed-wash-trading-proof-witness"
     {
-        bail!("expected a predicate-v3 self-contained witness package");
+        bail!("expected the current self-contained witness package");
     }
     if !package.enforceable {
         bail!("analysis-only/router-attribution cases cannot be proven or submitted");

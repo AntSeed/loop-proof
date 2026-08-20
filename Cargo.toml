@@ -4,7 +4,6 @@ members = [
   "core",
   "enforcement-core",
   "host",
-  "methods",
   "closed-cycle-methods",
   "reciprocal-methods",
   "coordinated-control-methods",
@@ -12,7 +11,6 @@ members = [
 
 [workspace.dependencies]
 loop-core = { path = "core" }
-methods = { path = "methods" }
 
 alloy-primitives = { version = "=1.4.1", default-features = false, features = ["rlp", "serde"] }
 alloy-consensus = { version = "=1.1.0", default-features = false, features = ["serde", "k256"] }

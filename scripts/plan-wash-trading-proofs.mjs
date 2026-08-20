@@ -7,7 +7,7 @@ const bundlePath = value("--bundle");
 const outPath = value("--out");
 const rpcUrl = value("--rpc-url") ?? process.env.ANTSEED_BASE_RPC_URL ?? process.env.BASE_RPC_URL;
 if (!bundlePath || !outPath || !rpcUrl) {
-  console.error("usage: node scripts/plan-wash-trading-proofs.mjs --bundle proof-bundle-v1.json --out proof-plan-v1.json [--rpc-url URL]");
+  console.error("usage: node scripts/plan-wash-trading-proofs.mjs --bundle proof-bundle.json --out proof-plan.json [--rpc-url URL]");
   process.exit(2);
 }
 const claimIds = args.flatMap((argument, index) => argument === "--claim-id" ? [args[index + 1]] : []);

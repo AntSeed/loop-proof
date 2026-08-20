@@ -2633,7 +2633,6 @@ dependencies = [
  "alloy-consensus",
  "alloy-primitives",
  "alloy-rlp",
- "alloy-sol-types",
  "alloy-trie",
  "serde",
 ]
@@ -2653,7 +2652,6 @@ dependencies = [
  "dotenvy",
  "enforcement-core",
  "loop-core",
- "methods",
  "op-alloy-consensus",
  "rayon",
  "reciprocal-methods",
@@ -2732,13 +2730,6 @@ dependencies = [
  "log",
  "objc",
  "paste",
-]
-
-[[package]]
-name = "methods"
-version = "0.1.0"
-dependencies = [
- "risc0-build",
 ]
 
 [[package]]
