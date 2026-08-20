@@ -355,7 +355,7 @@ fn select_minimum_receipts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_primitives::B256;
+    use alloy_primitives::{Address, B256};
 
     fn candidate(
         buyer_index: usize,
@@ -365,6 +365,7 @@ mod tests {
         BuyerSettlementCandidate {
             buyer_index,
             settlement: SettlementCandidate {
+                buyer: Address::ZERO,
                 block_number,
                 transaction_hash: B256::with_last_byte((block_number % 255) as u8),
                 transaction_index: 0,

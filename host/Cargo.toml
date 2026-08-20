@@ -6,13 +6,20 @@ edition = "2021"
 [dependencies]
 loop-core = { workspace = true }
 methods = { workspace = true }
+enforcement-core = { path = "../enforcement-core" }
+cohort-methods = { path = "../cohort-methods" }
+reciprocal-methods = { path = "../reciprocal-methods" }
 risc0-zkvm = { version = "3.0" }
 alloy-primitives = { workspace = true }
 alloy-consensus = { workspace = true }
+alloy-eips = { workspace = true }
+alloy-network = { workspace = true }
 alloy-trie = { workspace = true }
+op-alloy-consensus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ureq = { version = "2", features = ["json"] }
 sha2 = "0.10"
 anyhow = "1"
 dotenvy = "0.15"
+rayon = "1"

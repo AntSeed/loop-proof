@@ -704,6 +704,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cohort-guest"
+version = "0.1.0"
+dependencies = [
+ "enforcement-core",
+ "risc0-zkvm",
+]
+
+[[package]]
 name = "const-hex"
 version = "1.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1049,6 +1057,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
+name = "enforcement-core"
+version = "0.1.0"
+dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
+ "alloy-primitives",
+ "alloy-sol-types",
+ "alloy-trie",
+ "loop-core",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "enum-ordinalize"
 version = "4.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1374,14 +1397,6 @@ dependencies = [
  "alloy-sol-types",
  "alloy-trie",
  "serde",
-]
-
-[[package]]
-name = "loop-guest"
-version = "0.1.0"
-dependencies = [
- "loop-core",
- "risc0-zkvm",
 ]
 
 [[package]]

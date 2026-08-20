@@ -59,6 +59,70 @@ AggregateVerifier fixture. Production automation must consume the generated
 plan and archive each Steel beacon root before Base's EIP-4788 retention window
 expires.
 
+## Historical deployment backfill
+
+`checkpoint-history` bridges the pre-AggregateVerifier AntSeed range
+`44,469,557..46,302,990` to the authenticated checkpoint at block
+`46,302,990`. It uses 112 independent, resumable chunks in newest-to-oldest
+order. Each chunk contains at most 16,384 canonical Base headers and commits to
+a fixed-depth positional Merkle root, so only seller-evidence blocks need to be
+materialized onchain.
+
+```bash
+cd checkpoint
+
+# Fetch all 112 witnesses. Use --chunks 0 for the newest chunk only.
+# Completed pages are cached atomically, so rerunning resumes an interrupted
+# chunk. Raise --request-interval-ms when the provider returns HTTP 429.
+cargo run --release -p checkpoint-host --bin checkpoint-history -- \
+  --artifact-dir history-artifacts fetch \
+  --concurrency 4 --page-size 512 --request-interval-ms 250
+
+# Execute locally, record cycle counts, and enforce the 1B-cycle limit.
+cargo run --release -p checkpoint-host --bin checkpoint-history -- \
+  --artifact-dir history-artifacts dry-run
+
+# Paid proving is impossible without both explicit price and confirmation.
+cargo run --release -p checkpoint-host --bin checkpoint-history -- \
+  --artifact-dir history-artifacts prove \
+  --max-price "0.01 USD" --confirm-paid-proving
+
+# Produce calldata only; this command never broadcasts transactions.
+cargo run --release -p checkpoint-host --bin checkpoint-history -- \
+  --artifact-dir history-artifacts tx-plan \
+  --oracle 0x...
+
+# Materialize only historical blocks referenced by accepted seller fixtures.
+cargo run --release -p checkpoint-host --bin checkpoint-history -- \
+  --artifact-dir history-artifacts materialize-plan \
+  --oracle 0x... --seller-fixture ../cases/flash-fixture.json
+```
+
+Every fetch, dry run, and proof transition is persisted in `manifest.json`.
+Partial fetches additionally persist canonical RLP header pages beside the
+manifest; their numbering, encoding, and parent links are revalidated before
+every resume. The manifest records the input SHA-256, image ID, expected
+journal digest, cycle count, Boundless request ID, seal, and journal. A resumed
+command rejects changed inputs or journals. Paid proving additionally requires
+`BOUNDLESS_REQUESTOR_KEY` and a configured Pinata, S3, or GCS uploader.
+
+The Base deployment requires `HISTORICAL_CHUNK_IMAGE_ID` alongside the existing
+checkpoint and seller image IDs. Production flow first submits the existing
+checkpoint proof for block `46,302,990`, calls `beginHistoricalBackfill`, then
+submits the 112 chunk proofs newest-to-oldest. No command broadcasts deployment
+or submissions automatically.
+
+The current pinned historical-chunk image ID is
+`c1cc15f700032158b03f782aaa7aa23f02851ab6f6a0ba8452beb504eecf0475`.
+
+The 16,384-header geometry was measured after routing both canonical-header and
+Merkle hashing through RISC Zero's Keccak coprocessor. A full synthetic chunk
+with production-shaped post-Cancun headers produced a 10,748,564-byte input,
+712,438,437 user cycles, and 786,563,072 padded RV32 cycles across 751 segments.
+The guest journal exactly matched native validation. The same benchmark before
+accelerated header hashing required 2,584,739,840 padded cycles, so the
+accelerated path is required to satisfy the 1-billion-cycle admission limit.
+
 ## Current measurement
 
 A live Base mainnet run on 2026-08-19 authenticated a target 28 blocks behind

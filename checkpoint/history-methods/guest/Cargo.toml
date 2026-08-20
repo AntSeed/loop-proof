@@ -1,0 +1,16 @@
+[package]
+name = "history-guest"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+alloy-primitives = { version = "1.5.3", default-features = false, features = ["rlp", "serde", "tiny-keccak"] }
+alloy-sol-types = { version = "1.5.3", default-features = false }
+history-core = { path = "../../history-core" }
+risc0-zkvm = { version = "3.0", default-features = false, features = ["std"] }
+
+[profile.release]
+lto = "thin"
+opt-level = 3

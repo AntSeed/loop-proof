@@ -1,8 +1,9 @@
 # AntSeed Seller-Penalty Proof
 
 This workspace contains the RISC Zero proof used by AntSeed's wash-trading
-**enforcement** path. It proves one conservative, positive-evidence statement
-about one seller. It does not prove or enforce the full analytics report in
+**enforcement** path. It proves one seller claim and can additionally reproduce
+the exact settlement totals of an approved seller-report snapshot. It does not
+prove or enforce every finding in the analytics report in
 `../analyses/wash-trading`.
 
 ## Enforcement rule
@@ -22,6 +23,12 @@ The pinned guest proves all of the following:
    **1,000 USDC**.
 6. No onchain log may be counted twice.
 7. Every receipt is included in the receipts trie of its supplied Base header.
+8. Every settlement in the approved seller-report snapshot is authenticated,
+   unique, canonically ordered, and inside the fixed report period.
+9. The authenticated snapshot reproduces its exact total volume, suspected
+   volume, suspected-buyer count, and deterministic evidence root.
+10. The proven common-funder cohort represents at least 50% of the approved
+    report total. The registry pins both the report ID and evidence root.
 
 If the proof and all referenced Base block hashes are accepted onchain, the
 seller receives a fixed `9,000 BPS` reduction in **future seller points**.
@@ -40,6 +47,8 @@ The guest commits an ABI-encoded `SellerPenaltyJournal` containing:
 - linked-buyer and relay-hop counts;
 - fixed penalty BPS;
 - proven seller outflow, total buyer funding, and suspicious volume;
+- approved-report total and suspected volumes, suspected-buyer count, period,
+  report ID, and deterministic evidence root;
 - earliest funding and latest settlement blocks;
 - every referenced `(block number, block hash)`.
 
@@ -78,23 +87,25 @@ checkpointing them at the time.
 RPC and Beacon API responses are witnesses, not trust assumptions. Invalid
 responses fail inside Steel or the checkpoint guest.
 
-## Why fraud proofs are not required
+## Why this path has no fraud-proof challenge
 
-The enforcement rule uses only **monotonic positive evidence**:
+The common-funder enforcement evidence is monotonic:
 
 - every included fact is authenticated;
 - adding valid evidence can only strengthen or preserve the result;
 - omitting evidence can only reduce the buyer count or proven volume;
 - reduced evidence can only make the penalty harder to obtain.
 
-A prover therefore cannot create a false penalty by hiding unfavorable data.
-They can only fail to penalize a seller that might deserve a penalty. That
-false-negative direction is acceptable for this policy; false-positive seller
-penalties are not.
+A prover therefore cannot create a common-funder link by hiding unfavorable
+data. The full-report mode additionally prevents a prover from substituting a
+smaller report snapshot: deployment pins the approved report ID and evidence
+root, and the guest must reproduce the exact pinned totals from authenticated
+receipts.
 
-This is why enforcement no longer has an evidence root, findings root,
-candidate proposal, 14-day challenge window, revisions, watcher requirement,
-fraud-proof guest, or finding-materialization step.
+This design deliberately trusts the governance-approved report snapshot. It
+does not prove that the offchain report discovery process found every event on
+Base. A permissionless completeness claim would still need either complete
+event enumeration inside ZK or a challenge/fraud-proof mechanism.
 
 ## What is not proven
 
@@ -103,9 +114,11 @@ This proof does **not** establish:
 - complete seller, buyer, transfer, or settlement activity;
 - that the selected funder was the first or primary funder;
 - that the proven buyers are all of the seller's buyers;
-- any percentage of the seller's total volume;
+- that the approved report snapshot contains every historical settlement;
 - the absence of organic buyers or legitimate activity;
-- the full P0/P1 analytics report;
+- the report's ≥99% buyer classification rule from every buyer's activity with
+  other sellers; the approved snapshot supplies that fixed classification;
+- the full multi-seller P0/P1 analytics report;
 - that every dishonest seller is detected.
 
 Those completeness-dependent claims may still be useful in the separate
@@ -125,8 +138,14 @@ analytics/reporting system, but they do not control rewards.
 - `core/` — input types, receipt authentication, predicate, and ABI journal.
 - `methods/guest/` — RISC Zero guest entrypoint.
 - `host/` — Base RPC evidence builder plus native, dry-run, and proving CLI.
+- `enforcement-core/` — shared report-root, dependency, receipt, and transaction predicate logic.
+- `cohort-methods/` — P0 closed-loop and P1 coordinated-control guest image.
+- `reciprocal-methods/` — P0 reciprocal-pair guest image.
+- `scripts/` — deterministic bundle planner.
 - `checkpoint/` — isolated Steel-based Base checkpoint proof workspace.
 - `cases/flash.json` — a three-buyer Base mainnet evidence request.
+- `cases/flash-full-report.json` — the approved Flash snapshot request: all
+  seller settlements plus the report's 55-buyer ≥99%-seller-share cohort.
 
 The former full-analysis and challenge packages are not members of this
 enforcement workspace. The JavaScript scanner in `../analyses/wash-trading`
@@ -163,6 +182,45 @@ RISC0_DEV_MODE=1 ./target/release/loop-host run \
 The host prints user cycles, total cycles, segment count, journal SHA-256, and
 the ABI journal bytes required by `submitSellerPenalty`. Cycle cost scales
 primarily with the number and size of authenticated receipt proof paths.
+
+### Full Flash report development proof
+
+The full-report case reproduces the published Flash seller row, not the whole
+multi-seller report. Generated fixture, selection, cache, and journal files are
+ignored because the fixture is 480 MB and can be rebuilt from Base RPC data.
+
+```bash
+./target/release/loop-host fetch \
+  --case cases/flash-full-report.json \
+  --out cases/flash-full-report-fixture.json \
+  --selection-out cases/flash-full-report-selection.json
+
+# Development receipt only. RISC Zero prints an explicit warning that this is
+# not a valid production proof.
+RISC0_DEV_MODE=1 ./target/release/loop-host run \
+  cases/flash-full-report-fixture.json \
+  --prove \
+  --journal-out cases/flash-full-report-journal.hex
+```
+
+The reproducible 2026-08-19 development run produced:
+
+- 43,586 authenticated Flash settlements across 39,722 Base blocks;
+- 44,847.928171 USDC exact approved-report total;
+- 42,748.838506 USDC attributed to the report's 55 suspected buyers;
+- 33,490.027681 USDC post-funding qualified volume across 38 linked buyers;
+- report evidence root
+  `0x8a0ce40f96615b8e93a0de20d7ac4b5a47ef96b688093cc48c863c948ad91c21`;
+- journal SHA-256
+  `0xf44a443d31a0418faa7d0e37f6c7a756af317da90b6f03c02e69d1f119d27d6c`;
+- v3 seller image ID
+  `0x0fb2461a755f36b945d5a82d26716c0e513452bca3f9d73e990bcf133d01e91a`;
+- 29,295,611,813 user cycles and 31,979,995,136 total cycles across
+  30,499 segments in 294.83 seconds;
+- a 2,543,040-byte ABI journal.
+
+The run used `RISC0_DEV_MODE=1`; it exercised and verified the real guest image
+but intentionally produced no secure production proof.
 
 ### Base checkpoint dry run
 
@@ -269,3 +327,57 @@ gas.
   proof if the 574M-cycle representative proof is operationally unacceptable;
   never replace it with an unauthenticated indexer total.
 - Keep the reporting scanner operationally separate from enforcement.
+
+## Report-matched batch enforcement
+
+The compact enforcement path starts from the scanner's immutable
+`proof-bundle-v1.json`. The bundle's report root is the governance trust anchor
+for period-completeness facts; the guests authenticate the selected positive
+onchain evidence and its membership in that root.
+
+```bash
+node scripts/plan-wash-trading-proofs.mjs \
+  --bundle proof-bundle-v1.json \
+  --out proof-plan-v1.json \
+  --rpc-url "$ANTSEED_BASE_RPC_URL"
+
+cargo run -p loop-host --bin wash-trading-prove -- \
+  --plan proof-plan-v1.json \
+  --out proof-results-v1.json \
+  --prove
+
+node scripts/report-wash-trading-proof-coverage.mjs \
+  --bundle proof-bundle-v1.json \
+  --plan proof-plan-v1.json \
+  --results proof-results-v1.json \
+  --out proof-coverage-v1.json
+```
+
+The planner resolves every dependency against Base, requires settlements inside
+the fixed report period, and routes block authentication through either the
+AggregateVerifier checkpoint range or the historical backfill range. It
+minimizes state-proof groups before receipt count and witness size. Closed-loop evidence priority is
+`DIRECT_SELLER_FUNDER`, then `DIRECT_SELLER_BUYER`, then three valid relay
+paths. Reciprocal plans use exactly 100 unique settlements in both directions.
+
+The coverage report keeps report-root-classified volume separate from the
+unique settlement volume actually authenticated by compact enforcement proofs.
+It also reports cohort and reciprocal totals separately because the two policy
+classes can refer to the same settlement and cannot be summed as a global
+deduplicated wash-trading total.
+
+Use `RISC0_DEV_MODE=1` only for the development coverage gate. The resulting
+manifest is marked `development` and the contract submission script rejects it.
+Production proving must produce Groth16-compatible seals before submission.
+
+### Security artifact invalidation
+
+The compact guests now require one approved funder for the entire cohort,
+authenticate the transaction behind every receipt-backed dependency, bind exact
+parties/channel/amount/period fields, reject duplicate dependency leaves and
+zero-value settlements, and reject zero-value or value-amplifying relay paths.
+These checks change both compact guest image IDs. Rebuild and pin the new cohort
+and reciprocal image IDs, then regenerate the proof plan, proof results, seals,
+coverage report, and submission manifest. Any artifact produced by an earlier
+compact image—including previously generated `proof-plan-v1.json` and
+`proof-results-v1.json` files—must not be submitted.

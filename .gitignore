@@ -5,4 +5,8 @@ out/
 .env.*
 !.env.example
 cases/flash-fixture.json
+cases/flash-full-report-fixture.json
+cases/flash-full-report-selection.json
+cases/flash-full-report-journal.hex
 prove.log
+checkpoint/history-artifacts*/

@@ -1,20 +1,27 @@
 //! Minimal JSON-RPC client with endpoint fallback, plus the receipt
 //! re-encoding needed to rebuild the exact trie values the guest verifies.
 
+use alloy_eips::eip2718::Encodable2718;
+use alloy_network::AnyRpcTransaction;
 use alloy_primitives::{Address, Bytes, B256};
 use anyhow::{anyhow, bail, Context, Result};
 use loop_core::{BlockEvidence, TRANSFER_TOPIC};
+use op_alloy_consensus::OpTxEnvelope;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
+#[derive(Clone)]
 pub struct Client {
     endpoints: Vec<String>,
 }
 
 /// (block_number, tx_index, log_index_within_receipt)
 pub type LogLoc = (u64, usize, usize);
+pub type ReportLogPositions = BTreeMap<(u64, u64), usize>;
 
 #[derive(Clone, Debug)]
 pub struct SettlementCandidate {
+    pub buyer: Address,
     pub block_number: u64,
     pub transaction_hash: B256,
     pub transaction_index: usize,
@@ -48,7 +55,7 @@ impl Client {
 
     fn call(&self, method: &str, params: Value) -> Result<Value> {
         let mut last_err = None;
-        for attempt in 0..3 {
+        for attempt in 0..8 {
             for url in &self.endpoints {
                 let res = ureq::post(url)
                     .timeout(std::time::Duration::from_secs(30))
@@ -67,7 +74,7 @@ impl Client {
                     Err(e) => last_err = Some(anyhow!("{method} via {url}: {e}")),
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(500 * (attempt + 1)));
+            std::thread::sleep(std::time::Duration::from_millis(750 * (attempt + 1)));
         }
         Err(last_err.unwrap_or_else(|| anyhow!("{method}: all endpoints failed")))
     }
@@ -165,6 +172,7 @@ impl Client {
                 }
                 let amount_raw = u128::from_be_bytes(data[48..64].try_into().unwrap());
                 out.push(SettlementCandidate {
+                    buyer,
                     block_number: hex_u64(&l["blockNumber"])?,
                     transaction_hash: parse_b256(&l["transactionHash"])?,
                     transaction_index: hex_u64(&l["transactionIndex"])? as usize,
@@ -174,6 +182,53 @@ impl Client {
             }
             b = end + 1;
         }
+        Ok(out)
+    }
+
+    pub fn find_seller_settlements(
+        &self,
+        channels: Address,
+        seller: Address,
+        from_block: u64,
+        end_block_exclusive: u64,
+    ) -> Result<Vec<SettlementCandidate>> {
+        if from_block >= end_block_exclusive {
+            return Ok(Vec::new());
+        }
+        let topics = json!([
+            format!("{}", loop_core::CHANNEL_SETTLED_TOPIC),
+            Value::Null,
+            Value::Null,
+            format!("{}", addr_topic(seller))
+        ]);
+        let mut out = Vec::new();
+        let mut block = from_block;
+        let last_block = end_block_exclusive - 1;
+        while block <= last_block {
+            let end = (block + 99_999).min(last_block);
+            let logs = self.call(
+                "eth_getLogs",
+                json!([{ "address": format!("{channels}"), "topics": topics,
+                         "fromBlock": format!("0x{block:x}"), "toBlock": format!("0x{end:x}") }]),
+            )?;
+            for log in logs.as_array().into_iter().flatten() {
+                let data = parse_hex_bytes(&log["data"])?;
+                if data.len() < 64 || data[32..48].iter().any(|byte| *byte != 0) {
+                    bail!("ChannelSettled volume does not fit u128");
+                }
+                let buyer_topic = topic(log, 2)?.context("ChannelSettled missing buyer topic")?;
+                out.push(SettlementCandidate {
+                    buyer: Address::from_slice(&buyer_topic.as_slice()[12..]),
+                    block_number: hex_u64(&log["blockNumber"])?,
+                    transaction_hash: parse_b256(&log["transactionHash"])?,
+                    transaction_index: hex_u64(&log["transactionIndex"])? as usize,
+                    block_log_index: hex_u64(&log["logIndex"])?,
+                    amount_raw: u128::from_be_bytes(data[48..64].try_into().unwrap()),
+                });
+            }
+            block = end + 1;
+        }
+        out.sort_by_key(SettlementCandidate::canonical_key);
         Ok(out)
     }
 
@@ -215,7 +270,12 @@ impl Client {
     /// (transaction) indices. Builds the full receipts trie locally, retains
     /// the proof paths for the targets, and self-checks everything before it
     /// can reach the guest.
-    pub fn block_evidence(&self, number: u64, targets: &[u64]) -> Result<BlockEvidence> {
+    pub fn block_evidence(
+        &self,
+        number: u64,
+        targets: &[u64],
+        report_block_log_indices: &[u64],
+    ) -> Result<(BlockEvidence, ReportLogPositions)> {
         use alloy_trie::{proof::ProofRetainer, HashBuilder, Nibbles};
 
         let block = self.call(
@@ -236,6 +296,29 @@ impl Client {
         let receipts = receipts
             .as_array()
             .context("eth_getBlockReceipts unsupported")?;
+        let requested_logs = report_block_log_indices
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut report_log_positions = BTreeMap::new();
+        for target in targets {
+            let receipt = receipts
+                .get(*target as usize)
+                .with_context(|| format!("block {number}: tx index {target} out of range"))?;
+            for (local_index, log) in receipt["logs"].as_array().into_iter().flatten().enumerate() {
+                let block_log_index = hex_u64(&log["logIndex"])?;
+                if requested_logs.contains(&block_log_index) {
+                    report_log_positions.insert((*target, block_log_index), local_index);
+                }
+            }
+        }
+        if report_log_positions.len() != requested_logs.len() {
+            bail!(
+                "block {number}: located {} of {} requested report logs",
+                report_log_positions.len(),
+                requested_logs.len()
+            );
+        }
         let encoded: Vec<Bytes> = receipts
             .iter()
             .map(encode_receipt)
@@ -247,17 +330,9 @@ impl Client {
             .iter()
             .map(|i| Nibbles::unpack(loop_core::trie_index_key(*i)))
             .collect();
-        let mut leaves: Vec<(Nibbles, &Bytes)> = encoded
-            .iter()
-            .enumerate()
-            .map(|(i, v)| (Nibbles::unpack(loop_core::trie_index_key(i as u64)), v))
-            .collect();
-        leaves.sort_by(|a, b| a.0.cmp(&b.0));
         let mut hb =
             HashBuilder::default().with_proof_retainer(ProofRetainer::new(target_keys.clone()));
-        for (key, value) in &leaves {
-            hb.add_leaf(key.clone(), value.as_ref());
-        }
+        add_ordered_trie_leaves(&mut hb, &encoded);
         let root = hb.root();
         if root != header.receipts_root {
             bail!(
@@ -279,7 +354,7 @@ impl Client {
                 .with_context(|| format!("block {number}: tx index {i} out of range"))?
                 .clone();
             // self-check the exact proof the guest will verify
-            alloy_trie::proof::verify_proof(root, key.clone(), Some(value.to_vec()), proof.iter())
+            alloy_trie::proof::verify_proof(root, *key, Some(value.to_vec()), proof.iter())
                 .map_err(|e| anyhow!("block {number}: receipt {i} proof self-check: {e}"))?;
             out.push(loop_core::ReceiptProof {
                 tx_index: *i,
@@ -287,10 +362,141 @@ impl Client {
                 proof,
             });
         }
-        Ok(BlockEvidence {
-            header,
-            receipts: out,
+        Ok((
+            BlockEvidence {
+                header,
+                receipts: out,
+            },
+            report_log_positions,
+        ))
+    }
+
+    pub fn enforcement_block_evidence(
+        &self,
+        number: u64,
+        receipt_targets: &[u64],
+        transaction_targets: &[u64],
+        block_log_indices: &[u64],
+    ) -> Result<(enforcement_core::EnforcementBlock, ReportLogPositions)> {
+        use alloy_trie::{proof::ProofRetainer, HashBuilder, Nibbles};
+
+        let (receipt_evidence, log_positions) =
+            self.block_evidence(number, receipt_targets, block_log_indices)?;
+        if transaction_targets.is_empty() {
+            return Ok((
+                enforcement_core::EnforcementBlock {
+                    header: receipt_evidence.header,
+                    receipts: receipt_evidence.receipts,
+                    transactions: Vec::new(),
+                },
+                log_positions,
+            ));
+        }
+
+        let block = self.call(
+            "eth_getBlockByNumber",
+            json!([format!("0x{number:x}"), false]),
+        )?;
+        let hashes = block["transactions"]
+            .as_array()
+            .context("block transactions missing")?;
+        let mut encoded = Vec::with_capacity(hashes.len());
+        let mut full_transactions = None;
+        for (index, hash) in hashes.iter().enumerate() {
+            let raw = self.call("eth_getRawTransactionByHash", json!([hash]))?;
+            let bytes: Bytes = if raw.is_null() {
+                if full_transactions.is_none() {
+                    let full_block = self.call(
+                        "eth_getBlockByNumber",
+                        json!([format!("0x{number:x}"), true]),
+                    )?;
+                    full_transactions = Some(
+                        full_block["transactions"]
+                            .as_array()
+                            .context("full block transactions missing")?
+                            .clone(),
+                    );
+                }
+                encode_rpc_transaction(full_transactions.as_ref().unwrap()[index].clone())
+                    .with_context(|| format!("block {number}: reconstruct transaction {hash}"))?
+            } else {
+                parse_hex_bytes(&raw)?.into()
+            };
+            let expected: B256 = parse_b256(hash)?;
+            if alloy_primitives::keccak256(&bytes) != expected {
+                bail!("block {number}: raw transaction hash mismatch for {expected}");
+            }
+            encoded.push(bytes);
+        }
+        let target_keys = transaction_targets
+            .iter()
+            .map(|index| Nibbles::unpack(loop_core::trie_index_key(*index)))
+            .collect::<Vec<_>>();
+        let mut builder =
+            HashBuilder::default().with_proof_retainer(ProofRetainer::new(target_keys.clone()));
+        add_ordered_trie_leaves(&mut builder, &encoded);
+        let root = builder.root();
+        if root != receipt_evidence.header.transactions_root {
+            bail!(
+                "block {number}: local transactions root {root} != header {}",
+                receipt_evidence.header.transactions_root
+            );
+        }
+        let proof_nodes = builder.take_proof_nodes();
+        let mut transactions = Vec::new();
+        for (index, key) in transaction_targets.iter().zip(target_keys) {
+            let value = encoded
+                .get(*index as usize)
+                .with_context(|| format!("block {number}: tx index {index} out of range"))?
+                .clone();
+            let proof = proof_nodes
+                .matching_nodes_sorted(&key)
+                .into_iter()
+                .map(|(_, node)| node)
+                .collect::<Vec<_>>();
+            alloy_trie::proof::verify_proof(root, key, Some(value.to_vec()), proof.iter())
+                .map_err(|error| anyhow!("block {number}: transaction {index} proof: {error}"))?;
+            transactions.push(enforcement_core::TransactionProof {
+                tx_index: *index,
+                value,
+                proof,
+            });
+        }
+        Ok((
+            enforcement_core::EnforcementBlock {
+                header: receipt_evidence.header,
+                receipts: receipt_evidence.receipts,
+                transactions,
+            },
+            log_positions,
+        ))
+    }
+}
+
+fn encode_rpc_transaction(value: Value) -> Result<Bytes> {
+    let transaction: AnyRpcTransaction = serde_json::from_value(value)?;
+    let envelope = OpTxEnvelope::try_from(transaction)
+        .map_err(|error| anyhow!("unsupported Base transaction: {error}"))?;
+    Ok(envelope.encoded_2718().into())
+}
+
+fn add_ordered_trie_leaves<K>(builder: &mut alloy_trie::HashBuilder<K>, encoded: &[Bytes])
+where
+    K: AsRef<alloy_trie::proof::AddedRemovedKeys>,
+{
+    let mut leaves = encoded
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            (
+                alloy_trie::Nibbles::unpack(loop_core::trie_index_key(index as u64)),
+                value,
+            )
         })
+        .collect::<Vec<_>>();
+    leaves.sort_by(|left, right| left.0.cmp(&right.0));
+    for (key, value) in leaves {
+        builder.add_leaf(key, value.as_ref());
     }
 }
 
@@ -413,5 +619,57 @@ fn topic(log: &Value, i: usize) -> Result<Option<B256>> {
     match log["topics"].as_array().and_then(|t| t.get(i)) {
         Some(v) => Ok(Some(parse_b256(v)?)),
         None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconstructs_base_deposit_transaction() {
+        let transaction = serde_json::json!({
+            "type": "0x7e",
+            "sourceHash": "0xaa943be17c137fece0613f1590c9ce4f4060e4773cbd6cdd8872797a2929574c",
+            "from": "0xdeaddeaddeaddeaddeaddeaddeaddeaddead0001",
+            "to": "0x4200000000000000000000000000000000000015",
+            "mint": "0x0",
+            "value": "0x0",
+            "gas": "0xf4240",
+            "input": "0x3db6be2b000008dd00101c1200000000000000000000000069fe0aef00000000017e413a0000000000000000000000000000000000000000000000000000000035d3993f0000000000000000000000000000000000000000000000000000000003313bde9769893c3700063346fb55688ff06a43e5a3915877d033e706853182b822acef0000000000000000000000005050f69a9786f081509234f1a7f4684b5e5b76c90000000000000000000000000094",
+            "hash": "0xbfd4ecde1bca0d8417de482af8db2121881b574b6250b4e7cb7deea2e78d5086",
+            "r": "0x0",
+            "s": "0x0",
+            "yParity": "0x0",
+            "v": "0x0",
+            "blockHash": "0x2274101a3826ce4ef456a76a0b6ab6819e3a952f882ef9a05564d616b92cc3e5",
+            "blockNumber": "0x2b9d75e",
+            "transactionIndex": "0x0",
+            "blockTimestamp": "0x69fe0b9f",
+            "depositReceiptVersion": "0x1",
+            "gasPrice": "0x0",
+            "nonce": "0x2b9d761"
+        });
+        let encoded = encode_rpc_transaction(transaction).unwrap();
+
+        assert_eq!(encoded.first(), Some(&0x7e));
+        assert_eq!(
+            alloy_primitives::keccak256(encoded),
+            "0xbfd4ecde1bca0d8417de482af8db2121881b574b6250b4e7cb7deea2e78d5086"
+                .parse::<B256>()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn transaction_trie_leaves_follow_rlp_key_order() {
+        let encoded = vec![Bytes::from(vec![0xc0]), Bytes::from(vec![0xc1, 0x01])];
+        let mut builder = alloy_trie::HashBuilder::default();
+        add_ordered_trie_leaves(&mut builder, &encoded);
+
+        assert_eq!(
+            builder.root(),
+            alloy_trie::root::ordered_trie_root_encoded(&encoded)
+        );
     }
 }

@@ -6,12 +6,12 @@
 //! the RISC Zero guest (for proofs). The zkVM boundary lives in methods/guest.
 
 use alloy_consensus::Header;
-use alloy_primitives::{address, Address, Bytes, B256, U256};
+use alloy_primitives::{address, keccak256, Address, Bytes, B256, U256};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 // ── Pinned rule parameters. Changing any of these changes the guest image ID. ──
-pub const PREDICATE_VERSION: u32 = 2;
+pub const PREDICATE_VERSION: u32 = 3;
 pub const BASE_CHAIN_ID: u64 = 8_453;
 pub const USDC_ADDRESS: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
 pub const CHANNELS_ADDRESS: Address = address!("BA66d3b4fbCf472F6F11D6F9F96aaCE96516F09d");
@@ -90,6 +90,31 @@ pub struct BuyerClaim {
     pub settlements: Vec<LogRef>,
 }
 
+/// One settlement row reproduced from the published analytics report.
+/// `suspected` identifies rows included in the report's suspected-volume
+/// numerator; every row contributes to the report's seller-volume denominator.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ReportSettlementClaim {
+    pub buyer: Address,
+    pub settlement: LogRef,
+    pub suspected: bool,
+}
+
+/// Exact report snapshot whose computation is reproduced over authenticated
+/// settlement receipts. The evidence root commits to the ordered settlement
+/// set, including each row's suspected/non-suspected classification.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ReportVolumeClaim {
+    pub report_id: B256,
+    pub evidence_root: B256,
+    pub start_block: u64,
+    pub end_block_exclusive: u64,
+    pub expected_total_volume_raw: u128,
+    pub expected_suspected_volume_raw: u128,
+    pub expected_suspected_buyer_count: u32,
+    pub settlements: Vec<ReportSettlementClaim>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SellerPenaltyInput {
     pub chain_id: u64,
@@ -105,6 +130,7 @@ pub struct SellerPenaltyInput {
     /// Forwarding chain seller → … → funder. Empty for a direct loop.
     pub hops: Vec<HopClaim>,
     pub buyers: Vec<BuyerClaim>,
+    pub report: ReportVolumeClaim,
 }
 
 // ─────────────────────────────── journal ───────────────────────────────
@@ -128,8 +154,18 @@ pub struct SellerPenaltyJournal {
     pub seller_outflow_raw: u128,
     /// Total amount the funder put into the proven buyers (raw USDC).
     pub total_funded_raw: u128,
-    /// Proven buyer→seller volume strictly after each buyer's funding (raw USDC).
-    pub suspicious_volume_raw: u128,
+    /// Proven common-funder buyer→seller volume strictly after funding.
+    pub qualified_volume_raw: u128,
+    /// Exact total seller volume reproduced from the report settlement set.
+    pub report_total_volume_raw: u128,
+    /// Exact suspected volume reproduced from the report settlement set.
+    pub report_suspected_volume_raw: u128,
+    pub report_suspected_buyer_count: u32,
+    pub qualified_share_bps: u16,
+    pub report_id: B256,
+    pub report_evidence_root: B256,
+    pub report_start_block: u64,
+    pub report_end_block_exclusive: u64,
     pub earliest_funding_block: u64,
     pub latest_settlement_block: u64,
 
@@ -159,7 +195,15 @@ alloy_sol_types::sol! {
         uint16 penaltyBps;
         uint128 sellerOutflowRaw;
         uint128 totalFundedRaw;
-        uint128 suspiciousVolumeRaw;
+        uint128 qualifiedVolumeRaw;
+        uint128 reportTotalVolumeRaw;
+        uint128 reportSuspectedVolumeRaw;
+        uint32 reportSuspectedBuyerCount;
+        uint16 qualifiedShareBps;
+        bytes32 reportId;
+        bytes32 reportEvidenceRoot;
+        uint64 reportStartBlock;
+        uint64 reportEndBlockExclusive;
         uint64 earliestFundingBlock;
         uint64 latestSettlementBlock;
         SolBlockRef[] blockRefs;
@@ -183,7 +227,15 @@ impl SellerPenaltyJournal {
             penaltyBps: self.penalty_bps,
             sellerOutflowRaw: self.seller_outflow_raw,
             totalFundedRaw: self.total_funded_raw,
-            suspiciousVolumeRaw: self.suspicious_volume_raw,
+            qualifiedVolumeRaw: self.qualified_volume_raw,
+            reportTotalVolumeRaw: self.report_total_volume_raw,
+            reportSuspectedVolumeRaw: self.report_suspected_volume_raw,
+            reportSuspectedBuyerCount: self.report_suspected_buyer_count,
+            qualifiedShareBps: self.qualified_share_bps,
+            reportId: self.report_id,
+            reportEvidenceRoot: self.report_evidence_root,
+            reportStartBlock: self.report_start_block,
+            reportEndBlockExclusive: self.report_end_block_exclusive,
             earliestFundingBlock: self.earliest_funding_block,
             latestSettlementBlock: self.latest_settlement_block,
             blockRefs: self
@@ -216,7 +268,15 @@ impl SellerPenaltyJournal {
             penalty_bps: j.penaltyBps,
             seller_outflow_raw: j.sellerOutflowRaw,
             total_funded_raw: j.totalFundedRaw,
-            suspicious_volume_raw: j.suspiciousVolumeRaw,
+            qualified_volume_raw: j.qualifiedVolumeRaw,
+            report_total_volume_raw: j.reportTotalVolumeRaw,
+            report_suspected_volume_raw: j.reportSuspectedVolumeRaw,
+            report_suspected_buyer_count: j.reportSuspectedBuyerCount,
+            qualified_share_bps: j.qualifiedShareBps,
+            report_id: j.reportId,
+            report_evidence_root: j.reportEvidenceRoot,
+            report_start_block: j.reportStartBlock,
+            report_end_block_exclusive: j.reportEndBlockExclusive,
             earliest_funding_block: j.earliestFundingBlock,
             latest_settlement_block: j.latestSettlementBlock,
             block_refs: j
@@ -235,6 +295,15 @@ pub struct ParsedLog {
     pub address: Address,
     pub topics: Vec<B256>,
     pub data: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReportVolumeSummary {
+    pub evidence_root: B256,
+    pub total_volume_raw: u128,
+    pub suspected_volume_raw: u128,
+    pub suspected_buyer_count: u32,
+    log_ids: BTreeSet<(u64, u64, usize)>,
 }
 
 fn next_item<'a>(buf: &mut &'a [u8]) -> Result<(bool, &'a [u8]), String> {
@@ -440,7 +509,7 @@ pub fn verify(input: &SellerPenaltyInput) -> Result<SellerPenaltyJournal, String
             }
             if let Some(prev) = prev_amount {
                 // forwarded share ≥ MIN_FORWARD_BPS of what arrived
-                if (value as u128) * 10_000 < prev * MIN_FORWARD_BPS {
+                if value * 10_000 < prev * MIN_FORWARD_BPS {
                     return Err(format!("hop {i}: forwarded share below threshold"));
                 }
             }
@@ -465,7 +534,8 @@ pub fn verify(input: &SellerPenaltyInput) -> Result<SellerPenaltyJournal, String
     // 3. Authenticate each distinct buyer's funding and post-funding settlements.
     let mut distinct_buyers = BTreeSet::new();
     let mut total_funded_raw = 0u128;
-    let mut suspicious_volume_raw = 0u128;
+    let mut qualified_volume_raw = 0u128;
+    let mut qualified_settlement_logs = BTreeSet::new();
     let mut earliest_funding_block = u64::MAX;
     let mut latest_settlement_block = 0u64;
 
@@ -560,15 +630,45 @@ pub fn verify(input: &SellerPenaltyInput) -> Result<SellerPenaltyJournal, String
                     "buyer {buyer_index} settlement {settlement_index}: short data"
                 ));
             }
-            suspicious_volume_raw = suspicious_volume_raw
+            qualified_settlement_logs.insert(log_identity(input, *settlement_ref)?);
+            qualified_volume_raw = qualified_volume_raw
                 .checked_add(word_u128(&log.data[32..64])?)
                 .ok_or("settlement: volume overflow")?;
             latest_settlement_block = latest_settlement_block.max(block);
         }
     }
-    if suspicious_volume_raw < MINIMUM_COHORT_VOLUME_RAW {
+    if qualified_volume_raw < MINIMUM_COHORT_VOLUME_RAW {
         return Err("cohort: suspicious volume below 1,000 USDC".into());
     }
+
+    let report_summary = report_volume_summary(input)?;
+    if report_summary.evidence_root != input.report.evidence_root {
+        return Err("report: evidence root mismatch".into());
+    }
+    if report_summary.total_volume_raw != input.report.expected_total_volume_raw {
+        return Err("report: total seller volume mismatch".into());
+    }
+    if report_summary.suspected_volume_raw != input.report.expected_suspected_volume_raw {
+        return Err("report: suspected volume mismatch".into());
+    }
+    if report_summary.suspected_buyer_count != input.report.expected_suspected_buyer_count {
+        return Err("report: suspected buyer count mismatch".into());
+    }
+    if !qualified_settlement_logs.is_subset(&report_summary.log_ids) {
+        return Err("cohort: qualified settlement missing from report evidence".into());
+    }
+    let doubled_qualified = qualified_volume_raw
+        .checked_mul(2)
+        .ok_or("cohort: qualified volume ratio overflow")?;
+    if doubled_qualified < report_summary.total_volume_raw {
+        return Err("cohort: qualified volume below 50% of report seller volume".into());
+    }
+    let qualified_share_bps = qualified_volume_raw
+        .checked_mul(10_000)
+        .ok_or("cohort: qualified share overflow")?
+        / report_summary.total_volume_raw;
+    let qualified_share_bps =
+        u16::try_from(qualified_share_bps).map_err(|_| "cohort: qualified share overflow")?;
     let linked_buyer_count =
         u32::try_from(distinct_buyers.len()).map_err(|_| "cohort: buyer count overflow")?;
     let hop_count = u32::try_from(input.hops.len()).map_err(|_| "hop count overflow")?;
@@ -586,11 +686,143 @@ pub fn verify(input: &SellerPenaltyInput) -> Result<SellerPenaltyJournal, String
         penalty_bps: PENALTY_BPS,
         seller_outflow_raw,
         total_funded_raw,
-        suspicious_volume_raw,
+        qualified_volume_raw,
+        report_total_volume_raw: report_summary.total_volume_raw,
+        report_suspected_volume_raw: report_summary.suspected_volume_raw,
+        report_suspected_buyer_count: report_summary.suspected_buyer_count,
+        qualified_share_bps,
+        report_id: input.report.report_id,
+        report_evidence_root: report_summary.evidence_root,
+        report_start_block: input.report.start_block,
+        report_end_block_exclusive: input.report.end_block_exclusive,
         earliest_funding_block,
         latest_settlement_block,
         block_refs,
     })
+}
+
+/// Reproduce the report's total and suspected volume over authenticated
+/// ChannelSettled log references and derive a deterministic evidence root.
+/// The caller remains responsible for verifying receipt inclusion first.
+pub fn report_volume_summary(input: &SellerPenaltyInput) -> Result<ReportVolumeSummary, String> {
+    if input.report.report_id == B256::ZERO {
+        return Err("report: zero report id".into());
+    }
+    if input.report.start_block >= input.report.end_block_exclusive {
+        return Err("report: invalid period".into());
+    }
+    if input.report.settlements.is_empty() {
+        return Err("report: no settlements".into());
+    }
+
+    let resolver = Resolver { input };
+    let mut total_volume_raw = 0_u128;
+    let mut suspected_volume_raw = 0_u128;
+    let mut buyer_classification = BTreeMap::<Address, bool>::new();
+    let mut log_ids = BTreeSet::new();
+    let mut previous_key = None;
+
+    let mut root_preimage = Vec::with_capacity(32 + 32 + 8 + 8 + 20);
+    root_preimage.extend_from_slice(b"ANTSEED_REPORT_VOLUME_V1");
+    root_preimage.extend_from_slice(input.report.report_id.as_slice());
+    root_preimage.extend_from_slice(&input.report.start_block.to_be_bytes());
+    root_preimage.extend_from_slice(&input.report.end_block_exclusive.to_be_bytes());
+    root_preimage.extend_from_slice(input.seller.as_slice());
+    let mut evidence_root = keccak256(root_preimage);
+
+    for (index, claim) in input.report.settlements.iter().enumerate() {
+        let log_id = log_identity(input, claim.settlement)?;
+        if !log_ids.insert(log_id) {
+            return Err(format!("report settlement {index}: duplicate log"));
+        }
+        if previous_key.is_some_and(|previous| log_id <= previous) {
+            return Err(format!(
+                "report settlement {index}: not canonically ordered"
+            ));
+        }
+        previous_key = Some(log_id);
+
+        let (log, block_number) = resolver.log(claim.settlement)?;
+        if block_number < input.report.start_block
+            || block_number >= input.report.end_block_exclusive
+        {
+            return Err(format!("report settlement {index}: outside report period"));
+        }
+        if log.address != input.channels_contract
+            || log.topics.len() != 4
+            || log.topics[0] != CHANNEL_SETTLED_TOPIC
+            || topic_addr(&log.topics[2]) != claim.buyer
+            || topic_addr(&log.topics[3]) != input.seller
+        {
+            return Err(format!("report settlement {index}: event mismatch"));
+        }
+        if log.data.len() < 64 {
+            return Err(format!("report settlement {index}: short data"));
+        }
+        let delta_raw = word_u128(&log.data[32..64])?;
+        total_volume_raw = total_volume_raw
+            .checked_add(delta_raw)
+            .ok_or("report: total volume overflow")?;
+        if claim.suspected {
+            suspected_volume_raw = suspected_volume_raw
+                .checked_add(delta_raw)
+                .ok_or("report: suspected volume overflow")?;
+        }
+        match buyer_classification.insert(claim.buyer, claim.suspected) {
+            Some(previous) if previous != claim.suspected => {
+                return Err(format!(
+                    "report settlement {index}: buyer classification changed"
+                ));
+            }
+            _ => {}
+        }
+
+        let block = input
+            .blocks
+            .get(claim.settlement.block)
+            .ok_or_else(|| format!("block index {} out of range", claim.settlement.block))?;
+        let receipt = block
+            .receipts
+            .get(claim.settlement.receipt)
+            .ok_or_else(|| format!("receipt position {} out of range", claim.settlement.receipt))?;
+        let mut item = Vec::with_capacity(32 + 32 + 8 + 8 + 8 + 20 + 16 + 1);
+        item.extend_from_slice(evidence_root.as_slice());
+        item.extend_from_slice(block.header.hash_slow().as_slice());
+        item.extend_from_slice(&block.header.number.to_be_bytes());
+        item.extend_from_slice(&receipt.tx_index.to_be_bytes());
+        item.extend_from_slice(&(claim.settlement.log as u64).to_be_bytes());
+        item.extend_from_slice(claim.buyer.as_slice());
+        item.extend_from_slice(&delta_raw.to_be_bytes());
+        item.push(u8::from(claim.suspected));
+        evidence_root = keccak256(item);
+    }
+
+    let suspected_buyer_count = buyer_classification
+        .values()
+        .filter(|suspected| **suspected)
+        .count();
+    let suspected_buyer_count = u32::try_from(suspected_buyer_count)
+        .map_err(|_| "report: suspected buyer count overflow")?;
+
+    Ok(ReportVolumeSummary {
+        evidence_root,
+        total_volume_raw,
+        suspected_volume_raw,
+        suspected_buyer_count,
+        log_ids,
+    })
+}
+
+fn log_identity(input: &SellerPenaltyInput, log_ref: LogRef) -> Result<(u64, u64, usize), String> {
+    let block = input
+        .blocks
+        .get(log_ref.block)
+        .ok_or_else(|| format!("block index {} out of range", log_ref.block))?;
+    let receipt = block
+        .receipts
+        .get(log_ref.receipt)
+        .ok_or_else(|| format!("receipt position {} out of range", log_ref.receipt))?;
+    Ok((block.header.number, receipt.tx_index, log_ref.log))
 }
 
 fn claim_log_once(
@@ -626,7 +858,12 @@ mod tests {
     fn three_buyers_and_exact_volume_pass() {
         let journal = verify(&valid_input()).unwrap();
         assert_eq!(journal.linked_buyer_count, 3);
-        assert_eq!(journal.suspicious_volume_raw, MINIMUM_COHORT_VOLUME_RAW);
+        assert_eq!(journal.qualified_volume_raw, MINIMUM_COHORT_VOLUME_RAW);
+        assert_eq!(
+            journal.report_suspected_volume_raw,
+            MINIMUM_COHORT_VOLUME_RAW
+        );
+        assert_eq!(journal.qualified_share_bps, 10_000);
         assert_eq!(journal.penalty_bps, PENALTY_BPS);
     }
 
@@ -673,15 +910,45 @@ mod tests {
     }
 
     #[test]
+    fn report_volume_mismatch_fails() {
+        let mut input = valid_input();
+        input.report.expected_suspected_volume_raw -= 1;
+        assert!(verify(&input)
+            .unwrap_err()
+            .contains("suspected volume mismatch"));
+    }
+
+    #[test]
+    fn report_evidence_root_mismatch_fails() {
+        let mut input = valid_input();
+        input.report.evidence_root = B256::with_last_byte(99);
+        assert!(verify(&input)
+            .unwrap_err()
+            .contains("evidence root mismatch"));
+    }
+
+    #[test]
+    fn report_buyer_count_mismatch_fails() {
+        let mut input = valid_input();
+        input.report.expected_suspected_buyer_count = 2;
+        assert!(verify(&input).unwrap_err().contains("buyer count mismatch"));
+    }
+
+    #[test]
     fn journal_abi_round_trip() {
         let journal = verify(&valid_input()).unwrap();
         let decoded = SellerPenaltyJournal::abi_decode(&journal.abi_encode()).unwrap();
-        assert_eq!(decoded.suspicious_volume_raw, journal.suspicious_volume_raw);
+        assert_eq!(decoded.qualified_volume_raw, journal.qualified_volume_raw);
+        assert_eq!(
+            decoded.report_suspected_volume_raw,
+            journal.report_suspected_volume_raw
+        );
+        assert_eq!(decoded.report_evidence_root, journal.report_evidence_root);
         assert_eq!(decoded.block_refs, journal.block_refs);
     }
 
     fn valid_input() -> SellerPenaltyInput {
-        SellerPenaltyInput {
+        let mut input = SellerPenaltyInput {
             chain_id: BASE_CHAIN_ID,
             usdc: USDC_ADDRESS,
             channels_contract: CHANNELS_ADDRESS,
@@ -702,6 +969,34 @@ mod tests {
                 buyer_claim(BUYER_2, 2, 3),
                 buyer_claim(BUYER_3, 4, 5),
             ],
+            report: ReportVolumeClaim {
+                report_id: B256::with_last_byte(1),
+                evidence_root: B256::ZERO,
+                start_block: 1,
+                end_block_exclusive: 40,
+                expected_total_volume_raw: MINIMUM_COHORT_VOLUME_RAW,
+                expected_suspected_volume_raw: MINIMUM_COHORT_VOLUME_RAW,
+                expected_suspected_buyer_count: 3,
+                settlements: vec![
+                    report_settlement(BUYER_1, 1),
+                    report_settlement(BUYER_2, 3),
+                    report_settlement(BUYER_3, 5),
+                ],
+            },
+        };
+        input.report.evidence_root = report_volume_summary(&input).unwrap().evidence_root;
+        input
+    }
+
+    fn report_settlement(buyer: Address, settlement_block: usize) -> ReportSettlementClaim {
+        ReportSettlementClaim {
+            buyer,
+            settlement: LogRef {
+                block: settlement_block,
+                receipt: 0,
+                log: 0,
+            },
+            suspected: true,
         }
     }
 

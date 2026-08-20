@@ -1,10 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["core", "host", "methods"]
+members = ["core", "history-core", "history-methods", "host", "methods"]
 
 [workspace.dependencies]
 checkpoint-core = { path = "core" }
 checkpoint-methods = { path = "methods" }
+history-core = { path = "history-core" }
+history-methods = { path = "history-methods" }
 
 alloy = { version = "2.0", default-features = false }
 alloy-consensus = { version = "2.0", default-features = false, features = ["serde"] }
