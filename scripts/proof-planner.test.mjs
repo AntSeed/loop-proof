@@ -1,18 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { checkpointBlockNumber, planClaim, resolveDependency, selectMinimumSettlementWindows, validRelayPath } from "./proof-planner.mjs";
+import { planClaim, resolveDependency, selectMinimumSettlementBlocks, validRelayPath } from "./proof-planner.mjs";
 
-test("checkpoint windows preserve protocol boundary alignment", () => {
-  assert.equal(checkpointBlockNumber(46_302_961), 46_302_990);
-  assert.equal(checkpointBlockNumber(46_302_990), 46_302_990);
-  assert.equal(checkpointBlockNumber(46_302_991), 46_303_020);
-});
-
-test("cohort selector accounts for funding windows and reaches exact threshold", () => {
+test("cohort selector accounts for funding blocks and reaches exact threshold", () => {
   const buyers = ["a", "b", "c"];
   const fundingByBuyer = new Map(buyers.map((buyer, index) => [buyer, evidence(`f${buyer}`, buyer, 46_303_001 + index, 0n)]));
   const settlements = buyers.map((buyer, index) => evidence(`s${buyer}`, buyer, 46_303_031 + index, index === 0 ? 400_000_000n : 300_000_000n));
-  const result = selectMinimumSettlementWindows(settlements, fundingByBuyer);
+  const result = selectMinimumSettlementBlocks(settlements, fundingByBuyer);
   assert.deepEqual(result.buyers, buyers);
   assert.equal(result.volumeRaw, 1_000_000_000n);
 });
@@ -21,7 +15,7 @@ test("cohort selector reuses supported historical funding evidence", () => {
   const buyers = ["a", "b", "c"];
   const fundingByBuyer = new Map(buyers.map((buyer, index) => [buyer, evidence(`f${buyer}`, buyer, 45_000_001 + index, 0n)]));
   const settlements = buyers.map((buyer, index) => evidence(`s${buyer}`, buyer, 46_303_031 + index, index === 0 ? 400_000_000n : 300_000_000n));
-  const result = selectMinimumSettlementWindows(settlements, fundingByBuyer);
+  const result = selectMinimumSettlementBlocks(settlements, fundingByBuyer);
   assert.deepEqual(result.buyers, buyers);
   assert.equal(result.volumeRaw, 1_000_000_000n);
 });

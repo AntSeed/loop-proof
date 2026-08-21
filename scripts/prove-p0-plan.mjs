@@ -17,7 +17,7 @@ if (process.env.RISC0_DEV_MODE !== "0") throw new Error("production P0 batch req
 
 const planBytes = await readFile(planPath);
 const plan = JSON.parse(planBytes);
-if (plan?.version !== 1 || plan?.kind !== "antseed-wash-trading-proof-plan" || plan.chainId !== 8_453 || !Array.isArray(plan.claims) || plan.claims.length !== 26) throw new Error("production proof plan must contain exactly 26 claims");
+if (plan?.version !== 2 || plan?.kind !== "antseed-wash-trading-proof-plan" || plan.chainId !== 8_453 || !Array.isArray(plan.claims) || plan.claims.length !== 26) throw new Error("production proof plan must contain exactly 26 claims");
 approveCostQuote(JSON.parse(await readFile(costQuotePath, "utf8")), approvedCostDigest, { p0Claims: plan.claims.length });
 await mkdir(artifactDir, { recursive: true });
 const manifestPath = join(artifactDir, "manifest.json");

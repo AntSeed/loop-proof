@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 
 const args = process.argv.slice(2);
 const value = (flag) => { const index = args.indexOf(flag); return index < 0 ? null : args[index + 1]; };
-const artifactFlags = ["--state-plan", "--volume-baseline", "--volume-report", "--proof-plan", "--proof-results", "--checkpoint-manifest", "--history-manifest", "--p0-manifest", "--guest-attestation", "--cost-quote"];
+const artifactFlags = ["--state-plan", "--volume-baseline", "--volume-report", "--proof-plan", "--proof-results", "--accumulator-manifest", "--p0-manifest", "--guest-attestation", "--cost-quote"];
 const required = [...artifactFlags, "--contracts-repo", "--signing-key", "--out"];
 for (const flag of required) if (!value(flag)) throw new Error(`missing ${flag}`);
 
@@ -16,11 +16,11 @@ const proofRepo = resolve(new URL("..", import.meta.url).pathname);
 assertClean(proofRepo, "proof repository");
 assertClean(contractsRepo, "contracts repository");
 
-const [statePlan, baseline, volumeReport, proofPlan, proofResults, checkpoint, history, p0, guests, costQuote] = await Promise.all([
+const [statePlan, baseline, volumeReport, proofPlan, proofResults, accumulator, p0, guests, costQuote] = await Promise.all([
   readJson(files.state_plan), readJson(files.volume_baseline), readJson(files.volume_report), readJson(files.proof_plan), readJson(files.proof_results),
-  readJson(files.checkpoint_manifest), readJson(files.history_manifest), readJson(files.p0_manifest), readJson(files.guest_attestation), readJson(files.cost_quote),
+  readJson(files.accumulator_manifest), readJson(files.p0_manifest), readJson(files.guest_attestation), readJson(files.cost_quote),
 ]);
-validateReleaseInputs({ statePlan, baseline, volumeReport, proofPlan, proofResults, checkpoint, history, p0, guests, costQuote });
+validateReleaseInputs({ statePlan, baseline, volumeReport, proofPlan, proofResults, accumulator, p0, guests, costQuote });
 
 const body = {
   version: 1,
@@ -46,9 +46,9 @@ const body = {
   volumeReportDigest: sha256(canonicalJson(volumeReport)),
   costQuoteDigest: costQuote.digest,
   reportRoot: proofPlan.reportRoot,
-  historicalRoot: history.historical_root,
+  historicalMmrRoot: accumulator.accumulator.mmrRoot,
   journalDigests: proofResults.entries.map((entry) => ({ claimId: entry.claimId, journalDigest: entry.journalDigest })),
-  counts: { claims: proofPlan.claims.length, proofResults: proofResults.entries.length, checkpointProofs: checkpoint.proofs.length, historicalChunks: history.chunks.length },
+  counts: { claims: proofPlan.claims.length, proofResults: proofResults.entries.length, epochProofs: accumulator.epochCount, aggregateProofs: 1 },
 };
 const privateKey = createPrivateKey(await readFile(value("--signing-key"), "utf8"));
 const digest = sha256(canonicalJson(body));
@@ -64,24 +64,27 @@ const release = {
 await writeFile(value("--out"), `${JSON.stringify(release, null, 2)}\n`, { mode: 0o600 });
 console.log(`releaseDigest ${digest}`);
 
-function validateReleaseInputs({ statePlan, baseline, volumeReport, proofPlan, proofResults, checkpoint, history, p0, guests, costQuote }) {
+function validateReleaseInputs({ statePlan, baseline, volumeReport, proofPlan, proofResults, accumulator, p0, guests, costQuote }) {
   if (statePlan?.version !== 1 || statePlan?.kind !== "antseed-base-state-plan" || statePlan.chainId !== 8_453 || statePlan.entries.length === 0) throw new Error("state plan is incomplete");
   verifySignedBaseline(baseline);
   if (baseline.body.claimCount !== 26 || baseline.body.claims.length !== 26) throw new Error("signed 26-claim volume baseline is required");
   if (volumeReport?.version !== 2 || volumeReport.kind !== "antseed-proof-volume-report" || volumeReport.ok !== true
       || volumeReport.claimCount !== 26 || volumeReport.claims?.length !== 26 || volumeReport.differences?.length !== 0
       || volumeReport.baselineDigest !== baseline.attestation.digest) throw new Error("clean 26-claim final volume report is required");
-  if (proofPlan?.claimCount !== 26 || proofPlan.claims?.length !== 26) throw new Error("proof plan must contain exactly 26 claims");
+  if (proofPlan?.version !== 2 || proofPlan?.claimCount !== 26 || proofPlan.claims?.length !== 26) throw new Error("proof plan must contain exactly 26 claims");
   if (proofResults?.securityMode !== "production" || proofResults.entries?.length !== 26 || proofResults.entries.some((entry) => !entry.seal)) throw new Error("26 production proof results are required");
-  if (checkpoint?.kind !== "antseed-checkpoint-proof-artifacts" || checkpoint.proofs?.length === 0 || checkpoint.proofs.some((proof) => proof?.status !== "proven")) throw new Error("checkpoint proofs are incomplete");
-  if (history?.chunk_count !== 112 || history.chunks?.length !== 112 || history.historical_root == null || history.chunks.some((chunk) => chunk.status !== "proven")) throw new Error("112 proven historical chunks and a finalized root are required");
+  if (accumulator?.version !== 2 || accumulator.kind !== "antseed-history-accumulator-artifacts"
+      || accumulator.epochCount !== accumulator.epochs?.length || accumulator.epochs.some((epoch) => epoch.status !== "proven")
+      || accumulator.accumulator?.status !== "proven" || accumulator.accumulator?.proofMode !== "groth16"
+      || !accumulator.accumulator.mmrRoot) throw new Error("history accumulator proofs are incomplete or not Groth16");
   if (p0?.kind !== "antseed-p0-proof-artifacts" || p0.claims?.length !== 26 || p0.claims.some((claim) => claim?.status !== "proven")) throw new Error("P0 proof artifacts are incomplete");
   if (guests?.version !== 1 || guests?.kind !== "antseed-guest-build-attestation" || guests.reproducible !== true
-      || !guests.guests || Object.keys(guests.guests).sort().join(",") !== "checkpoint,closedCycle,historicalChunk,reciprocal") {
+      || !guests.guests || Object.keys(guests.guests).sort().join(",") !== "accumulator,closedCycle,historyEpoch,reciprocal") {
     throw new Error("reproducible four-guest build attestation is required");
   }
-  if (costQuote?.body?.kind !== "antseed-proof-cost-quote" || costQuote.body.counts?.historicalChunks !== 112
-      || costQuote.body.counts?.p0Claims !== 26 || costQuote.body.counts?.checkpointProofs !== checkpoint.proofs.length
+  if (costQuote?.body?.version !== 2 || costQuote?.body?.kind !== "antseed-proof-cost-quote"
+      || costQuote.body.counts?.epochProofs !== accumulator.epochCount || costQuote.body.counts?.aggregateProofs !== 1
+      || costQuote.body.counts?.p0Claims !== 26
       || sha256(canonicalJson(costQuote.body)) !== costQuote.digest) throw new Error("aggregate proving cost quote is required");
   const plannedClaims = claimIdSet(proofPlan.claims);
   for (const [label, entries] of [["baseline", baseline.body.claims], ["proof results", proofResults.entries], ["P0 artifacts", p0.claims], ["volume report", volumeReport.claims]]) {

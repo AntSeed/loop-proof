@@ -1,8 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 
-export const AGGREGATE_VERIFIER_START_BLOCK = 46_302_960;
-export const CHECKPOINT_WINDOW_BLOCKS = 30;
 export const HISTORICAL_START_BLOCK = 44_469_557;
 export const MINIMUM_VOLUME_RAW = 1_000_000_000n;
 export const MINIMUM_RECIPROCAL_DIRECTION_VOLUME_RAW = 10_000_000n;
@@ -62,10 +60,10 @@ export async function planProofBundle(bundle, { rpcUrl, concurrency = 20, fetchJ
     }, claim, bundle.claims));
     onProgress(`[${claimIndex + 1}/${selectedClaims.length}] selected ${planned.selectedEvidence.length} evidence objects`);
   }
-  const checkpointWindows = mergeCheckpointWindows(claims.flatMap((claim) => claim.checkpointWindows));
-  onProgress(`selected ${claims.length} claims across ${checkpointWindows.length} checkpoint windows`);
+  const materializationBlockNumbers = [...new Set(claims.flatMap((claim) => claim.selectedBlocks))].sort(numberAscending);
+  onProgress(`selected ${claims.length} claims across ${materializationBlockNumbers.length} canonical Base blocks`);
   return {
-    version: 1,
+    version: 2,
     kind: "antseed-wash-trading-proof-plan",
     bundleVersion: bundle.version,
     chainId: bundle.chainId,
@@ -73,15 +71,12 @@ export async function planProofBundle(bundle, { rpcUrl, concurrency = 20, fetchJ
     period: bundle.period,
     claimCount: claims.length,
     claims,
-    checkpointSelection: {
+    accumulatorSelection: {
       version: 1,
       chain_id: bundle.chainId,
       start_block: bundle.period.startBlock,
       end_block_exclusive: bundle.period.endBlockExclusive,
-      aggregate_verifier_start_block: AGGREGATE_VERIFIER_START_BLOCK,
-      selected_block_numbers: [...new Set(claims.flatMap((claim) => claim.selectedBlocks).filter(isCheckpointBlock))].sort(numberAscending),
-      historical_block_numbers: [...new Set(claims.flatMap((claim) => claim.selectedBlocks).filter((block) => !isCheckpointBlock(block)))].sort(numberAscending),
-      checkpoint_windows: checkpointWindows.map((window) => ({ checkpoint_block_number: window.checkpointBlockNumber, target_blocks: window.targetBlocks })),
+      materialization_block_numbers: materializationBlockNumbers,
     },
   };
 }
@@ -123,23 +118,11 @@ export function planClaim(claim, dependencies, bundle) {
   return planCohort(claim, dependencies, bundle);
 }
 
-export function checkpointBlockNumber(blockNumber) {
-  if (!Number.isSafeInteger(blockNumber) || blockNumber <= AGGREGATE_VERIFIER_START_BLOCK) {
-    throw new Error(`block ${blockNumber} predates AggregateVerifier checkpoint coverage`);
-  }
-  const offset = blockNumber - AGGREGATE_VERIFIER_START_BLOCK - 1;
-  return AGGREGATE_VERIFIER_START_BLOCK + (Math.floor(offset / CHECKPOINT_WINDOW_BLOCKS) + 1) * CHECKPOINT_WINDOW_BLOCKS;
-}
-
 function authenticationGroup(blockNumber) {
   if (!Number.isSafeInteger(blockNumber) || blockNumber < HISTORICAL_START_BLOCK) {
     throw new Error(`block ${blockNumber} predates supported historical state coverage`);
   }
-  return isCheckpointBlock(blockNumber) ? `checkpoint:${checkpointBlockNumber(blockNumber)}` : `historical:${blockNumber}`;
-}
-
-function isCheckpointBlock(blockNumber) {
-  return blockNumber > AGGREGATE_VERIFIER_START_BLOCK;
+  return `block:${blockNumber}`;
 }
 
 export function merkleMembership(hashes, targetHash) {
@@ -279,7 +262,7 @@ function buildCohortStrategy(strategy, fundings, settlements, closure) {
   if (fundingByBuyer.size < 3 || eligibleSettlements.length === 0) return null;
   const fixedBlocks = closure.evidence.flatMap(atomicEvidence).map((entry) => entry.blockNumber).filter(Number.isSafeInteger);
   const requiredBuyers = closure.evidence.filter((entry) => entry.evidenceType === "DIRECT_SELLER_BUYER").map((entry) => entry.buyer);
-  const selection = selectMinimumSettlementWindows(eligibleSettlements, fundingByBuyer, fixedBlocks, requiredBuyers);
+  const selection = selectMinimumSettlementBlocks(eligibleSettlements, fundingByBuyer, fixedBlocks, requiredBuyers);
   if (!selection) return null;
   if (closure.evidence.length > 0 && !closureOccursAfterThreshold(selection.settlements, closure.evidence)) return null;
   const funding = selection.buyers.map((buyer) => fundingByBuyer.get(buyer));
@@ -296,7 +279,7 @@ function buildCohortStrategy(strategy, fundings, settlements, closure) {
   };
 }
 
-export function selectMinimumSettlementWindows(settlements, fundingByBuyer, fixedBlocks = [], requiredBuyers = []) {
+export function selectMinimumSettlementBlocks(settlements, fundingByBuyer, fixedBlocks = [], requiredBuyers = []) {
   const baseFixed = new Set(fixedBlocks.map(authenticationGroup));
   const fundingGroups = [...groupBy([...fundingByBuyer], ([, funding]) => authenticationGroup(funding.blockNumber)).entries()]
     .map(([checkpoint, rows]) => ({ checkpoint, buyers: rows.map(([buyer]) => buyer).sort() }))
@@ -559,8 +542,7 @@ function finalizePlanClaim(claim, evidence, details, bundle) {
     dependencyRoot: claim.dependencyRoot,
     selectedEvidence: selected,
     selectedBlocks,
-    historicalBlocks: selectedBlocks.filter((block) => !isCheckpointBlock(block)),
-    checkpointWindows: windowsForBlocks(selectedBlocks),
+    materializationBlocks: selectedBlocks,
     cost: costTuple(selected),
     ...details,
   };
@@ -733,23 +715,6 @@ function costTuple(evidence) {
 function compareCost(left, right) {
   for (let index = 0; index < 3; index += 1) if (left.cost[index] !== right.cost[index]) return left.cost[index] - right.cost[index];
   return left.cost[3].localeCompare(right.cost[3]);
-}
-
-function windowsForBlocks(blocks) {
-  return [...groupBy(blocks.filter(isCheckpointBlock), checkpointBlockNumber).entries()].map(([checkpointBlockNumberValue, targetBlocks]) => ({
-    checkpointBlockNumber: checkpointBlockNumberValue,
-    targetBlocks: [...targetBlocks].sort(numberAscending),
-  })).sort((left, right) => left.checkpointBlockNumber - right.checkpointBlockNumber);
-}
-
-function mergeCheckpointWindows(windows) {
-  const blocks = new Map();
-  for (const window of windows) {
-    const values = blocks.get(window.checkpointBlockNumber) ?? new Set();
-    for (const block of window.targetBlocks) values.add(block);
-    blocks.set(window.checkpointBlockNumber, values);
-  }
-  return [...blocks.entries()].map(([checkpointBlockNumberValue, targetBlocks]) => ({ checkpointBlockNumber: checkpointBlockNumberValue, targetBlocks: [...targetBlocks].sort(numberAscending) })).sort((left, right) => left.checkpointBlockNumber - right.checkpointBlockNumber);
 }
 
 function validateBundle(bundle) {

@@ -10,7 +10,7 @@ if (!out) throw new Error("usage: verify-guest-build-attestation.mjs --first bui
 for (const build of [first, second]) {
   if (build?.version !== 1 || build?.kind !== "antseed-guest-build" || !build.guests) throw new Error("unsupported guest build manifest");
 }
-const names = ["closedCycle", "reciprocal", "checkpoint", "historicalChunk"];
+const names = ["closedCycle", "reciprocal", "accumulator", "historyEpoch"];
 for (const name of names) {
   const left = first.guests[name];
   const right = second.guests[name];

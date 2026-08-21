@@ -28,8 +28,8 @@ for (const label of ["a", "b"]) {
     guests: {
       closedCycle: await collectGuest(proofTarget, "closed-cycle-methods", "CLOSED_CYCLE_GUEST"),
       reciprocal: await collectGuest(proofTarget, "reciprocal-methods", "RECIPROCAL_GUEST"),
-      checkpoint: await collectGuest(checkpointTarget, "checkpoint-methods", "CHECKPOINT_GUEST"),
-      historicalChunk: await collectGuest(checkpointTarget, "history-methods", "HISTORY_GUEST"),
+      accumulator: await collectGuest(checkpointTarget, "checkpoint-methods", "CHECKPOINT_GUEST"),
+      historyEpoch: await collectGuest(checkpointTarget, "history-methods", "HISTORY_GUEST"),
     },
   };
   builds.push(build);

@@ -20,7 +20,7 @@ async function main() {
 }
 
 export function buildCoverageReport(bundle, plan, results = null) {
-  if (bundle?.version !== 1 || plan?.version !== 1 || bundle.reportRoot !== plan.reportRoot) throw new Error("bundle and plan do not share the current report root");
+  if (bundle?.version !== 1 || plan?.version !== 2 || bundle.reportRoot !== plan.reportRoot) throw new Error("bundle and plan do not share the current report root");
   const bundleClaims = new Map(bundle.claims.map((claim) => [claim.claimId, claim]));
   const plannedClaims = new Map(plan.claims.map((claim) => [claim.claimId, claim]));
   if (bundleClaims.size !== bundle.claims.length) throw new Error("proof bundle contains duplicate claim IDs");
@@ -82,7 +82,7 @@ export function buildCoverageReport(bundle, plan, results = null) {
       authenticatedSettlementCount: selectedSettlements,
       selectedEvidenceCount: planned.selectedEvidence.length,
       selectedBlockCount: planned.selectedBlocks.length,
-      checkpointWindowCount: planned.checkpointWindows.length,
+      materializationBlockCount: planned.materializationBlocks.length,
       optimizationMode: planned.optimizationMode ?? null,
       totalCycles: result?.totalCycles ?? null,
       imageId: result?.imageId ?? null,
@@ -147,8 +147,7 @@ function validateResultEntry(result, planned, securityMode) {
   const plannedDependencies = planned.selectedEvidence.map((entry) => entry.dependencyId);
   const resultDependencies = (result.selectedEvidence ?? []).map((entry) => entry.dependencyId);
   if (JSON.stringify(resultDependencies) !== JSON.stringify(plannedDependencies)
-      || JSON.stringify(result.selectedBlocks) !== JSON.stringify(planned.selectedBlocks)
-      || JSON.stringify(result.checkpointWindows) !== JSON.stringify(planned.checkpointWindows)) {
+      || JSON.stringify(result.selectedBlocks) !== JSON.stringify(planned.selectedBlocks)) {
     throw new Error(`${planned.claimId}: result evidence differs from proof plan`);
   }
 }

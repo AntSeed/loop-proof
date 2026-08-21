@@ -22,12 +22,12 @@ test("coverage report deduplicates settlement logs across policies", () => {
   };
   const selected = { dependencyId: "dependency", evidenceType: "SETTLEMENT", receiptLogIndex: 7, dependencyLeaf };
   const plan = {
-    version: 1,
+    version: 2,
     reportRoot: bundle.reportRoot,
     claimCount: 2,
     claims: [
-      { claimId: "cohort", type: "P0_CLOSED_LOOP", subjects: ["seller"], selectedEvidence: [selected], selectedBlocks: [1], checkpointWindows: [] },
-      { claimId: "pair", type: "P0_RECIPROCAL", subjects: ["a", "b"], selectedEvidence: [{ ...selected, evidenceType: "RECIPROCAL_SETTLEMENT" }], selectedBlocks: [1], checkpointWindows: [] },
+      { claimId: "cohort", type: "P0_CLOSED_LOOP", subjects: ["seller"], selectedEvidence: [selected], selectedBlocks: [1], materializationBlocks: [1] },
+      { claimId: "pair", type: "P0_RECIPROCAL", subjects: ["a", "b"], selectedEvidence: [{ ...selected, evidenceType: "RECIPROCAL_SETTLEMENT" }], selectedBlocks: [1], materializationBlocks: [1] },
     ],
   };
   const report = buildCoverageReport(bundle, plan);
@@ -66,10 +66,10 @@ function coverageFixture() {
     claims: [{ claimId: "cohort", type: "P0_CLOSED_LOOP", subjects: ["seller"], metrics: { qualifiedVolumeRaw: "1000000000" } }],
   };
   const plan = {
-    version: 1,
+    version: 2,
     reportRoot,
     claimCount: 1,
-    claims: [{ claimId: "cohort", type: "P0_CLOSED_LOOP", subjects: ["seller"], selectedEvidence, selectedBlocks: [1], checkpointWindows: [] }],
+    claims: [{ claimId: "cohort", type: "P0_CLOSED_LOOP", subjects: ["seller"], selectedEvidence, selectedBlocks: [1], materializationBlocks: [1] }],
   };
   const journalBytes = "0x01";
   const journalDigest = `0x${createHash("sha256").update(Buffer.from("01", "hex")).digest("hex")}`;
@@ -88,7 +88,6 @@ function coverageFixture() {
       journalDigest,
       selectedEvidence,
       selectedBlocks: [1],
-      checkpointWindows: [],
     }],
   };
   return { bundle, plan, results };

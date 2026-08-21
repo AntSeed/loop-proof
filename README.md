@@ -96,9 +96,9 @@ The required order is:
 
 1. Generate the 26-claim proof plan.
 2. Capture and Ed25519-sign the exact settlement/volume baseline.
-3. Generate checkpoint proofs and all 112 historical chunk proofs.
-4. Generate and merge strict `antseed-base-state-plan` v1 files for checkpoint
-   submission, historical backfill, and required block materialization.
+3. Prove the fixed 16,384-header epochs and one composed history-accumulator receipt.
+4. Generate one strict `antseed-base-state-plan` v1 for accumulator submission
+   and exact block-hash materialization.
 5. Validate and apply that state plan on an Anvil Base fork. A complete rerun
    must send zero transactions.
 6. Materialize and prove the 26 P0 witnesses.
@@ -135,10 +135,10 @@ commands require the exact printed digest as an explicit approval:
 
 ```bash
 node scripts/proving-cost-quote.mjs \
-  --checkpoint-plan checkpoint-plan.json \
+  --accumulator-manifest checkpoint/history-artifacts/manifest.json \
   --proof-plan proof-plan.json \
-  --checkpoint-unit-usd 0.00 \
-  --historical-unit-usd 0.00 \
+  --epoch-unit-usd 0.00 \
+  --aggregate-unit-usd 0.00 \
   --p0-unit-usd 0.00 \
   --provider PROVIDER_NAME \
   --expires-at 2026-08-22T00:00:00Z \

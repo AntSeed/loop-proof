@@ -19,4 +19,4 @@ const plan = await planFile({
   claimIds: claimIds.length === 0 ? null : claimIds,
   onProgress: (message) => console.error(message),
 });
-console.log(`planned ${plan.claimCount} claims across ${plan.checkpointSelection.checkpoint_windows.length} checkpoint windows`);
+console.log(`planned ${plan.claimCount} claims across ${plan.accumulatorSelection.materialization_block_numbers.length} canonical Base blocks`);

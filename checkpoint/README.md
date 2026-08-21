@@ -1,185 +1,104 @@
-# Base Checkpoint Proof
+# Base History Accumulator
 
-This isolated RISC Zero workspace authenticates historical Base block hashes
-without deploying an AntSeed contract on Ethereum.
+This workspace proves the Base block hashes required by the wash-trading evidence proofs without trusting an archive RPC or an OP Stack output proposal.
 
-The host reads a finalized Ethereum state through Steel, queries Base's
-Ethereum `AnchorStateRegistry` at `0x909f...4E72`, and proves that it accepts a
-game of AggregateVerifier type `621`. The guest reads a 30-block intermediate
-output root from that game, verifies the Base output-root preimage, and checks
-a contiguous Base header chain back to the requested target blocks.
+## Security model
 
-The ABI journal is submitted on Base to
-`AntseedBaseCheckpointOracle.submitCheckpoint`. The oracle verifies the RISC
-Zero seal and validates Steel's beacon commitment against Base's EIP-4788
-predeploy. It then stores exact canonical block hashes for the seller-penalty
-registry.
+1. Each epoch guest receives exactly 16,384 canonical RLP Base headers.
+2. It checks block numbers and every `parentHash` link, then commits a fixed-depth Merkle root over `(blockNumber, blockHash)` leaves.
+3. The accumulator guest verifies every epoch receipt through RISC Zero composition, checks that the epoch journals are contiguous, and commits their ordered MMR root.
+4. `AntseedBaseCheckpointOracle` verifies the aggregate Groth16 receipt and checks its final Base block hash directly against Base's EIP-2935 history-storage contract.
+5. A block is usable by an evidence proof only after `materializeHistoricalBlocks` verifies both its 14-level epoch branch and its MMR mountain proof and stores the exact `(blockNumber, blockHash)` pair.
 
-## Security direction
+The on-chain root is immutable in V1. It covers full epochs only, starting at Base block `44,469,557`, and must cover through block `49,936,172`.
 
-- A fabricated or non-canonical block cannot be stored.
-- An existing block number cannot be overwritten with a conflicting hash.
-- Missing a proof or beacon-root archive can only leave a seller unpenalized.
-- No checkpoint proof can directly reduce buyer rewards.
-- No RPC or Beacon API is trusted; both only provide proof witnesses.
-
-## Environment
-
-The host reads `../.env` when run from this directory:
-
-```dotenv
-BASE_RPC_URL=https://base-mainnet.g.alchemy.com/v2/YOUR_KEY
-L1_RPC_URL=https://ethereum-rpc.publicnode.com
-BEACON_API_URL=https://ethereum-beacon-api.publicnode.com
-```
-
-## Commands
+## Build
 
 ```bash
-cargo test -p checkpoint-core
-
-# Read-only planning: resolve selected windows at finalized Ethereum state.
-jq '.checkpointSelection' ../out/proof-plan.json > ../out/checkpoint-selection.json
-cargo run --release -p checkpoint-host --bin checkpoint-plan -- \
-  --selection ../out/checkpoint-selection.json \
-  --out ../out/checkpoint-plan.json
-
-cargo run --release -p checkpoint-host -- --journal-out checkpoint-journal.hex
-RISC0_DEV_MODE=1 cargo run --release -p checkpoint-host -- \
-  --prove --seal-out checkpoint-seal.hex
+cd loop-proof/checkpoint
+cargo build --release -p checkpoint-host
 ```
 
-`checkpoint-plan` validates the selection manifest, discovers type-621 games,
-checks each game's start and interval configuration, requires ASR acceptance at
-one finalized Ethereum block, and writes the game, intermediate-root index,
-checkpoint block, and sorted target blocks for every proof. It does not produce
-proofs or submit transactions.
+The generated deployment image IDs are `history_methods::EPOCH_IMAGE_ID` and `checkpoint_methods::ACCUMULATOR_IMAGE_ID`. Pin both IDs in the oracle constructor.
 
-The default `checkpoint-host` game/index remains a stable known-valid Base
-AggregateVerifier fixture. Production automation must consume the generated
-plan and archive each Steel beacon root before Base's EIP-4788 retention window
-expires.
+## Production proof flow
 
-## Historical deployment backfill
-
-`checkpoint-history` bridges the pre-AggregateVerifier AntSeed range
-`44,469,557..46,302,990` to the authenticated checkpoint at block
-`46,302,990`. It uses 112 independent, resumable chunks in newest-to-oldest
-order. Each chunk contains at most 16,384 canonical Base headers and commits to
-a fixed-depth positional Merkle root, so only seller-evidence blocks need to be
-materialized onchain.
+Set `BASE_RPC_URL` to an archive-capable Base RPC. The fetcher performs concurrent header requests and persists one witness per epoch.
 
 ```bash
-cd checkpoint
+cd loop-proof/checkpoint
+mkdir -p history-artifacts
 
-# Fetch all 112 witnesses. Use --chunks 0 for the newest chunk only.
-# Completed pages are cached atomically, so rerunning resumes an interrupted
-# chunk. Raise --request-interval-ms when the provider returns HTTP 429.
-cargo run --release -p checkpoint-host --bin checkpoint-history -- \
-  --artifact-dir history-artifacts fetch \
-  --concurrency 4 --page-size 512 --request-interval-ms 250
+cargo run --release -p checkpoint-host -- \
+  plan --rpc-url "$BASE_RPC_URL" --out history-artifacts/manifest.json
 
-# Execute locally, record cycle counts, and enforce the 1B-cycle limit.
-cargo run --release -p checkpoint-host --bin checkpoint-history -- \
-  --artifact-dir history-artifacts dry-run
+cargo run --release -p checkpoint-host -- \
+  fetch --rpc-url "$BASE_RPC_URL" \
+  --manifest history-artifacts/manifest.json \
+  --artifact-dir history-artifacts \
+  --concurrency 32
 
-# Paid proving is impossible without both explicit price and confirmation.
-cargo run --release -p checkpoint-host --bin checkpoint-history -- \
-  --artifact-dir history-artifacts prove \
-  --max-price "0.01 USD" \
-  --confirm-max-total-price "1.12 USD" \
-  --confirm-paid-proving
+cargo run --release -p checkpoint-host -- \
+  prove-epochs \
+  --manifest history-artifacts/manifest.json \
+  --artifact-dir history-artifacts
 
-# Produce calldata only; this command never broadcasts transactions.
-cargo run --release -p checkpoint-host --bin checkpoint-history -- \
-  --artifact-dir history-artifacts tx-plan \
-  --oracle 0x...
-
-# Materialize only historical blocks referenced by an accepted current witness.
-cargo run --release -p checkpoint-host --bin checkpoint-history -- \
-  --artifact-dir history-artifacts materialize-plan \
-  --oracle 0x... --seller-fixture ../out/proof-witness.json
+cargo run --release -p checkpoint-host -- \
+  aggregate \
+  --manifest history-artifacts/manifest.json \
+  --artifact-dir history-artifacts \
+  --groth16
 ```
 
-Every fetch, dry run, and proof transition is persisted in `manifest.json`.
-Partial fetches additionally persist canonical RLP header pages beside the
-manifest; their numbering, encoding, and parent links are revalidated before
-every resume. The manifest records the input SHA-256, image ID, expected
-journal digest, cycle count, Boundless request ID, seal, and journal. A resumed
-command rejects changed inputs or journals. Paid proving additionally requires
-`BOUNDLESS_REQUESTOR_KEY` and a configured Pinata, S3, or GCS uploader.
-`--confirm-max-total-price` must exactly equal the selected chunk count times
-`--max-price`, including the same asset. The example confirms all 112 chunks at
-`0.01 USD` each; a subset must confirm its own exact aggregate.
+Epoch receipts are resumable and intentionally use the default composable receipt format. Only the final accumulator receipt needs Groth16 compression for Solidity verification.
 
-The Base deployment requires `HISTORICAL_CHUNK_IMAGE_ID` alongside the existing
-checkpoint and seller image IDs. Production flow first submits the existing
-checkpoint proof for block `46,302,990`, calls `beginHistoricalBackfill`, then
-submits the 112 chunk proofs newest-to-oldest. No command broadcasts deployment
-or submissions automatically.
+The aligned anchor must still be inside EIP-2935's 8,191-block window when submitted. If it expires during proving, rerun `plan` into the same manifest, then rerun `fetch`, `prove-epochs`, and `aggregate`. Cached epochs are validated and reused; only newly added epochs are fetched and proved.
 
-## Canonical Base state plan
-
-Checkpoint, backfill, and materialization generators emit strict
-`antseed-base-state-plan` v1 JSON. Each ordered entry contains one zero-value
-oracle call plus exact read-only completion checks. Legacy transaction arrays
-are intentionally unsupported.
-
-The state plan is necessary because seller journals reference historical Base
-block hashes that the on-chain oracle cannot discover by itself. Applying the
-plan records those hashes from authenticated checkpoint/history proofs before
-seller proofs are submitted. It is not part of either seller predicate and
-cannot alter settlement selection or journal volume.
-
-Generate checkpoint production artifacts with the finalized Ethereum
-block/hash locked by `checkpoint-plan`:
+## Deploy the oracle
 
 ```bash
-node ../scripts/prove-checkpoint-plan.mjs \
-  --plan ../out/checkpoint-plan.json \
-  --artifact-dir ../out/checkpoint-proof-artifacts \
-  --l1-rpc-url "$L1_RPC_URL" \
-  --base-rpc-url "$BASE_RPC_URL" \
-  --cost-quote ../out/proving-cost-quote.json \
-  --approve-cost-digest 0x... \
-  --confirm-production-proving
+cd antseed/packages/contracts
+export RISC0_VERIFIER=0x...
+export HISTORY_EPOCH_IMAGE_ID=0x...
+export HISTORY_ACCUMULATOR_IMAGE_ID=0x...
+
+forge script script/DeployBaseHistoricalAccumulatorOracle.s.sol \
+  --rpc-url "$BASE_RPC_URL" --broadcast --verify
 ```
 
-Use the contract repository's `build-checkpoint-state-plan.mjs` for checkpoint
-artifacts, `checkpoint-history tx-plan` and `materialize-plan` for historical
-entries, then merge them with `merge-base-state-plans.mjs`. Apply only through
-`apply-base-state-plan.mjs`: `--validate-only` reads state, `--fork-submit`
-accepts loopback RPC URLs only, and production `--submit` requires the exact
-plan digest. Resume files are bound to chain, oracle, plan digest, entry ID,
-calldata hash, nonce, and transaction hash; transactions and receipts are
-refetched on resume.
+This is a fresh deployment. Do not point production registries at an older checkpoint-oracle deployment.
 
-The current pinned historical-chunk image ID is
-`c1cc15f700032158b03f782aaa7aa23f02851ab6f6a0ba8452beb504eecf0475`.
+## Build and validate calldata
 
-The 16,384-header geometry was measured after routing both canonical-header and
-Merkle hashing through RISC Zero's Keccak coprocessor. A full synthetic chunk
-with production-shaped post-Cancun headers produced a 10,748,564-byte input,
-712,438,437 user cycles, and 786,563,072 padded RV32 cycles across 751 segments.
-The guest journal exactly matched native validation. The same benchmark before
-accelerated header hashing required 2,584,739,840 padded cycles, so the
-accelerated path is required to satisfy the 1-billion-cycle admission limit.
+The proof planner emits every required block in `accumulatorSelection.materialization_block_numbers`.
 
-## Current measurement
+```bash
+BLOCKS=$(jq -r '.accumulatorSelection.materialization_block_numbers | join(",")' ../out/proof-plan.json)
 
-A live Base mainnet run on 2026-08-19 authenticated a target 28 blocks behind
-the checkpoint (29 contiguous headers total):
+cargo run --release -p checkpoint-host -- \
+  state-plan \
+  --manifest history-artifacts/manifest.json \
+  --artifact-dir history-artifacts \
+  --oracle "$BASE_STATE_ORACLE" \
+  --blocks "$BLOCKS" \
+  --batch-size 16 \
+  --out history-artifacts/state-plan.json
 
-- guest image ID
-  `e719072a9e3c7645903268b7e01079b5ea7704612b680d9401964b83a83e643e`;
-- 7,923,466 user cycles;
-- 9,568,256 padded total cycles across 10 segments;
-- about 356 ms for a local development receipt.
+node ../../antseed/packages/contracts/scripts/apply-base-state-plan.mjs \
+  --plan history-artifacts/state-plan.json \
+  --rpc-url "$BASE_RPC_URL" \
+  --validate-only
+```
 
-The Base oracle's two-block submission path measured 91,338 EVM execution gas
-with a mock verifier. This excludes intrinsic/calldata gas and the production
-RISC Zero verifier call. The deployed oracle runtime is 3,443 bytes.
+For an Anvil fork, use `--fork-submit`. For Base mainnet, first record the printed plan digest, then use `--submit --confirm-plan-digest 0x...` with `SUBMITTER_PRIVATE_KEY` set. The executor is resumable and checks the exact accumulator end block, epoch count, MMR root, journal digest, and every materialized `canonicalBlockHashes(blockNumber)` value after inclusion. State-plan generation rejects composite or development receipts and requires the final accumulator receipt to be Groth16.
 
-Development receipts are structurally useful for E2E tests but are not secure
-production proofs. A production Groth16 proof still requires a real local or
-remote RISC Zero prover.
+## Development composition check
+
+The development command executes one full 16,384-header epoch guest and then executes the production accumulator guest with 334 composed assumptions. Remaining assumptions are explicitly fake development receipts; the command refuses to run unless `RISC0_DEV_MODE=1`.
+
+```bash
+RISC0_DEV_MODE=1 cargo run -p checkpoint-host -- \
+  dev-e2e --artifact-dir target/dev-e2e
+```
+
+Development seals are not valid on Base and must never be included in a production state plan.
