@@ -1,4 +1,1 @@
-include!(concat!(env!("OUT_DIR"), "/methods.rs"));
-
-pub const ACCUMULATOR_GUEST_ELF: &[u8] = CHECKPOINT_GUEST_ELF;
-pub const ACCUMULATOR_IMAGE_ID: [u32; 8] = CHECKPOINT_GUEST_ID;
+pub const ACCUMULATOR_GUEST_ELF: sp1_sdk::Elf = sp1_sdk::include_elf!("checkpoint-guest");

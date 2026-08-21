@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 
 const args = process.argv.slice(2);
@@ -21,15 +20,23 @@ for (const label of ["a", "b"]) {
   const checkpointTarget = join(target, "checkpoint");
   await run("cargo", ["build", "-p", "loop-host", "--bins"], process.cwd(), { CARGO_TARGET_DIR: proofTarget });
   await run("cargo", ["build", "-p", "checkpoint-host", "--bins"], resolve("checkpoint"), { CARGO_TARGET_DIR: checkpointTarget });
+  const proofMetadataPath = join(target, "proof-programs.json");
+  const checkpointMetadataPath = join(target, "checkpoint-programs.json");
+  await run(join(proofTarget, "debug", "wash-trading-prove"), ["--program-metadata", proofMetadataPath], process.cwd(), {});
+  await run(join(checkpointTarget, "debug", "checkpoint-host"), ["program-metadata", "--out", checkpointMetadataPath], resolve("checkpoint"), {});
+  const proofMetadata = JSON.parse(await readFile(proofMetadataPath, "utf8"));
+  const checkpointMetadata = JSON.parse(await readFile(checkpointMetadataPath, "utf8"));
+  validateMetadata(proofMetadata, ["closedCycle", "reciprocal"]);
+  validateMetadata(checkpointMetadata, ["accumulator", "historyEpoch"]);
   const build = {
-    version: 1,
-    kind: "antseed-guest-build",
+    version: 2,
+    kind: "antseed-sp1-program-build",
     buildId: `build-${label}`,
     guests: {
-      closedCycle: await collectGuest(proofTarget, "closed-cycle-methods", "CLOSED_CYCLE_GUEST"),
-      reciprocal: await collectGuest(proofTarget, "reciprocal-methods", "RECIPROCAL_GUEST"),
-      accumulator: await collectGuest(checkpointTarget, "checkpoint-methods", "CHECKPOINT_GUEST"),
-      historyEpoch: await collectGuest(checkpointTarget, "history-methods", "HISTORY_GUEST"),
+      closedCycle: proofMetadata.programs.closedCycle,
+      reciprocal: proofMetadata.programs.reciprocal,
+      accumulator: checkpointMetadata.programs.accumulator,
+      historyEpoch: checkpointMetadata.programs.historyEpoch,
     },
   };
   builds.push(build);
@@ -39,35 +46,28 @@ for (const label of ["a", "b"]) {
 for (const name of Object.keys(builds[0].guests)) {
   const left = builds[0].guests[name];
   const right = builds[1].guests[name];
-  if (left.imageId !== right.imageId || left.elfSha256 !== right.elfSha256) throw new Error(`${name} guest is not reproducible`);
+  if (left.programVKey !== right.programVKey || left.recursionVKey !== right.recursionVKey || left.elfSha256 !== right.elfSha256 || left.elfBytes !== right.elfBytes) {
+    throw new Error(`${name} SP1 program is not reproducible`);
+  }
 }
 await writeFile(out, `${JSON.stringify({
-  version: 1,
-  kind: "antseed-guest-build-attestation",
+  version: 2,
+  kind: "antseed-sp1-program-build-attestation",
+  sp1Version: "6.1.0",
   reproducible: true,
   builds: builds.map((build) => ({ buildId: build.buildId, targetDir: join(runDir, build.buildId) })),
   guests: builds[0].guests,
 }, null, 2)}\n`);
 
-async function collectGuest(targetDir, cratePrefix, constantPrefix) {
-  const buildDir = join(targetDir, "debug", "build");
-  const candidates = (await readdir(buildDir, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith(`${cratePrefix}-`))
-    .map((entry) => join(buildDir, entry.name, "out", "methods.rs"));
-  for (const candidate of candidates) {
-    let source;
-    try { source = await readFile(candidate, "utf8"); }
-    catch (error) { if (error.code === "ENOENT") continue; throw error; }
-    const idMatch = source.match(new RegExp(`${constantPrefix}_ID: \\[u32; 8\\] = \\[([^\\]]+)\\]`));
-    const pathMatch = source.match(new RegExp(`${constantPrefix}_PATH: &str = "([^"]+)"`));
-    if (!idMatch || !pathMatch) continue;
-    const words = idMatch[1].split(",").map((word) => Number(word.trim()));
-    const bytes = Buffer.alloc(32);
-    words.forEach((word, index) => bytes.writeUInt32LE(word >>> 0, index * 4));
-    const elf = await readFile(pathMatch[1]);
-    return { imageId: `0x${bytes.toString("hex")}`, elfSha256: `0x${createHash("sha256").update(elf).digest("hex")}`, elfBytes: elf.length };
+function validateMetadata(metadata, expectedPrograms) {
+  if (metadata?.version !== 1 || metadata.kind !== "antseed-sp1-program-metadata" || metadata.sp1Version !== "6.1.0") throw new Error("unsupported SP1 program metadata");
+  for (const name of expectedPrograms) {
+    const program = metadata.programs?.[name];
+    if (!/^0x[0-9a-f]{64}$/i.test(program?.programVKey ?? "") || !/^0x[0-9a-f]{64}$/i.test(program?.elfSha256 ?? "") || !Number.isInteger(program?.elfBytes) || program.elfBytes <= 0) {
+      throw new Error(`${name} SP1 program metadata is invalid`);
+    }
+    if (name === "historyEpoch" && !/^0x[0-9a-f]{64}$/i.test(program.recursionVKey ?? "")) throw new Error("historyEpoch recursion vkey is invalid");
   }
-  throw new Error(`generated methods for ${cratePrefix} were not found`);
 }
 
 function run(command, commandArgs, cwd, extraEnv) {

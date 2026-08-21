@@ -5,7 +5,7 @@ import { approveCostQuote, buildCostQuote } from "./proving-cost-quote.mjs";
 test("aggregate proving quote requires exact digest approval", () => {
   const now = new Date("2026-08-21T00:00:00.000Z");
   const quote = buildCostQuote({
-    accumulatorManifest: { version: 2, kind: "antseed-history-accumulator-artifacts", chainId: 8_453, epochCount: 334, epochs: new Array(334).fill({}) },
+    accumulatorManifest: { version: 3, kind: "antseed-sp1-history-accumulator-artifacts", chainId: 8_453, epochCount: 334, epochs: new Array(334).fill({}) },
     proofPlan: { version: 2, kind: "antseed-wash-trading-proof-plan", chainId: 8_453, claims: new Array(26).fill({}) },
     epochUnitUsd: "0.10",
     aggregateUnitUsd: "2.50",

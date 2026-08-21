@@ -13,7 +13,7 @@ const costQuotePath = value("--cost-quote");
 const approvedCostDigest = value("--approve-cost-digest");
 if (!planPath || !costQuotePath || !approvedCostDigest || !args.includes("--confirm-production-proving")) throw new Error("usage: prove-p0-plan.mjs --plan proof-plan.json --artifact-dir DIR --cost-quote quote.json --approve-cost-digest 0x... --confirm-production-proving");
 if (!process.env.BASE_RPC_URL) throw new Error("BASE_RPC_URL is required");
-if (process.env.RISC0_DEV_MODE !== "0") throw new Error("production P0 batch requires RISC0_DEV_MODE=0");
+if (["mock", "light"].includes(process.env.SP1_PROVER ?? "cpu")) throw new Error("production P0 batch requires an SP1 proving backend");
 
 const planBytes = await readFile(planPath);
 const plan = JSON.parse(planBytes);
@@ -53,7 +53,7 @@ for (const [index, claim] of plan.claims.entries()) {
     witnessSha256: sha256(await readFile(join(artifactDir, witnessFile))),
     resultSha256: sha256(await readFile(join(artifactDir, resultFile))),
     journalDigest: result.entries[0].journalDigest,
-    imageId: result.entries[0].imageId,
+    programVKey: result.entries[0].programVKey,
     status: "proven",
   };
   await writeJsonAtomic(manifestPath, manifest);
@@ -61,7 +61,7 @@ for (const [index, claim] of plan.claims.entries()) {
 
 const results = await Promise.all(manifest.claims.map(async (claim) => JSON.parse(await readFile(join(artifactDir, claim.resultFile), "utf8"))));
 const combined = {
-  version: 1,
+  version: 2,
   kind: "antseed-wash-trading-proof-results",
   chainId: 8_453,
   securityMode: "production",
@@ -74,11 +74,11 @@ console.log(`production proof results written: ${join(artifactDir, "proof-result
 async function loadManifest(path, proofPlan, planSha256) {
   try {
     const existing = JSON.parse(await readFile(path, "utf8"));
-    if (existing.version !== 1 || existing.kind !== "antseed-p0-proof-artifacts" || existing.planSha256 !== planSha256) throw new Error("P0 artifact manifest does not match the plan");
+    if (existing.version !== 2 || existing.kind !== "antseed-sp1-p0-proof-artifacts" || existing.planSha256 !== planSha256) throw new Error("P0 artifact manifest does not match the plan");
     return existing;
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
-    return { version: 1, kind: "antseed-p0-proof-artifacts", chainId: proofPlan.chainId, planSha256, claims: new Array(proofPlan.claims.length).fill(null) };
+    return { version: 2, kind: "antseed-sp1-p0-proof-artifacts", chainId: proofPlan.chainId, planSha256, claims: new Array(proofPlan.claims.length).fill(null) };
   }
 }
 

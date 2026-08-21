@@ -1,13 +1,12 @@
-use risc0_zkvm::guest::env;
+#![no_main]
+
+sp1_zkvm::entrypoint!(main);
 
 fn main() {
-    let mut length = 0u32;
-    env::read_slice(core::slice::from_mut(&mut length));
-    let mut bytes = vec![0u8; length as usize];
-    env::read_slice(&mut bytes);
+    let bytes = sp1_zkvm::io::read::<Vec<u8>>();
     let input: enforcement_core::ClosedCycleInput =
         serde_json::from_slice(&bytes).expect("decode closed-cycle input");
     let journal =
         enforcement_core::verify_closed_cycle(&input).expect("closed-cycle predicate not satisfied");
-    env::commit_slice(&journal.abi_encode());
+    sp1_zkvm::io::commit_slice(&journal.abi_encode());
 }

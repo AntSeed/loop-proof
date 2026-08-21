@@ -1,6 +1,6 @@
 # AntSeed P0 Proofs
 
-This repository builds and runs the two RISC Zero predicates used by the immutable seller reward gate:
+This repository builds and runs the two Succinct SP1 predicates used by the immutable seller reward gate:
 
 - `P0_CLOSED_LOOP`
 - `P0_RECIPROCAL`
@@ -32,7 +32,7 @@ Both wallets are recorded as P0.
 
 ### Minimal Public Journals
 
-The pinned guest image is authoritative for all predicate constants, thresholds,
+The pinned SP1 program vkey is authoritative for all predicate constants, thresholds,
 claim construction, and evidence semantics. The closed-loop public journal
 contains only the seller and canonical block references. The reciprocal journal
 contains only the normalized pair and canonical block references. Claim IDs and
@@ -46,8 +46,8 @@ Every committed Base header is checked by the on-chain canonical Base block orac
 ## Repository Layout
 
 - `enforcement-core/`: shared P0 verification and journal ABI.
-- `closed-cycle-methods/`: closed-loop RISC Zero guest image.
-- `reciprocal-methods/`: reciprocal RISC Zero guest image.
+- `closed-cycle-methods/`: closed-loop SP1 guest program.
+- `reciprocal-methods/`: reciprocal SP1 guest program.
 - `host/`: real-data materialization, execution, and proving binaries.
 - `scripts/`: proof planning and coverage reporting.
 - `core/`: receipt and trie verification shared by the P0 guests.
@@ -80,9 +80,39 @@ cargo run --release -p loop-host --bin wash-trading-prove -- \
   --output proof-results.json
 ```
 
-Add `--prove` for a proof receipt and `--production` for a production prover run. Production submission requires a production Groth16 receipt; development results are rejected by the production submission script. The separate `submit-development-proof-local.mjs` utility accepts exactly one development receipt and a loopback RPC URL for Anvil-only E2E testing.
+Add `--prove --production` to produce SP1 Groth16 proof bytes for Solidity. Use `SP1_PROVER=network` with `NETWORK_PRIVATE_KEY` for Succinct Network or `SP1_PROVER=cpu` for local proving; `mock` and `light` are rejected for production. Development execution results are rejected by the production submission script. The separate `submit-development-proof-local.mjs` utility accepts exactly one development execution result and a loopback RPC URL for Anvil-only E2E testing.
+
+Network proving also requires `SP1_NETWORK_MAX_COMPRESSED_BASE_FEE_PROVE_WEI`,
+`SP1_NETWORK_MAX_GROTH16_BASE_FEE_PROVE_WEI`, and
+`SP1_NETWORK_MAX_PRICE_PER_PGU_PROVE_WEI`. The host reads the live auction before
+every request, rejects fees above either approved ceiling, rejects an account that
+cannot cover the live base fee, and passes the approved price-per-PGU ceiling into
+the signed request. The SDK still simulates the exact witness locally so the request
+uses its measured PGU rather than a loose manual gas limit.
 
 The current report inventory contains 26 P0 proofs: two closed-loop sellers and 24 reciprocal pairs.
+The measured workload, live market estimate, enforced approval envelope, and
+local CPU/electricity estimate are recorded in
+[`reports/SP1_PROOF_MARKET_READINESS.md`](reports/SP1_PROOF_MARKET_READINESS.md).
+
+Before production proving, query the live Succinct auction without submitting a proof:
+
+```bash
+cargo run --release -p loop-host --bin sp1-network-readiness \
+  > sp1-network-readiness.json
+```
+
+The command requires `NETWORK_PRIVATE_KEY`, all three network fee caps, and
+`SP1_NETWORK_REQUIRED_BALANCE_PROVE_WEI`. It reports the account balance plus the
+current compressed and Groth16 base fees and maximum price per PGU, and exits
+unless every approval and funding gate passes. It is read-only. For a measured proof with `G` prover gas units, the market ceiling is
+`baseFeeProveWei + G * maxPricePerPguProveWei`. Convert the result from 18-decimal
+PROVE and then apply the current PROVE/USD price when preparing the aggregate
+cost quote.
+
+Development execution results include both `instructionCount` and
+`proverGasUnits`, allowing every materialized P0 witness to be priced before a
+network proof request is submitted.
 
 ## Deployment Security Flow
 
@@ -96,7 +126,7 @@ The required order is:
 
 1. Generate the 26-claim proof plan.
 2. Capture and Ed25519-sign the exact settlement/volume baseline.
-3. Prove the fixed 16,384-header epochs and one composed history-accumulator receipt.
+3. Prove the fixed 16,384-header epochs as SP1 compressed proofs and wrap one recursive history-accumulator proof in Groth16.
 4. Generate one strict `antseed-base-state-plan` v1 for accumulator submission
    and exact block-hash materialization.
 5. Validate and apply that state plan on an Anvil Base fork. A complete rerun
@@ -147,6 +177,8 @@ node scripts/proving-cost-quote.mjs \
 
 Replace the example zeroes with real quoted maximum unit costs. No production
 proving command should run until the aggregate amount and digest are approved.
+The proof host's mandatory network ceilings are an independent final guardrail;
+set them from the same approved quote before invoking the batch.
 
 ### Production batch and final volume gate
 

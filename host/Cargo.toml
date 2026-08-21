@@ -8,7 +8,7 @@ loop-core = { workspace = true }
 enforcement-core = { path = "../enforcement-core" }
 closed-cycle-methods = { path = "../closed-cycle-methods" }
 reciprocal-methods = { path = "../reciprocal-methods" }
-risc0-zkvm = { version = "3.0" }
+sp1-sdk = { workspace = true, features = ["blocking", "native-gnark", "network"] }
 alloy-primitives = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-eips = { workspace = true }

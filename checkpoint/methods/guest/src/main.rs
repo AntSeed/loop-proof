@@ -2,15 +2,16 @@
 
 use alloy_sol_types::SolValue;
 use checkpoint_core::{AccumulatorInput, validate_accumulator};
-use risc0_zkvm::guest::env;
+use sha2::{Digest, Sha256};
 
-risc0_zkvm::guest::entry!(main);
+sp1_zkvm::entrypoint!(main);
 
 fn main() {
-    let input: AccumulatorInput = env::read();
+    let input = sp1_zkvm::io::read::<AccumulatorInput>();
     for journal in &input.epoch_journals {
-        env::verify(input.epoch_image_id.0, journal.as_ref()).expect("epoch receipt verification failed");
+        let digest: [u8; 32] = Sha256::digest(journal.as_ref()).into();
+        sp1_zkvm::lib::verify::verify_sp1_proof(&input.epoch_recursion_vkey, &digest);
     }
     let journal = validate_accumulator(&input).expect("invalid historical accumulator");
-    env::commit_slice(&journal.abi_encode());
+    sp1_zkvm::io::commit_slice(&journal.abi_encode());
 }

@@ -4,14 +4,14 @@ use alloy_rlp::Decodable;
 use alloy_sol_types::{SolValue, sol};
 use serde::{Deserialize, Serialize};
 
-pub const JOURNAL_VERSION: u32 = 2;
+pub const JOURNAL_VERSION: u32 = 3;
 pub const BASE_CHAIN_ID: u64 = 8_453;
 pub const HISTORICAL_START_BLOCK: u64 = 44_469_557;
 pub const REQUIRED_COVERAGE_END_BLOCK: u64 = 49_936_172;
 pub const EPOCH_SIZE: usize = 16_384;
 pub const EPOCH_TREE_DEPTH: usize = 14;
 pub const EIP2935_WINDOW: u64 = 8_191;
-pub const MAX_BOUNDLESS_INPUT_BYTES: usize = 50_000_000;
+pub const MAX_PROVER_INPUT_BYTES: usize = 50_000_000;
 
 const BLOCK_LEAF_DOMAIN: u8 = 0x00;
 const BLOCK_NODE_DOMAIN: u8 = 0x02;
@@ -37,7 +37,7 @@ sol! {
     struct AccumulatorJournal {
         uint32 version;
         uint64 chainId;
-        bytes32 epochImageId;
+        bytes32 epochRecursionVKey;
         uint64 startBlockNumber;
         uint64 endBlockNumber;
         uint64 anchorBlockNumber;
@@ -57,7 +57,7 @@ pub struct EpochWitness {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AccumulatorInput {
-    pub epoch_image_id: B256,
+    pub epoch_recursion_vkey: [u32; 8],
     pub epoch_journals: Vec<Bytes>,
 }
 
@@ -126,8 +126,8 @@ pub fn validate_epoch(witness: &EpochWitness) -> Result<EpochJournal, String> {
 }
 
 pub fn validate_accumulator(input: &AccumulatorInput) -> Result<AccumulatorJournal, String> {
-    if input.epoch_image_id == B256::ZERO {
-        return Err("missing epoch image ID".into());
+    if input.epoch_recursion_vkey == [0; 8] {
+        return Err("missing epoch recursion vkey".into());
     }
     if input.epoch_journals.is_empty() {
         return Err("missing epoch journals".into());
@@ -174,7 +174,7 @@ pub fn validate_accumulator(input: &AccumulatorInput) -> Result<AccumulatorJourn
     Ok(AccumulatorJournal {
         version: JOURNAL_VERSION,
         chainId: BASE_CHAIN_ID,
-        epochImageId: input.epoch_image_id,
+        epochRecursionVKey: B256::from(words_to_bytes_be(&input.epoch_recursion_vkey)),
         startBlockNumber: HISTORICAL_START_BLOCK,
         endBlockNumber: last.endBlockNumber,
         anchorBlockNumber: last.endBlockNumber,
@@ -184,6 +184,14 @@ pub fn validate_accumulator(input: &AccumulatorInput) -> Result<AccumulatorJourn
         epochCount: epoch_count,
         mmrRoot: mmr_root(epoch_count, &peaks),
     })
+}
+
+pub fn words_to_bytes_be(words: &[u32; 8]) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    for (index, word) in words.iter().enumerate() {
+        bytes[index * 4..(index + 1) * 4].copy_from_slice(&word.to_be_bytes());
+    }
+    bytes
 }
 
 pub fn block_leaf(block_number: u64, block_hash: B256) -> B256 {

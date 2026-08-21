@@ -6,10 +6,13 @@ edition = "2024"
 [workspace]
 
 [dependencies]
-alloy-primitives = { version = "1.5.3", default-features = false, features = ["rlp", "serde", "tiny-keccak"] }
-alloy-sol-types = { version = "1.5.3", default-features = false }
+alloy-primitives = { version = "=1.5.3", default-features = false, features = ["rlp", "serde", "tiny-keccak"] }
+alloy-sol-types = { version = "=1.5.3", default-features = false }
 history-core = { path = "../../history-core" }
-risc0-zkvm = { version = "3.0", default-features = false, features = ["std"] }
+sp1-zkvm = { version = "=6.1.0", default-features = false, features = ["lib"] }
+
+[patch.crates-io]
+tiny-keccak = { git = "https://github.com/sp1-patches/tiny-keccak", tag = "patch-2.0.2-sp1-6.0.0" }
 
 [profile.release]
 lto = "thin"

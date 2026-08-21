@@ -9,4 +9,3 @@ alloy-primitives = { workspace = true }
 alloy-rlp = { workspace = true }
 alloy-sol-types = { workspace = true }
 serde = { workspace = true }
-risc0-zkvm = { workspace = true }

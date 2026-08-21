@@ -23,8 +23,8 @@ const [statePlan, baseline, volumeReport, proofPlan, proofResults, accumulator, 
 validateReleaseInputs({ statePlan, baseline, volumeReport, proofPlan, proofResults, accumulator, p0, guests, costQuote });
 
 const body = {
-  version: 1,
-  kind: "antseed-proof-release",
+  version: 2,
+  kind: "antseed-sp1-proof-release",
   chainId: 8_453,
   sources: {
     proofCommit: git(proofRepo, ["rev-parse", "HEAD"]),
@@ -72,17 +72,18 @@ function validateReleaseInputs({ statePlan, baseline, volumeReport, proofPlan, p
       || volumeReport.claimCount !== 26 || volumeReport.claims?.length !== 26 || volumeReport.differences?.length !== 0
       || volumeReport.baselineDigest !== baseline.attestation.digest) throw new Error("clean 26-claim final volume report is required");
   if (proofPlan?.version !== 2 || proofPlan?.claimCount !== 26 || proofPlan.claims?.length !== 26) throw new Error("proof plan must contain exactly 26 claims");
-  if (proofResults?.securityMode !== "production" || proofResults.entries?.length !== 26 || proofResults.entries.some((entry) => !entry.seal)) throw new Error("26 production proof results are required");
-  if (accumulator?.version !== 2 || accumulator.kind !== "antseed-history-accumulator-artifacts"
+  if (proofResults?.version !== 2 || proofResults?.kind !== "antseed-wash-trading-proof-results" || proofResults.securityMode !== "production"
+      || proofResults.entries?.length !== 26 || proofResults.entries.some((entry) => !entry.proofBytes || !entry.programVKey)) throw new Error("26 production SP1 proof results are required");
+  if (accumulator?.version !== 3 || accumulator.kind !== "antseed-sp1-history-accumulator-artifacts"
       || accumulator.epochCount !== accumulator.epochs?.length || accumulator.epochs.some((epoch) => epoch.status !== "proven")
       || accumulator.accumulator?.status !== "proven" || accumulator.accumulator?.proofMode !== "groth16"
       || !accumulator.accumulator.mmrRoot) throw new Error("history accumulator proofs are incomplete or not Groth16");
-  if (p0?.kind !== "antseed-p0-proof-artifacts" || p0.claims?.length !== 26 || p0.claims.some((claim) => claim?.status !== "proven")) throw new Error("P0 proof artifacts are incomplete");
-  if (guests?.version !== 1 || guests?.kind !== "antseed-guest-build-attestation" || guests.reproducible !== true
+  if (p0?.version !== 2 || p0?.kind !== "antseed-sp1-p0-proof-artifacts" || p0.claims?.length !== 26 || p0.claims.some((claim) => claim?.status !== "proven")) throw new Error("P0 SP1 proof artifacts are incomplete");
+  if (guests?.version !== 2 || guests?.kind !== "antseed-sp1-program-build-attestation" || guests.sp1Version !== "6.1.0" || guests.reproducible !== true
       || !guests.guests || Object.keys(guests.guests).sort().join(",") !== "accumulator,closedCycle,historyEpoch,reciprocal") {
     throw new Error("reproducible four-guest build attestation is required");
   }
-  if (costQuote?.body?.version !== 2 || costQuote?.body?.kind !== "antseed-proof-cost-quote"
+  if (costQuote?.body?.version !== 3 || costQuote?.body?.kind !== "antseed-sp1-proof-cost-quote"
       || costQuote.body.counts?.epochProofs !== accumulator.epochCount || costQuote.body.counts?.aggregateProofs !== 1
       || costQuote.body.counts?.p0Claims !== 26
       || sha256(canonicalJson(costQuote.body)) !== costQuote.digest) throw new Error("aggregate proving cost quote is required");

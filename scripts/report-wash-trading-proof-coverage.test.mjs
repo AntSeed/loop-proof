@@ -74,16 +74,16 @@ function coverageFixture() {
   const journalBytes = "0x01";
   const journalDigest = `0x${createHash("sha256").update(Buffer.from("01", "hex")).digest("hex")}`;
   const results = {
-    version: 1,
+    version: 2,
     kind: "antseed-wash-trading-proof-results",
     chainId: 8_453,
     reportRoot,
-    securityMode: "execute-only",
+    securityMode: "development",
     entries: [{
       claimId: "cohort",
       claimType: "P0_CLOSED_LOOP",
       subjects: ["seller"],
-      imageId: "1".repeat(64),
+      programVKey: `0x${"1".repeat(64)}`,
       journalBytes,
       journalDigest,
       selectedEvidence,

@@ -26,7 +26,7 @@ export function buildCoverageReport(bundle, plan, results = null) {
   if (bundleClaims.size !== bundle.claims.length) throw new Error("proof bundle contains duplicate claim IDs");
   if (plannedClaims.size !== plan.claimCount || plannedClaims.size !== plan.claims.length) throw new Error("proof plan contains duplicate claim IDs or an invalid claim count");
   const resultEntries = new Map((results?.entries ?? []).map((entry) => [entry.claimId, entry]));
-  if (results && (results.version !== 1
+  if (results && (results.version !== 2
       || results.kind !== "antseed-wash-trading-proof-results"
       || results.reportRoot !== bundle.reportRoot
       || results.chainId !== bundle.chainId
@@ -34,7 +34,7 @@ export function buildCoverageReport(bundle, plan, results = null) {
       || resultEntries.size !== results.entries.length)) {
     throw new Error("proof results do not match the bundle or contain duplicate claim IDs");
   }
-  if (results && !["execute-only", "development", "production"].includes(results.securityMode)) throw new Error("proof results use an unknown security mode");
+  if (results && !["development", "production"].includes(results.securityMode)) throw new Error("proof results use an unknown security mode");
   for (const [claimId, result] of resultEntries) {
     const planned = plannedClaims.get(claimId);
     if (!planned) throw new Error(`${claimId}: result is absent from proof plan`);
@@ -84,8 +84,8 @@ export function buildCoverageReport(bundle, plan, results = null) {
       selectedBlockCount: planned.selectedBlocks.length,
       materializationBlockCount: planned.materializationBlocks.length,
       optimizationMode: planned.optimizationMode ?? null,
-      totalCycles: result?.totalCycles ?? null,
-      imageId: result?.imageId ?? null,
+      instructionCount: result?.instructionCount ?? null,
+      programVKey: result?.programVKey ?? null,
     });
   }
   const uniqueSelectedVolume = [...selectedLogs.values()].reduce((total, amount) => total + amount, 0n);
@@ -127,7 +127,7 @@ export function buildCoverageReport(bundle, plan, results = null) {
       "Every completed claim proves its compact enforcement predicate and approved-report membership.",
       "Authenticated selected volume is the unique USDC settlement amount actually included in the compact proofs.",
       "Report-root classified volume is governance-approved completeness data; the report bundle does not authenticate every contributing settlement.",
-      "Development receipts are execution tests and cannot be submitted as production zk proofs.",
+      "Development executions are validation tests and cannot be submitted as production SP1 proofs.",
     ],
     perClaim,
   };
@@ -137,13 +137,13 @@ function validateResultEntry(result, planned, securityMode) {
   if (result.claimType !== planned.type || JSON.stringify(result.subjects) !== JSON.stringify(planned.subjects)) {
     throw new Error(`${planned.claimId}: result identity differs from proof plan`);
   }
-  if (!/^(?:0x)?[0-9a-f]{64}$/i.test(result.imageId ?? "")) throw new Error(`${planned.claimId}: invalid image ID`);
+  if (!/^0x[0-9a-f]{64}$/i.test(result.programVKey ?? "")) throw new Error(`${planned.claimId}: invalid SP1 program vkey`);
   if (!/^0x[0-9a-f]+$/i.test(result.journalBytes ?? "") || !/^0x[0-9a-f]{64}$/i.test(result.journalDigest ?? "")) {
     throw new Error(`${planned.claimId}: invalid journal encoding`);
   }
   const digest = `0x${createHash("sha256").update(Buffer.from(result.journalBytes.slice(2), "hex")).digest("hex")}`;
   if (digest.toLowerCase() !== result.journalDigest.toLowerCase()) throw new Error(`${planned.claimId}: journal digest mismatch`);
-  if (securityMode !== "execute-only" && (!result.seal || result.seal === "0x")) throw new Error(`${planned.claimId}: proof seal missing`);
+  if (securityMode === "production" && (!result.proofBytes || result.proofBytes === "0x")) throw new Error(`${planned.claimId}: SP1 proof bytes missing`);
   const plannedDependencies = planned.selectedEvidence.map((entry) => entry.dependencyId);
   const resultDependencies = (result.selectedEvidence ?? []).map((entry) => entry.dependencyId);
   if (JSON.stringify(resultDependencies) !== JSON.stringify(plannedDependencies)

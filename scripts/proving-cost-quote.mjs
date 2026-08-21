@@ -21,8 +21,8 @@ export function buildCostQuote({ accumulatorManifest, proofPlan, epochUnitUsd, a
     + unitMicros.aggregateProofUsd * BigInt(counts.aggregateProofs)
     + unitMicros.p0ClaimUsd * BigInt(counts.p0Claims);
   const body = {
-    version: 2,
-    kind: "antseed-proof-cost-quote",
+    version: 3,
+    kind: "antseed-sp1-proof-cost-quote",
     chainId: 8_453,
     currency: "USD",
     provider,
@@ -40,7 +40,7 @@ export function buildCostQuote({ accumulatorManifest, proofPlan, epochUnitUsd, a
 }
 
 export function approveCostQuote(quote, approvedDigest, expectedCounts, now = new Date()) {
-  if (quote?.body?.version !== 2 || quote.body.kind !== "antseed-proof-cost-quote" || quote.body.chainId !== 8_453 || quote.body.currency !== "USD") throw new Error("unsupported proving cost quote");
+  if (quote?.body?.version !== 3 || quote.body.kind !== "antseed-sp1-proof-cost-quote" || quote.body.chainId !== 8_453 || quote.body.currency !== "USD") throw new Error("unsupported proving cost quote");
   const digest = quoteDigest(quote.body);
   if (quote.digest?.toLowerCase() !== digest.toLowerCase()) throw new Error("proving cost quote digest mismatch");
   if (approvedDigest?.toLowerCase() !== digest.toLowerCase()) throw new Error(`explicit approval requires --approve-cost-digest ${digest}`);
@@ -54,7 +54,7 @@ export function approveCostQuote(quote, approvedDigest, expectedCounts, now = ne
 }
 
 function validateAccumulatorManifest(manifest) {
-  if (manifest?.version !== 2 || manifest.kind !== "antseed-history-accumulator-artifacts" || manifest.chainId !== 8_453
+  if (manifest?.version !== 3 || manifest.kind !== "antseed-sp1-history-accumulator-artifacts" || manifest.chainId !== 8_453
       || !Number.isInteger(manifest.epochCount) || manifest.epochCount <= 0 || manifest.epochs?.length !== manifest.epochCount) {
     throw new Error("unsupported accumulator manifest");
   }

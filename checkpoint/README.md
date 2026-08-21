@@ -6,8 +6,8 @@ This workspace proves the Base block hashes required by the wash-trading evidenc
 
 1. Each epoch guest receives exactly 16,384 canonical RLP Base headers.
 2. It checks block numbers and every `parentHash` link, then commits a fixed-depth Merkle root over `(blockNumber, blockHash)` leaves.
-3. The accumulator guest verifies every epoch receipt through RISC Zero composition, checks that the epoch journals are contiguous, and commits their ordered MMR root.
-4. `AntseedBaseCheckpointOracle` verifies the aggregate Groth16 receipt and checks its final Base block hash directly against Base's EIP-2935 history-storage contract.
+3. The accumulator guest recursively verifies every SP1 compressed epoch proof, checks that the epoch public values are contiguous, and commits their ordered MMR root.
+4. `AntseedBaseCheckpointOracle` verifies the wrapped SP1 Groth16 proof and checks its final Base block hash directly against Base's EIP-2935 history-storage contract.
 5. A block is usable by an evidence proof only after `materializeHistoricalBlocks` verifies both its 14-level epoch branch and its MMR mountain proof and stores the exact `(blockNumber, blockHash)` pair.
 
 The on-chain root is immutable in V1. It covers full epochs only, starting at Base block `44,469,557`, and must cover through block `49,936,172`.
@@ -19,7 +19,7 @@ cd loop-proof/checkpoint
 cargo build --release -p checkpoint-host
 ```
 
-The generated deployment image IDs are `history_methods::EPOCH_IMAGE_ID` and `checkpoint_methods::ACCUMULATOR_IMAGE_ID`. Pin both IDs in the oracle constructor.
+Generate deployment metadata with `cargo run --release -p checkpoint-host -- program-metadata --out program-metadata.json`. Pin `programs.historyEpoch.recursionVKey` and `programs.accumulator.programVKey` in the oracle constructor.
 
 ## Production proof flow
 
@@ -46,11 +46,10 @@ cargo run --release -p checkpoint-host -- \
 cargo run --release -p checkpoint-host -- \
   aggregate \
   --manifest history-artifacts/manifest.json \
-  --artifact-dir history-artifacts \
-  --groth16
+  --artifact-dir history-artifacts
 ```
 
-Epoch receipts are resumable and intentionally use the default composable receipt format. Only the final accumulator receipt needs Groth16 compression for Solidity verification.
+Epoch proofs are resumable SP1 compressed proofs. Only the final recursive accumulator proof is wrapped in Groth16 for Solidity verification.
 
 The aligned anchor must still be inside EIP-2935's 8,191-block window when submitted. If it expires during proving, rerun `plan` into the same manifest, then rerun `fetch`, `prove-epochs`, and `aggregate`. Cached epochs are validated and reused; only newly added epochs are fetched and proved.
 
@@ -58,9 +57,9 @@ The aligned anchor must still be inside EIP-2935's 8,191-block window when submi
 
 ```bash
 cd antseed/packages/contracts
-export RISC0_VERIFIER=0x...
-export HISTORY_EPOCH_IMAGE_ID=0x...
-export HISTORY_ACCUMULATOR_IMAGE_ID=0x...
+export SP1_VERIFIER=0x397A5f7f3dBd538f23DE225B51f532c34448dA9B
+export HISTORY_EPOCH_RECURSION_VKEY=0x...
+export HISTORY_ACCUMULATOR_PROGRAM_VKEY=0x...
 
 forge script script/DeployBaseHistoricalAccumulatorOracle.s.sol \
   --rpc-url "$BASE_RPC_URL" --broadcast --verify
@@ -90,15 +89,40 @@ node ../../antseed/packages/contracts/scripts/apply-base-state-plan.mjs \
   --validate-only
 ```
 
-For an Anvil fork, use `--fork-submit`. For Base mainnet, first record the printed plan digest, then use `--submit --confirm-plan-digest 0x...` with `SUBMITTER_PRIVATE_KEY` set. The executor is resumable and checks the exact accumulator end block, epoch count, MMR root, journal digest, and every materialized `canonicalBlockHashes(blockNumber)` value after inclusion. State-plan generation rejects composite or development receipts and requires the final accumulator receipt to be Groth16.
+For an Anvil fork, use `--fork-submit`. For Base mainnet, first record the printed plan digest, then use `--submit --confirm-plan-digest 0x...` with `SUBMITTER_PRIVATE_KEY` set. The executor is resumable and checks the exact accumulator end block, epoch count, MMR root, public-values digest, and every materialized `canonicalBlockHashes(blockNumber)` value after inclusion. State-plan generation requires the final accumulator proof to be SP1 Groth16.
 
-## Development composition check
+## Preflight checks
 
-The development command executes one full 16,384-header epoch guest and then executes the production accumulator guest with 334 composed assumptions. Remaining assumptions are explicitly fake development receipts; the command refuses to run unless `RISC0_DEV_MODE=1`.
+Validate accumulator logic and generate the exact deployment vkeys before starting expensive proofs:
 
 ```bash
-RISC0_DEV_MODE=1 cargo run -p checkpoint-host -- \
-  dev-e2e --artifact-dir target/dev-e2e
+cargo test -p history-core -p checkpoint-core
+cargo run --release -p checkpoint-host -- \
+  program-metadata --out target/program-metadata.json
 ```
 
-Development seals are not valid on Base and must never be included in a production state plan.
+Set `SP1_PROVER=network` with `NETWORK_PRIVATE_KEY` for Succinct Network, or `SP1_PROVER=cpu` for local proving. Light or mock execution is rejected by `prove-epochs` and `aggregate` and can never be included in a production state plan. Network proving additionally requires mode-specific `SP1_NETWORK_MAX_COMPRESSED_BASE_FEE_PROVE_WEI` and `SP1_NETWORK_MAX_GROTH16_BASE_FEE_PROVE_WEI` ceilings plus `SP1_NETWORK_MAX_PRICE_PER_PGU_PROVE_WEI`; each request reads the live auction, checks the funded balance and approved ceilings, and signs the approved price-per-PGU cap. SP1's local simulation supplies the exact PGU limit for each witness.
+
+Measure fetched epoch workloads locally without creating proofs:
+
+```bash
+cargo run --release -p checkpoint-host -- \
+  measure-epochs \
+  --manifest history-artifacts/manifest.json \
+  --artifact-dir history-artifacts \
+  --out history-artifacts/measurements.json
+```
+
+Exercise the full recursive guest path without writing release-eligible proof
+artifacts by using a current manifest and at least the first fetched epoch:
+
+```bash
+cargo run --release -p checkpoint-host -- \
+  smoke-recursive \
+  --manifest history-artifacts/manifest.json \
+  --artifact-dir history-artifacts \
+  --out history-artifacts/recursive-smoke.json
+```
+
+The smoke report is explicitly marked `insecure-mock`; production `prove-epochs`
+and `aggregate` still require cryptographically verifiable SP1 proofs.

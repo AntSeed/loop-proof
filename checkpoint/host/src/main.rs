@@ -3,11 +3,11 @@ use alloy::{
     sol,
 };
 use alloy_consensus::Header;
-use alloy_primitives::{Address, B256, Bytes, keccak256};
+use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use alloy_sol_types::{SolCall, SolValue};
 use anyhow::{Context, Result, bail, ensure};
 use checkpoint_host::state_plan::{StatePlan, check, entry};
-use checkpoint_methods::{ACCUMULATOR_GUEST_ELF, ACCUMULATOR_IMAGE_ID};
+use checkpoint_methods::ACCUMULATOR_GUEST_ELF;
 use clap::{Parser, Subcommand};
 use futures::{StreamExt, TryStreamExt, stream};
 use history_core::{
@@ -15,16 +15,17 @@ use history_core::{
     HISTORICAL_START_BLOCK, MmrProof, REQUIRED_COVERAGE_END_BLOCK, block_merkle_proof,
     epoch_commitment, epoch_end, epoch_start, mmr_proof, validate_accumulator, validate_epoch,
 };
-use history_methods::{EPOCH_GUEST_ELF, EPOCH_IMAGE_ID};
-use risc0_ethereum_contracts::encode_seal;
-use risc0_zkvm::{
-    Digest, ExecutorEnv, FakeReceipt, InnerReceipt, ProverOpts, Receipt, ReceiptClaim,
-    VerifierContext, default_prover,
-};
+use history_methods::EPOCH_GUEST_ELF;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as ShaDigest, Sha256};
+use sp1_sdk::{
+    Elf, HashableKey, ProvingKey, SP1Proof, SP1ProofMode, SP1ProofWithPublicValues, SP1ProvingKey,
+    SP1PublicValues, SP1Stdin,
+    blocking::{NetworkProver, ProveRequest, Prover, ProverClient},
+    network::proto::GetProofRequestParamsResponse,
+};
 use std::{
-    fs,
+    env, fs,
     path::{Path, PathBuf},
 };
 use url::Url;
@@ -41,7 +42,7 @@ sol! {
         uint32 targetPeakIndex;
     }
     interface IAccumulatorOracle {
-        function submitHistoricalAccumulator(bytes seal, bytes journalData);
+        function submitHistoricalAccumulator(bytes proofBytes, bytes publicValues);
         function materializeHistoricalBlocks(HistoricalBlockProof[] proofs) returns (uint256 stored);
         function historicalCoverageComplete() view returns (bool);
         function historicalEndBlock() view returns (uint64);
@@ -61,6 +62,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    ProgramMetadata {
+        #[arg(long)]
+        out: PathBuf,
+    },
     Plan {
         #[arg(long, env = "BASE_RPC_URL")]
         rpc_url: Url,
@@ -82,16 +87,28 @@ enum Command {
         manifest: PathBuf,
         #[arg(long)]
         artifact_dir: PathBuf,
+    },
+    MeasureEpochs {
         #[arg(long)]
-        groth16: bool,
+        manifest: PathBuf,
+        #[arg(long)]
+        artifact_dir: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    SmokeRecursive {
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        artifact_dir: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
     },
     Aggregate {
         #[arg(long)]
         manifest: PathBuf,
         #[arg(long)]
         artifact_dir: PathBuf,
-        #[arg(long)]
-        groth16: bool,
     },
     StatePlan {
         #[arg(long)]
@@ -107,10 +124,6 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
-    DevE2e {
-        #[arg(long)]
-        artifact_dir: PathBuf,
-    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -122,8 +135,10 @@ struct Manifest {
     start_block: u64,
     anchor_block: u64,
     epoch_count: u32,
-    epoch_image_id: B256,
-    accumulator_image_id: B256,
+    #[serde(rename = "epochRecursionVKey")]
+    epoch_recursion_vkey: B256,
+    #[serde(rename = "accumulatorProgramVKey")]
+    accumulator_program_vkey: B256,
     epochs: Vec<EpochArtifact>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     accumulator: Option<AccumulatorArtifact>,
@@ -137,7 +152,7 @@ struct EpochArtifact {
     end_block: u64,
     witness_file: String,
     journal_file: String,
-    receipt_file: String,
+    proof_file: String,
     status: String,
 }
 
@@ -145,42 +160,70 @@ struct EpochArtifact {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AccumulatorArtifact {
     journal_file: String,
-    receipt_file: String,
-    seal_file: String,
+    proof_file: String,
+    proof_bytes_file: String,
     journal_sha256: String,
-    receipt_sha256: String,
-    seal_sha256: String,
+    proof_sha256: String,
+    proof_bytes_sha256: String,
     mmr_root: B256,
     proof_mode: String,
     status: String,
 }
 
-fn image_id(words: [u32; 8]) -> B256 {
-    B256::from_slice(Digest::from(words).as_bytes())
+#[derive(Clone, Copy)]
+struct NetworkProofCaps {
+    max_base_fee: u64,
+    max_price_per_pgu: u64,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+struct NetworkProofContext {
+    client: NetworkProver,
+    proving_key: SP1ProvingKey,
+    caps: NetworkProofCaps,
+}
+
+fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let cli = Cli::parse();
     match cli.command {
-        Command::Plan { rpc_url, out } => plan(rpc_url, &out).await,
+        Command::ProgramMetadata { out } => write_program_metadata(&out),
+        Command::Plan { rpc_url, out } => {
+            let (epoch_recursion_vkey, accumulator_program_vkey) = program_vkeys()?;
+            runtime()?.block_on(plan(
+                rpc_url,
+                &out,
+                epoch_recursion_vkey,
+                accumulator_program_vkey,
+            ))
+        }
         Command::Fetch {
             rpc_url,
             manifest,
             artifact_dir,
             concurrency,
-        } => fetch(rpc_url, &manifest, &artifact_dir, concurrency).await,
+        } => {
+            let planned: Manifest = read_json(&manifest)?;
+            validate_manifest(&planned)?;
+            runtime()?.block_on(fetch(rpc_url, &manifest, &artifact_dir, concurrency))
+        }
         Command::ProveEpochs {
             manifest,
             artifact_dir,
-            groth16,
-        } => prove_epochs(&manifest, &artifact_dir, groth16),
+        } => prove_epochs(&manifest, &artifact_dir),
+        Command::MeasureEpochs {
+            manifest,
+            artifact_dir,
+            out,
+        } => measure_epochs(&manifest, &artifact_dir, &out),
+        Command::SmokeRecursive {
+            manifest,
+            artifact_dir,
+            out,
+        } => smoke_recursive(&manifest, &artifact_dir, &out),
         Command::Aggregate {
             manifest,
             artifact_dir,
-            groth16,
-        } => aggregate(&manifest, &artifact_dir, groth16),
+        } => aggregate(&manifest, &artifact_dir),
         Command::StatePlan {
             manifest,
             artifact_dir,
@@ -189,12 +232,63 @@ async fn main() -> Result<()> {
             batch_size,
             out,
         } => state_plan(&manifest, &artifact_dir, oracle, &blocks, batch_size, &out),
-        Command::DevE2e { artifact_dir } => dev_e2e(&artifact_dir),
     }
 }
 
-async fn plan(rpc_url: Url, out: &Path) -> Result<()> {
-    let provider = ProviderBuilder::new().connect(rpc_url.as_str()).await?;
+fn runtime() -> Result<tokio::runtime::Runtime> {
+    Ok(tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?)
+}
+
+fn write_program_metadata(out: &Path) -> Result<()> {
+    let client = ProverClient::builder().cpu().build();
+    let epoch_key = client.setup(EPOCH_GUEST_ELF.clone())?;
+    let accumulator_key = client.setup(ACCUMULATOR_GUEST_ELF.clone())?;
+    let metadata = serde_json::json!({
+        "version": 1,
+        "kind": "antseed-sp1-program-metadata",
+        "sp1Version": "6.1.0",
+        "programs": {
+            "historyEpoch": program_metadata(
+                &EPOCH_GUEST_ELF,
+                epoch_key.verifying_key().bytes32(),
+                Some(format!("0x{}", hex::encode(epoch_key.verifying_key().hash_bytes()))),
+            ),
+            "accumulator": program_metadata(
+                &ACCUMULATOR_GUEST_ELF,
+                accumulator_key.verifying_key().bytes32(),
+                None,
+            ),
+        },
+    });
+    write_json(out, &metadata)
+}
+
+fn program_metadata(
+    elf: &Elf,
+    program_vkey: String,
+    recursion_vkey: Option<String>,
+) -> serde_json::Value {
+    let bytes = match elf {
+        Elf::Static(bytes) => *bytes,
+        Elf::Dynamic(bytes) => bytes.as_ref(),
+    };
+    serde_json::json!({
+        "programVKey": program_vkey,
+        "recursionVKey": recursion_vkey,
+        "elfSha256": format!("0x{:x}", Sha256::digest(bytes)),
+        "elfBytes": bytes.len(),
+    })
+}
+
+async fn plan(
+    rpc_url: Url,
+    out: &Path,
+    epoch_recursion_vkey: B256,
+    accumulator_program_vkey: B256,
+) -> Result<()> {
+    let provider = ProviderBuilder::new().connect_http(rpc_url);
     let head = provider.get_block_number().await?;
     ensure!(
         head > HISTORICAL_START_BLOCK,
@@ -223,20 +317,20 @@ async fn plan(rpc_url: Url, out: &Path) -> Result<()> {
                 end_block: epoch_end(index).map_err(anyhow::Error::msg)?,
                 witness_file: format!("epoch-{index:04}.witness.json"),
                 journal_file: format!("epoch-{index:04}.journal.bin"),
-                receipt_file: format!("epoch-{index:04}.receipt.bin"),
+                proof_file: format!("epoch-{index:04}.proof.bin"),
                 status: "planned".into(),
             })
         })
         .collect::<Result<Vec<_>>>()?;
     let manifest = Manifest {
-        version: 2,
-        kind: "antseed-history-accumulator-artifacts".into(),
+        version: 3,
+        kind: "antseed-sp1-history-accumulator-artifacts".into(),
         chain_id: 8_453,
         start_block: HISTORICAL_START_BLOCK,
         anchor_block: anchor,
         epoch_count,
-        epoch_image_id: image_id(EPOCH_IMAGE_ID),
-        accumulator_image_id: image_id(ACCUMULATOR_IMAGE_ID),
+        epoch_recursion_vkey,
+        accumulator_program_vkey,
         epochs,
         accumulator: None,
     };
@@ -253,9 +347,8 @@ async fn fetch(
 ) -> Result<()> {
     ensure!(concurrency > 0, "concurrency must be positive");
     let mut manifest: Manifest = read_json(manifest_path)?;
-    validate_manifest(&manifest)?;
     fs::create_dir_all(artifact_dir)?;
-    let provider = ProviderBuilder::new().connect(rpc_url.as_str()).await?;
+    let provider = ProviderBuilder::new().connect_http(rpc_url);
     for artifact_index in 0..manifest.epochs.len() {
         let artifact = manifest.epochs[artifact_index].clone();
         let path = artifact_dir.join(&artifact.witness_file);
@@ -311,26 +404,28 @@ async fn fetch(
     Ok(())
 }
 
-fn prove_epochs(manifest_path: &Path, artifact_dir: &Path, groth16: bool) -> Result<()> {
-    ensure!(
-        !groth16,
-        "epoch proofs must remain composable; omit --groth16"
-    );
+fn prove_epochs(manifest_path: &Path, artifact_dir: &Path) -> Result<()> {
+    ensure_production_prover()?;
     let mut manifest: Manifest = read_json(manifest_path)?;
     validate_manifest(&manifest)?;
+    let client = ProverClient::from_env();
+    let epoch_key = client.setup(EPOCH_GUEST_ELF.clone())?;
+    let network = network_proof_context(EPOCH_GUEST_ELF.clone(), SP1ProofMode::Compressed)?;
     for artifact_index in 0..manifest.epochs.len() {
         let artifact = manifest.epochs[artifact_index].clone();
         let witness: EpochWitness = read_json(&artifact_dir.join(&artifact.witness_file))?;
         let expected = validate_epoch(&witness).map_err(anyhow::Error::msg)?;
         let journal_path = artifact_dir.join(&artifact.journal_file);
-        let receipt_path = artifact_dir.join(&artifact.receipt_file);
-        if journal_path.exists() && receipt_path.exists() {
+        let proof_path = artifact_dir.join(&artifact.proof_file);
+        if journal_path.exists() && proof_path.exists() {
             let journal =
                 EpochJournal::decode(&fs::read(&journal_path)?).map_err(anyhow::Error::msg)?;
-            let receipt: Receipt = bincode::deserialize(&fs::read(&receipt_path)?)?;
-            receipt.verify(EPOCH_IMAGE_ID)?;
+            let proof = SP1ProofWithPublicValues::load(&proof_path)?;
+            client.verify(&proof, epoch_key.verifying_key(), None)?;
             ensure!(
-                journal == expected && receipt.journal.bytes == journal.abi_encode(),
+                matches!(&proof.proof, SP1Proof::Compressed(_))
+                    && journal == expected
+                    && proof.public_values.as_slice() == journal.abi_encode(),
                 "cached epoch {} proof mismatch",
                 artifact.index
             );
@@ -341,21 +436,20 @@ fn prove_epochs(manifest_path: &Path, artifact_dir: &Path, groth16: bool) -> Res
             }
             continue;
         }
-        let env = ExecutorEnv::builder().write(&witness)?.build()?;
-        let opts = if groth16 {
-            ProverOpts::groth16()
+        let mut stdin = SP1Stdin::new();
+        stdin.write(&witness);
+        let proof = if let Some(network) = &network {
+            network.prove_compressed(stdin)?
         } else {
-            ProverOpts::default()
+            client.prove(&epoch_key, stdin).compressed().run()?
         };
-        let info = default_prover().prove_with_ctx(
-            env,
-            &VerifierContext::default(),
-            EPOCH_GUEST_ELF,
-            &opts,
-        )?;
-        info.receipt.verify(EPOCH_IMAGE_ID)?;
+        client.verify(&proof, epoch_key.verifying_key(), None)?;
+        ensure!(
+            matches!(&proof.proof, SP1Proof::Compressed(_)),
+            "epoch proof is not compressed"
+        );
         let journal =
-            EpochJournal::decode(&info.receipt.journal.bytes).map_err(anyhow::Error::msg)?;
+            EpochJournal::decode(proof.public_values.as_slice()).map_err(anyhow::Error::msg)?;
         ensure!(
             journal == expected,
             "epoch {} journal mismatch",
@@ -363,27 +457,162 @@ fn prove_epochs(manifest_path: &Path, artifact_dir: &Path, groth16: bool) -> Res
         );
         fs::write(
             artifact_dir.join(&artifact.journal_file),
-            &info.receipt.journal.bytes,
+            proof.public_values.as_slice(),
         )?;
-        fs::write(
-            artifact_dir.join(&artifact.receipt_file),
-            bincode::serialize(&info.receipt)?,
-        )?;
+        proof.save(artifact_dir.join(&artifact.proof_file))?;
         manifest.epochs[artifact_index].status = "proven".into();
         write_json(manifest_path, &manifest)?;
-        println!(
-            "proved epoch {}: {} padded cycles",
-            artifact.index, info.stats.total_cycles
-        );
+        println!("proved SP1 epoch {}", artifact.index);
     }
     Ok(())
 }
 
-fn aggregate(manifest_path: &Path, artifact_dir: &Path, groth16: bool) -> Result<()> {
+fn measure_epochs(manifest_path: &Path, artifact_dir: &Path, out: &Path) -> Result<()> {
+    let manifest: Manifest = read_json(manifest_path)?;
+    validate_manifest(&manifest)?;
+    let client = ProverClient::builder().cpu().build();
+    let mut measurements = Vec::with_capacity(manifest.epochs.len());
+    for artifact in &manifest.epochs {
+        let witness_path = artifact_dir.join(&artifact.witness_file);
+        ensure!(
+            witness_path.exists(),
+            "epoch {} witness is missing",
+            artifact.index
+        );
+        let witness: EpochWitness = read_json(&witness_path)?;
+        let expected = validate_epoch(&witness).map_err(anyhow::Error::msg)?;
+        let mut stdin = SP1Stdin::new();
+        stdin.write(&witness);
+        let (public_values, report) = client
+            .execute(EPOCH_GUEST_ELF.clone(), stdin)
+            .calculate_gas(true)
+            .run()?;
+        ensure!(
+            public_values.as_slice() == expected.abi_encode(),
+            "epoch {} measured journal mismatch",
+            artifact.index
+        );
+        measurements.push(serde_json::json!({
+            "index": artifact.index,
+            "instructionCount": report.total_instruction_count(),
+            "proverGasUnits": report.gas().context("SP1 gas calculation missing")?,
+            "witnessBytes": fs::metadata(&witness_path)?.len(),
+        }));
+        println!("measured SP1 epoch {}", artifact.index);
+    }
+    write_json(
+        out,
+        &serde_json::json!({
+            "version": 1,
+            "kind": "antseed-sp1-epoch-measurements",
+            "epochCount": measurements.len(),
+            "measurements": measurements,
+        }),
+    )
+}
+
+fn smoke_recursive(manifest_path: &Path, artifact_dir: &Path, out: &Path) -> Result<()> {
+    let manifest: Manifest = read_json(manifest_path)?;
+    validate_manifest(&manifest)?;
+    let client = ProverClient::builder().mock().build();
+    let epoch_key = client.setup(EPOCH_GUEST_ELF.clone())?;
+    let accumulator_key = client.setup(ACCUMULATOR_GUEST_ELF.clone())?;
+    let first_artifact = manifest.epochs.first().context("manifest has no epochs")?;
+    let first_witness: EpochWitness = read_json(&artifact_dir.join(&first_artifact.witness_file))?;
+    let first_journal = validate_epoch(&first_witness).map_err(anyhow::Error::msg)?;
+    let mut first_stdin = SP1Stdin::new();
+    first_stdin.write(&first_witness);
+    let template_proof = client.prove(&epoch_key, first_stdin).compressed().run()?;
+    client.verify(&template_proof, epoch_key.verifying_key(), None)?;
     ensure!(
-        !(groth16 && std::env::var("RISC0_DEV_MODE").ok().as_deref() == Some("1")),
-        "Groth16 aggregation is forbidden in RISC0_DEV_MODE"
+        matches!(&template_proof.proof, SP1Proof::Compressed(_))
+            && template_proof.public_values.as_slice() == first_journal.abi_encode(),
+        "mock epoch proof mismatch"
     );
+    let mut journals = Vec::with_capacity(manifest.epochs.len());
+    let mut proofs = Vec::with_capacity(manifest.epochs.len());
+    let mut previous_end_hash = first_journal.endBlockHash;
+    for artifact in &manifest.epochs {
+        let journal = if artifact.index == 0 {
+            first_journal.clone()
+        } else {
+            let end_block_hash = keccak256(("smoke-end", artifact.index).abi_encode());
+            let journal = EpochJournal {
+                version: history_core::JOURNAL_VERSION,
+                chainId: history_core::BASE_CHAIN_ID,
+                epochIndex: artifact.index,
+                startBlockNumber: artifact.start_block,
+                endBlockNumber: artifact.end_block,
+                firstParentHash: previous_end_hash,
+                endBlockHash: end_block_hash,
+                blockCount: EPOCH_SIZE as u32,
+                blockRoot: keccak256(("smoke-root", artifact.index).abi_encode()),
+            };
+            previous_end_hash = end_block_hash;
+            journal
+        };
+        let journal_bytes = journal.abi_encode();
+        let mut proof = template_proof.clone();
+        proof.public_values = SP1PublicValues::from(&journal_bytes);
+        journals.push(Bytes::from(journal_bytes));
+        proofs.push(proof);
+    }
+    let input = AccumulatorInput {
+        epoch_recursion_vkey: epoch_key.verifying_key().hash_u32(),
+        epoch_journals: journals,
+    };
+    let expected = validate_accumulator(&input).map_err(anyhow::Error::msg)?;
+    let accumulator_stdin = || {
+        let mut stdin = SP1Stdin::new();
+        stdin.write(&input);
+        for proof in &proofs {
+            let SP1Proof::Compressed(compressed) = &proof.proof else {
+                unreachable!("compressed proof checked above");
+            };
+            stdin.write_proof(
+                compressed.as_ref().clone(),
+                epoch_key.verifying_key().vk.clone(),
+            );
+        }
+        stdin
+    };
+    let (public_values, report) = client
+        .execute(ACCUMULATOR_GUEST_ELF.clone(), accumulator_stdin())
+        .deferred_proof_verification(false)
+        .calculate_gas(true)
+        .run()?;
+    ensure!(
+        public_values.as_slice() == expected.abi_encode(),
+        "mock accumulator execution mismatch"
+    );
+    let proof = client
+        .prove(&accumulator_key, accumulator_stdin())
+        .groth16()
+        .deferred_proof_verification(false)
+        .run()?;
+    client.verify(&proof, accumulator_key.verifying_key(), None)?;
+    ensure!(
+        matches!(&proof.proof, SP1Proof::Groth16(_))
+            && proof.public_values.as_slice() == expected.abi_encode(),
+        "mock accumulator proof mismatch"
+    );
+    write_json(
+        out,
+        &serde_json::json!({
+            "version": 1,
+            "kind": "antseed-sp1-recursive-smoke",
+            "securityMode": "insecure-mock",
+            "epochCount": manifest.epoch_count,
+            "accumulatorInstructionCount": report.total_instruction_count(),
+            "accumulatorProverGasUnits": report.gas().context("SP1 gas calculation missing")?,
+            "journalDigest": format!("0x{:x}", Sha256::digest(proof.public_values.as_slice())),
+            "passed": true,
+        }),
+    )
+}
+
+fn aggregate(manifest_path: &Path, artifact_dir: &Path) -> Result<()> {
+    ensure_production_prover()?;
     let mut manifest: Manifest = read_json(manifest_path)?;
     validate_manifest(&manifest)?;
     ensure!(
@@ -394,17 +623,21 @@ fn aggregate(manifest_path: &Path, artifact_dir: &Path, groth16: bool) -> Result
         "all epoch proofs must be complete before aggregation"
     );
     let mut journals = Vec::with_capacity(manifest.epochs.len());
-    let mut receipts = Vec::with_capacity(manifest.epochs.len());
+    let mut proofs = Vec::with_capacity(manifest.epochs.len());
     for artifact in &manifest.epochs {
         journals.push(Bytes::from(fs::read(
             artifact_dir.join(&artifact.journal_file),
         )?));
-        receipts.push(bincode::deserialize::<Receipt>(&fs::read(
-            artifact_dir.join(&artifact.receipt_file),
-        )?)?);
+        proofs.push(SP1ProofWithPublicValues::load(
+            artifact_dir.join(&artifact.proof_file),
+        )?);
     }
+    let client = ProverClient::from_env();
+    let epoch_key = client.setup(EPOCH_GUEST_ELF.clone())?;
+    let accumulator_key = client.setup(ACCUMULATOR_GUEST_ELF.clone())?;
+    let network = network_proof_context(ACCUMULATOR_GUEST_ELF.clone(), SP1ProofMode::Groth16)?;
     let input = AccumulatorInput {
-        epoch_image_id: manifest.epoch_image_id,
+        epoch_recursion_vkey: epoch_key.verifying_key().hash_u32(),
         epoch_journals: journals,
     };
     let expected = validate_accumulator(&input).map_err(anyhow::Error::msg)?;
@@ -412,51 +645,157 @@ fn aggregate(manifest_path: &Path, artifact_dir: &Path, groth16: bool) -> Result
         expected.anchorBlockNumber == manifest.anchor_block,
         "manifest anchor mismatch"
     );
-    let mut builder = ExecutorEnv::builder();
-    builder.write(&input)?;
-    for receipt in receipts {
-        builder.add_assumption(receipt);
+    let mut stdin = SP1Stdin::new();
+    stdin.write(&input);
+    for proof in proofs {
+        let SP1Proof::Compressed(compressed) = proof.proof else {
+            bail!("epoch proof is not compressed");
+        };
+        stdin.write_proof(*compressed, epoch_key.verifying_key().vk.clone());
     }
-    let env = builder.build()?;
-    let opts = if groth16 {
-        ProverOpts::groth16()
+    let proof = if let Some(network) = &network {
+        network.prove_groth16(stdin)?
     } else {
-        ProverOpts::default()
+        client.prove(&accumulator_key, stdin).groth16().run()?
     };
-    let info = default_prover().prove_with_ctx(
-        env,
-        &VerifierContext::default(),
-        ACCUMULATOR_GUEST_ELF,
-        &opts,
-    )?;
-    info.receipt.verify(ACCUMULATOR_IMAGE_ID)?;
+    client.verify(&proof, accumulator_key.verifying_key(), None)?;
+    ensure!(
+        matches!(&proof.proof, SP1Proof::Groth16(_)),
+        "accumulator proof is not Groth16"
+    );
     let journal =
-        AccumulatorJournal::decode(&info.receipt.journal.bytes).map_err(anyhow::Error::msg)?;
+        AccumulatorJournal::decode(proof.public_values.as_slice()).map_err(anyhow::Error::msg)?;
     ensure!(journal == expected, "aggregate journal mismatch");
     let journal_file = "accumulator.journal.bin";
-    let receipt_file = "accumulator.receipt.bin";
-    let seal_file = "accumulator.seal.bin";
-    fs::write(artifact_dir.join(journal_file), &info.receipt.journal.bytes)?;
+    let proof_file = "accumulator.proof.bin";
+    let proof_bytes_file = "accumulator.proof-bytes.bin";
     fs::write(
-        artifact_dir.join(receipt_file),
-        bincode::serialize(&info.receipt)?,
+        artifact_dir.join(journal_file),
+        proof.public_values.as_slice(),
     )?;
-    fs::write(artifact_dir.join(seal_file), encode_seal(&info.receipt)?)?;
+    proof.save(artifact_dir.join(proof_file))?;
+    fs::write(artifact_dir.join(proof_bytes_file), proof.bytes())?;
     manifest.accumulator = Some(AccumulatorArtifact {
         journal_file: journal_file.into(),
-        receipt_file: receipt_file.into(),
-        seal_file: seal_file.into(),
+        proof_file: proof_file.into(),
+        proof_bytes_file: proof_bytes_file.into(),
         journal_sha256: file_sha256(&artifact_dir.join(journal_file))?,
-        receipt_sha256: file_sha256(&artifact_dir.join(receipt_file))?,
-        seal_sha256: file_sha256(&artifact_dir.join(seal_file))?,
+        proof_sha256: file_sha256(&artifact_dir.join(proof_file))?,
+        proof_bytes_sha256: file_sha256(&artifact_dir.join(proof_bytes_file))?,
         mmr_root: journal.mmrRoot,
-        proof_mode: if groth16 { "groth16" } else { "composite" }.into(),
+        proof_mode: "sp1-groth16".into(),
         status: "proven".into(),
     });
     write_json(manifest_path, &manifest)?;
     println!(
         "aggregated {} epochs into {}",
         manifest.epoch_count, journal.mmrRoot
+    );
+    Ok(())
+}
+
+impl NetworkProofContext {
+    fn new(elf: Elf, mode: SP1ProofMode) -> Result<Self> {
+        let client = ProverClient::builder().network().build();
+        let caps = network_proof_caps(&client, mode)?;
+        let proving_key = client.setup(elf)?;
+        Ok(Self {
+            client,
+            proving_key,
+            caps,
+        })
+    }
+
+    fn prove_compressed(&self, stdin: SP1Stdin) -> Result<SP1ProofWithPublicValues> {
+        self.client
+            .prove(&self.proving_key, stdin)
+            .compressed()
+            .max_price_per_pgu(self.caps.max_price_per_pgu)
+            .run()
+    }
+
+    fn prove_groth16(&self, stdin: SP1Stdin) -> Result<SP1ProofWithPublicValues> {
+        self.client
+            .prove(&self.proving_key, stdin)
+            .groth16()
+            .max_price_per_pgu(self.caps.max_price_per_pgu)
+            .run()
+    }
+}
+
+fn network_proof_context(elf: Elf, mode: SP1ProofMode) -> Result<Option<NetworkProofContext>> {
+    if env::var("SP1_PROVER").ok().as_deref() == Some("network") {
+        Ok(Some(NetworkProofContext::new(elf, mode)?))
+    } else {
+        Ok(None)
+    }
+}
+
+fn network_proof_caps(client: &NetworkProver, mode: SP1ProofMode) -> Result<NetworkProofCaps> {
+    let caps = NetworkProofCaps {
+        max_base_fee: required_base_fee_cap(&mode)?,
+        max_price_per_pgu: required_u64_env("SP1_NETWORK_MAX_PRICE_PER_PGU_PROVE_WEI")?,
+    };
+    let GetProofRequestParamsResponse::Auction(params) = client
+        .get_proof_request_params(mode)
+        .context("read live SP1 auction parameters")?
+    else {
+        bail!("SP1 network did not return auction parameters");
+    };
+    let base_fee = parse_network_u64("base fee", &params.base_fee)?;
+    let max_price_per_pgu = parse_network_u64("maximum price per PGU", &params.max_price_per_pgu)?;
+    ensure!(
+        base_fee <= caps.max_base_fee,
+        "live SP1 base fee {} exceeds approved cap {}",
+        base_fee,
+        caps.max_base_fee
+    );
+    ensure!(
+        max_price_per_pgu <= caps.max_price_per_pgu,
+        "live SP1 max price per PGU {} exceeds approved cap {}",
+        max_price_per_pgu,
+        caps.max_price_per_pgu
+    );
+    let balance = client.get_balance().context("read SP1 network balance")?;
+    ensure!(
+        balance >= U256::from(base_fee),
+        "SP1 balance {} is below the live base fee {}",
+        balance,
+        base_fee
+    );
+    Ok(caps)
+}
+
+fn parse_network_u64(label: &str, value: &str) -> Result<u64> {
+    value
+        .parse()
+        .with_context(|| format!("SP1 network returned an invalid {label}"))
+}
+
+fn required_base_fee_cap(mode: &SP1ProofMode) -> Result<u64> {
+    match mode {
+        SP1ProofMode::Compressed => {
+            required_u64_env("SP1_NETWORK_MAX_COMPRESSED_BASE_FEE_PROVE_WEI")
+        }
+        SP1ProofMode::Groth16 => required_u64_env("SP1_NETWORK_MAX_GROTH16_BASE_FEE_PROVE_WEI"),
+        _ => bail!("unsupported SP1 network proof mode for checkpoint proving"),
+    }
+}
+
+fn required_u64_env(name: &str) -> Result<u64> {
+    env::var(name)
+        .with_context(|| format!("{name} is required for SP1 network proving"))?
+        .parse()
+        .with_context(|| format!("{name} must be an unsigned decimal integer"))
+}
+
+fn ensure_production_prover() -> Result<()> {
+    ensure!(
+        !matches!(
+            env::var("SP1_PROVER").ok().as_deref(),
+            Some("mock" | "light")
+        ),
+        "production proving requires SP1_PROVER=cpu, cuda, or network"
     );
     Ok(())
 }
@@ -484,38 +823,41 @@ fn state_plan(
         "accumulator proof is incomplete"
     );
     ensure!(
-        aggregate.proof_mode == "groth16",
-        "state plans require a production Groth16 accumulator receipt"
+        aggregate.proof_mode == "sp1-groth16",
+        "state plans require a production SP1 Groth16 accumulator proof"
     );
     ensure!(
         file_sha256(&artifact_dir.join(&aggregate.journal_file))? == aggregate.journal_sha256,
         "accumulator journal digest mismatch"
     );
     ensure!(
-        file_sha256(&artifact_dir.join(&aggregate.receipt_file))? == aggregate.receipt_sha256,
-        "accumulator receipt digest mismatch"
+        file_sha256(&artifact_dir.join(&aggregate.proof_file))? == aggregate.proof_sha256,
+        "accumulator proof digest mismatch"
     );
     ensure!(
-        file_sha256(&artifact_dir.join(&aggregate.seal_file))? == aggregate.seal_sha256,
-        "accumulator seal digest mismatch"
+        file_sha256(&artifact_dir.join(&aggregate.proof_bytes_file))?
+            == aggregate.proof_bytes_sha256,
+        "accumulator proof bytes digest mismatch"
     );
     let journal_data = fs::read(artifact_dir.join(&aggregate.journal_file))?;
-    let receipt: Receipt =
-        bincode::deserialize(&fs::read(artifact_dir.join(&aggregate.receipt_file))?)?;
-    let seal = fs::read(artifact_dir.join(&aggregate.seal_file))?;
+    let proof = SP1ProofWithPublicValues::load(artifact_dir.join(&aggregate.proof_file))?;
+    let proof_bytes = fs::read(artifact_dir.join(&aggregate.proof_bytes_file))?;
     let journal_digest = B256::from_slice(&Sha256::digest(&journal_data));
-    receipt.verify(ACCUMULATOR_IMAGE_ID)?;
+    let client = ProverClient::from_env();
+    let epoch_key = client.setup(EPOCH_GUEST_ELF.clone())?;
+    let accumulator_key = client.setup(ACCUMULATOR_GUEST_ELF.clone())?;
+    client.verify(&proof, accumulator_key.verifying_key(), None)?;
     ensure!(
-        matches!(&receipt.inner, InnerReceipt::Groth16(_)),
-        "accumulator receipt is not Groth16"
+        matches!(&proof.proof, SP1Proof::Groth16(_)),
+        "accumulator proof is not Groth16"
     );
     ensure!(
-        receipt.journal.bytes == journal_data,
-        "accumulator receipt journal mismatch"
+        proof.public_values.as_slice() == journal_data,
+        "accumulator proof public values mismatch"
     );
     ensure!(
-        encode_seal(&receipt)? == seal,
-        "accumulator seal does not match receipt"
+        proof.bytes() == proof_bytes,
+        "accumulator proof bytes do not match proof"
     );
     let accumulator = AccumulatorJournal::decode(&journal_data).map_err(anyhow::Error::msg)?;
     ensure!(
@@ -530,7 +872,7 @@ fn state_plan(
         );
     }
     let expected_accumulator = validate_accumulator(&AccumulatorInput {
-        epoch_image_id: manifest.epoch_image_id,
+        epoch_recursion_vkey: epoch_key.verifying_key().hash_u32(),
         epoch_journals: epoch_journals
             .iter()
             .map(|journal| Bytes::from(journal.abi_encode()))
@@ -598,8 +940,8 @@ fn state_plan(
         "submit EIP-2935-anchored historical accumulator",
         oracle,
         &IAccumulatorOracle::submitHistoricalAccumulatorCall {
-            seal: seal.into(),
-            journalData: journal_data.into(),
+            proofBytes: proof_bytes.into(),
+            publicValues: journal_data.into(),
         }
         .abi_encode(),
         vec![
@@ -666,7 +1008,7 @@ fn state_plan(
 
 fn validate_manifest(manifest: &Manifest) -> Result<()> {
     ensure!(
-        manifest.version == 2 && manifest.kind == "antseed-history-accumulator-artifacts",
+        manifest.version == 3 && manifest.kind == "antseed-sp1-history-accumulator-artifacts",
         "unsupported accumulator manifest"
     );
     ensure!(
@@ -677,13 +1019,14 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
         manifest.epoch_count as usize == manifest.epochs.len() && manifest.epoch_count > 0,
         "accumulator manifest epoch count mismatch"
     );
+    let (epoch_recursion_vkey, accumulator_program_vkey) = program_vkeys()?;
     ensure!(
-        manifest.epoch_image_id == image_id(EPOCH_IMAGE_ID),
-        "accumulator manifest epoch image ID mismatch"
+        manifest.epoch_recursion_vkey == epoch_recursion_vkey,
+        "epoch recursion vkey mismatch"
     );
     ensure!(
-        manifest.accumulator_image_id == image_id(ACCUMULATOR_IMAGE_ID),
-        "accumulator manifest image ID mismatch"
+        manifest.accumulator_program_vkey == accumulator_program_vkey,
+        "accumulator program vkey mismatch"
     );
     ensure!(
         manifest.anchor_block == epoch_end(manifest.epoch_count - 1).map_err(anyhow::Error::msg)?,
@@ -707,26 +1050,26 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
         ensure!(
             artifact.witness_file == format!("epoch-{index:04}.witness.json")
                 && artifact.journal_file == format!("epoch-{index:04}.journal.bin")
-                && artifact.receipt_file == format!("epoch-{index:04}.receipt.bin"),
+                && artifact.proof_file == format!("epoch-{index:04}.proof.bin"),
             "accumulator epoch filenames are invalid"
         );
     }
     if let Some(aggregate) = &manifest.accumulator {
         ensure!(
             aggregate.journal_file == "accumulator.journal.bin"
-                && aggregate.receipt_file == "accumulator.receipt.bin"
-                && aggregate.seal_file == "accumulator.seal.bin",
+                && aggregate.proof_file == "accumulator.proof.bin"
+                && aggregate.proof_bytes_file == "accumulator.proof-bytes.bin",
             "accumulator artifact filenames are invalid"
         );
         ensure!(
-            matches!(aggregate.proof_mode.as_str(), "composite" | "groth16"),
+            aggregate.proof_mode == "sp1-groth16",
             "invalid accumulator proof mode"
         );
         ensure!(aggregate.status == "proven", "invalid accumulator status");
         for digest in [
             &aggregate.journal_sha256,
-            &aggregate.receipt_sha256,
-            &aggregate.seal_sha256,
+            &aggregate.proof_sha256,
+            &aggregate.proof_bytes_sha256,
         ] {
             ensure!(
                 digest.len() == 66
@@ -739,108 +1082,14 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
     Ok(())
 }
 
-fn dev_e2e(artifact_dir: &Path) -> Result<()> {
-    ensure!(
-        std::env::var("RISC0_DEV_MODE").ok().as_deref() == Some("1"),
-        "dev-e2e requires RISC0_DEV_MODE=1"
-    );
-    fs::create_dir_all(artifact_dir)?;
-
-    let mut headers = Vec::with_capacity(EPOCH_SIZE);
-    let mut parent_hash = keccak256(b"antseed-dev-genesis");
-    for number in HISTORICAL_START_BLOCK..HISTORICAL_START_BLOCK + EPOCH_SIZE as u64 {
-        let mut header = Header::default();
-        header.number = number;
-        header.parent_hash = parent_hash;
-        let encoded = Bytes::from(alloy_rlp::encode(header));
-        parent_hash = keccak256(encoded.as_ref());
-        headers.push(encoded);
-    }
-    let witness = EpochWitness {
-        epoch_index: 0,
-        base_headers_rlp: headers,
-    };
-    let first_expected = validate_epoch(&witness).map_err(anyhow::Error::msg)?;
-    let epoch_info = default_prover().prove(
-        ExecutorEnv::builder().write(&witness)?.build()?,
-        EPOCH_GUEST_ELF,
-    )?;
-    epoch_info.receipt.verify(EPOCH_IMAGE_ID)?;
-    ensure!(
-        EpochJournal::decode(&epoch_info.receipt.journal.bytes).map_err(anyhow::Error::msg)?
-            == first_expected,
-        "dev epoch journal mismatch"
-    );
-
-    let required_epoch_count = u32::try_from(
-        (REQUIRED_COVERAGE_END_BLOCK - HISTORICAL_START_BLOCK + 1).div_ceil(EPOCH_SIZE as u64),
-    )?;
-    let mut journals = vec![Bytes::from(epoch_info.receipt.journal.bytes.clone())];
-    let mut receipts = vec![epoch_info.receipt];
-    let mut previous_hash = first_expected.endBlockHash;
-    for epoch_index in 1..required_epoch_count {
-        let end_hash = keccak256(epoch_index.to_be_bytes());
-        let journal = EpochJournal {
-            version: history_core::JOURNAL_VERSION,
-            chainId: history_core::BASE_CHAIN_ID,
-            epochIndex: epoch_index,
-            startBlockNumber: epoch_start(epoch_index).map_err(anyhow::Error::msg)?,
-            endBlockNumber: epoch_end(epoch_index).map_err(anyhow::Error::msg)?,
-            firstParentHash: previous_hash,
-            endBlockHash: end_hash,
-            blockCount: EPOCH_SIZE as u32,
-            blockRoot: keccak256(
-                [
-                    b"antseed-dev-block-root".as_slice(),
-                    &epoch_index.to_be_bytes(),
-                ]
-                .concat(),
-            ),
-        };
-        let encoded = journal.abi_encode();
-        let claim = ReceiptClaim::ok(Digest::from(EPOCH_IMAGE_ID), encoded.clone());
-        receipts.push(Receipt::new(
-            InnerReceipt::Fake(FakeReceipt::new(claim)),
-            encoded.clone(),
-        ));
-        journals.push(Bytes::from(encoded));
-        previous_hash = end_hash;
-    }
-
-    let input = AccumulatorInput {
-        epoch_image_id: image_id(EPOCH_IMAGE_ID),
-        epoch_journals: journals,
-    };
-    let expected = validate_accumulator(&input).map_err(anyhow::Error::msg)?;
-    let mut builder = ExecutorEnv::builder();
-    builder.write(&input)?;
-    for receipt in receipts {
-        builder.add_assumption(receipt);
-    }
-    let aggregate_info = default_prover().prove(builder.build()?, ACCUMULATOR_GUEST_ELF)?;
-    aggregate_info.receipt.verify(ACCUMULATOR_IMAGE_ID)?;
-    ensure!(
-        AccumulatorJournal::decode(&aggregate_info.receipt.journal.bytes)
-            .map_err(anyhow::Error::msg)?
-            == expected,
-        "dev aggregate journal mismatch"
-    );
-    fs::write(
-        artifact_dir.join("dev-accumulator.journal.bin"),
-        &aggregate_info.receipt.journal.bytes,
-    )?;
-    fs::write(
-        artifact_dir.join("dev-accumulator.receipt.bin"),
-        bincode::serialize(&aggregate_info.receipt)?,
-    )?;
-    fs::write(
-        artifact_dir.join("dev-accumulator.seal.bin"),
-        encode_seal(&aggregate_info.receipt)?,
-    )?;
-    println!(
-        "dev composition verified one epoch guest plus {required_epoch_count} aggregate assumptions"
-    );
-    Ok(())
+fn program_vkeys() -> Result<(B256, B256)> {
+    let client = ProverClient::builder().cpu().build();
+    let epoch_key = client.setup(EPOCH_GUEST_ELF.clone())?;
+    let accumulator_key = client.setup(ACCUMULATOR_GUEST_ELF.clone())?;
+    Ok((
+        B256::from(epoch_key.verifying_key().hash_bytes()),
+        B256::from(accumulator_key.verifying_key().bytes32_raw()),
+    ))
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
@@ -860,4 +1109,30 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     fs::write(&temp, serde_json::to_vec_pretty(value)?)?;
     fs::rename(temp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_preserves_vkey_acronyms() {
+        let manifest = Manifest {
+            version: 3,
+            kind: "antseed-sp1-history-accumulator-artifacts".into(),
+            chain_id: 8_453,
+            start_block: HISTORICAL_START_BLOCK,
+            anchor_block: HISTORICAL_START_BLOCK,
+            epoch_count: 0,
+            epoch_recursion_vkey: B256::ZERO,
+            accumulator_program_vkey: B256::ZERO,
+            epochs: Vec::new(),
+            accumulator: None,
+        };
+        let value = serde_json::to_value(manifest).unwrap();
+        assert!(value.get("epochRecursionVKey").is_some());
+        assert!(value.get("accumulatorProgramVKey").is_some());
+        assert!(value.get("epochRecursionVkey").is_none());
+        assert!(value.get("accumulatorProgramVkey").is_none());
+    }
 }

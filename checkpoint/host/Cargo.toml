@@ -5,22 +5,21 @@ edition = "2024"
 default-run = "checkpoint-host"
 
 [dependencies]
-alloy = { workspace = true, features = ["full"] }
+alloy = { workspace = true, features = ["full", "reqwest-rustls-tls"] }
 alloy-consensus = { workspace = true }
 alloy-primitives = { workspace = true }
 alloy-rlp = { workspace = true }
 alloy-sol-types = { workspace = true }
 anyhow = { workspace = true }
-bincode = "1.3"
 checkpoint-core = { workspace = true }
 checkpoint-methods = { workspace = true }
 clap = { version = "4.5", features = ["derive", "env"] }
 dotenvy = "0.15"
 futures = "0.3"
+hex = "0.4"
 history-core = { workspace = true }
 history-methods = { workspace = true }
-risc0-ethereum-contracts = "3.0"
-risc0-zkvm = { workspace = true, features = ["client"] }
+sp1-sdk = { workspace = true, features = ["blocking", "native-gnark", "network"] }
 sha2 = "0.10"
 serde = { workspace = true }
 serde_json = "1"
