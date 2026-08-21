@@ -86,7 +86,9 @@ cargo run --release -p checkpoint-host --bin checkpoint-history -- \
 # Paid proving is impossible without both explicit price and confirmation.
 cargo run --release -p checkpoint-host --bin checkpoint-history -- \
   --artifact-dir history-artifacts prove \
-  --max-price "0.01 USD" --confirm-paid-proving
+  --max-price "0.01 USD" \
+  --confirm-max-total-price "1.12 USD" \
+  --confirm-paid-proving
 
 # Produce calldata only; this command never broadcasts transactions.
 cargo run --release -p checkpoint-host --bin checkpoint-history -- \
@@ -106,12 +108,51 @@ every resume. The manifest records the input SHA-256, image ID, expected
 journal digest, cycle count, Boundless request ID, seal, and journal. A resumed
 command rejects changed inputs or journals. Paid proving additionally requires
 `BOUNDLESS_REQUESTOR_KEY` and a configured Pinata, S3, or GCS uploader.
+`--confirm-max-total-price` must exactly equal the selected chunk count times
+`--max-price`, including the same asset. The example confirms all 112 chunks at
+`0.01 USD` each; a subset must confirm its own exact aggregate.
 
 The Base deployment requires `HISTORICAL_CHUNK_IMAGE_ID` alongside the existing
 checkpoint and seller image IDs. Production flow first submits the existing
 checkpoint proof for block `46,302,990`, calls `beginHistoricalBackfill`, then
 submits the 112 chunk proofs newest-to-oldest. No command broadcasts deployment
 or submissions automatically.
+
+## Canonical Base state plan
+
+Checkpoint, backfill, and materialization generators emit strict
+`antseed-base-state-plan` v1 JSON. Each ordered entry contains one zero-value
+oracle call plus exact read-only completion checks. Legacy transaction arrays
+are intentionally unsupported.
+
+The state plan is necessary because seller journals reference historical Base
+block hashes that the on-chain oracle cannot discover by itself. Applying the
+plan records those hashes from authenticated checkpoint/history proofs before
+seller proofs are submitted. It is not part of either seller predicate and
+cannot alter settlement selection or journal volume.
+
+Generate checkpoint production artifacts with the finalized Ethereum
+block/hash locked by `checkpoint-plan`:
+
+```bash
+node ../scripts/prove-checkpoint-plan.mjs \
+  --plan ../out/checkpoint-plan.json \
+  --artifact-dir ../out/checkpoint-proof-artifacts \
+  --l1-rpc-url "$L1_RPC_URL" \
+  --base-rpc-url "$BASE_RPC_URL" \
+  --cost-quote ../out/proving-cost-quote.json \
+  --approve-cost-digest 0x... \
+  --confirm-production-proving
+```
+
+Use the contract repository's `build-checkpoint-state-plan.mjs` for checkpoint
+artifacts, `checkpoint-history tx-plan` and `materialize-plan` for historical
+entries, then merge them with `merge-base-state-plans.mjs`. Apply only through
+`apply-base-state-plan.mjs`: `--validate-only` reads state, `--fork-submit`
+accepts loopback RPC URLs only, and production `--submit` requires the exact
+plan digest. Resume files are bound to chain, oracle, plan digest, entry ID,
+calldata hash, nonce, and transaction hash; transactions and receipts are
+refetched on resume.
 
 The current pinned historical-chunk image ID is
 `c1cc15f700032158b03f782aaa7aa23f02851ab6f6a0ba8452beb504eecf0475`.

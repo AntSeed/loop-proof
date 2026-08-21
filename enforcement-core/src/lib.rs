@@ -10,7 +10,6 @@ use loop_core::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const PREDICATE_VERSION: u32 = 3;
 pub const BASE_CHAIN_ID: u64 = 8_453;
 pub const PERIOD_START_BLOCK: u64 = 44_471_575;
 pub const PERIOD_END_BLOCK_EXCLUSIVE: u64 = 49_936_173;
@@ -138,46 +137,44 @@ pub struct ReciprocalInput {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ClosedCycleJournal {
-    pub predicate_version: u32,
-    pub claim_id: B256,
-    pub period_start_block: u64,
-    pub period_end_block_exclusive: u64,
     pub seller: Address,
-    pub funder: Address,
-    pub cohort_hash: B256,
-    pub cohort_count: u32,
-    pub qualified_volume_raw: u128,
-    pub closure_kind: u8,
-    pub closure_path_count: u32,
     pub block_refs: Vec<(u64, B256)>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ReciprocalJournal {
-    pub predicate_version: u32,
-    pub claim_id: B256,
-    pub period_start_block: u64,
-    pub period_end_block_exclusive: u64,
     pub address_a: Address,
     pub address_b: Address,
+    pub block_refs: Vec<(u64, B256)>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ClosedCycleVerification {
+    pub journal: ClosedCycleJournal,
+    pub claim_id: B256,
+    pub cohort_count: u32,
+    pub qualified_volume_raw: u128,
+    pub closure_kind: u8,
+    pub closure_path_count: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ReciprocalVerification {
+    pub journal: ReciprocalJournal,
+    pub claim_id: B256,
     pub settlement_count_a_to_b: u32,
     pub settlement_count_b_to_a: u32,
     pub volume_a_to_b_raw: u128,
     pub volume_b_to_a_raw: u128,
-    pub block_refs: Vec<(u64, B256)>,
 }
 
 alloy_sol_types::sol! {
     struct SolBlockRef { uint64 number; bytes32 blockHash; }
     struct SolClosedCycleJournal {
-        uint32 predicateVersion; bytes32 claimId; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
-        address seller; address funder; bytes32 cohortHash; uint32 cohortCount; uint128 qualifiedVolumeRaw;
-        uint8 closureKind; uint32 closurePathCount; SolBlockRef[] blockRefs;
+        address seller; SolBlockRef[] blockRefs;
     }
     struct SolReciprocalJournal {
-        uint32 predicateVersion; bytes32 claimId; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
-        address addressA; address addressB; uint32 settlementCountAToB; uint32 settlementCountBToA;
-        uint128 volumeAToBRaw; uint128 volumeBToARaw; SolBlockRef[] blockRefs;
+        address addressA; address addressB; SolBlockRef[] blockRefs;
     }
     struct SolCohortClaimId {
         uint256 chainId; uint8 proofType; uint64 periodStartBlock; uint64 periodEndBlockExclusive;
@@ -201,17 +198,7 @@ fn sol_block_refs(refs: &[(u64, B256)]) -> Vec<SolBlockRef> {
 impl ClosedCycleJournal {
     pub fn abi_encode(&self) -> Vec<u8> {
         SolClosedCycleJournal {
-            predicateVersion: self.predicate_version,
-            claimId: self.claim_id,
-            periodStartBlock: self.period_start_block,
-            periodEndBlockExclusive: self.period_end_block_exclusive,
             seller: self.seller,
-            funder: self.funder,
-            cohortHash: self.cohort_hash,
-            cohortCount: self.cohort_count,
-            qualifiedVolumeRaw: self.qualified_volume_raw,
-            closureKind: self.closure_kind,
-            closurePathCount: self.closure_path_count,
             blockRefs: sol_block_refs(&self.block_refs),
         }
         .abi_encode()
@@ -221,23 +208,27 @@ impl ClosedCycleJournal {
 impl ReciprocalJournal {
     pub fn abi_encode(&self) -> Vec<u8> {
         SolReciprocalJournal {
-            predicateVersion: self.predicate_version,
-            claimId: self.claim_id,
-            periodStartBlock: self.period_start_block,
-            periodEndBlockExclusive: self.period_end_block_exclusive,
             addressA: self.address_a,
             addressB: self.address_b,
-            settlementCountAToB: self.settlement_count_a_to_b,
-            settlementCountBToA: self.settlement_count_b_to_a,
-            volumeAToBRaw: self.volume_a_to_b_raw,
-            volumeBToARaw: self.volume_b_to_a_raw,
             blockRefs: sol_block_refs(&self.block_refs),
         }
         .abi_encode()
     }
 }
 
-pub fn verify_closed_cycle(input: &ClosedCycleInput) -> Result<ClosedCycleJournal, String> {
+impl ClosedCycleVerification {
+    pub fn abi_encode(&self) -> Vec<u8> {
+        self.journal.abi_encode()
+    }
+}
+
+impl ReciprocalVerification {
+    pub fn abi_encode(&self) -> Vec<u8> {
+        self.journal.abi_encode()
+    }
+}
+
+pub fn verify_closed_cycle(input: &ClosedCycleInput) -> Result<ClosedCycleVerification, String> {
     validate_common(
         input.chain_id,
         input.seller,
@@ -274,28 +265,25 @@ pub fn verify_closed_cycle(input: &ClosedCycleInput) -> Result<ClosedCycleJourna
         &resolver,
     )?;
     let cohort_hash = cohort_hash(&input.linked_buyers);
-    Ok(ClosedCycleJournal {
-        predicate_version: PREDICATE_VERSION,
+    Ok(ClosedCycleVerification {
         claim_id: cohort_claim_id(
             CLOSED_CYCLE_PROOF_TYPE,
             input.seller,
             input.funder,
             cohort_hash,
         ),
-        period_start_block: PERIOD_START_BLOCK,
-        period_end_block_exclusive: PERIOD_END_BLOCK_EXCLUSIVE,
-        seller: input.seller,
-        funder: input.funder,
-        cohort_hash,
         cohort_count: input.linked_buyers.len() as u32,
         qualified_volume_raw,
         closure_kind,
         closure_path_count,
-        block_refs,
+        journal: ClosedCycleJournal {
+            seller: input.seller,
+            block_refs,
+        },
     })
 }
 
-pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<ReciprocalJournal, String> {
+pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<ReciprocalVerification, String> {
     validate_chain(input.chain_id)?;
     if input.address_a == Address::ZERO
         || input.address_b == Address::ZERO
@@ -340,18 +328,17 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<ReciprocalJournal, S
     if !reciprocal_thresholds_satisfied(count_ab, count_ba, volume_ab, volume_ba)? {
         return Err("reciprocal: directional threshold not satisfied".into());
     }
-    Ok(ReciprocalJournal {
-        predicate_version: PREDICATE_VERSION,
+    Ok(ReciprocalVerification {
         claim_id: reciprocal_claim_id(input.address_a, input.address_b),
-        period_start_block: PERIOD_START_BLOCK,
-        period_end_block_exclusive: PERIOD_END_BLOCK_EXCLUSIVE,
-        address_a: input.address_a,
-        address_b: input.address_b,
         settlement_count_a_to_b: count_ab,
         settlement_count_b_to_a: count_ba,
         volume_a_to_b_raw: volume_ab,
         volume_b_to_a_raw: volume_ba,
-        block_refs,
+        journal: ReciprocalJournal {
+            address_a: input.address_a,
+            address_b: input.address_b,
+            block_refs,
+        },
     })
 }
 

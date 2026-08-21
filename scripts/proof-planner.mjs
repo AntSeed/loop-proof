@@ -7,6 +7,16 @@ export const HISTORICAL_START_BLOCK = 44_469_557;
 export const MINIMUM_VOLUME_RAW = 1_000_000_000n;
 export const MINIMUM_RECIPROCAL_DIRECTION_VOLUME_RAW = 10_000_000n;
 export const MINIMUM_RECIPROCAL_VOLUME_BPS = 8_000n;
+export const MINIMUM_USDC_FUNDING_RAW = 1_000_000n;
+export const MINIMUM_CLOSURE_RAW = 1_000_000n;
+export const MINIMUM_NATIVE_FUNDING_WEI = 50_000_000_000_000n;
+
+const PERIOD_START_BLOCK = 44_471_575;
+const PERIOD_END_BLOCK_EXCLUSIVE = 49_936_173;
+const MAX_RELAY_SECONDS = 86_400;
+const MAX_RELAY_EARLY_DELTA_RAW = 1_000n;
+const MAX_RELAY_LOSS_RAW = 1_000_000n;
+const MIN_RELAY_RETAINED_BPS = 9_800n;
 
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const CHANNEL_SETTLED_TOPIC = "0x0b287f37d8bd14ef37f2966734ab387c243cc1a1663616a25a4cc259877736b1";
@@ -150,7 +160,7 @@ export function merkleMembership(hashes, targetHash) {
   return { steps };
 }
 
-async function resolveDependency(dependency, bundle, callRpc) {
+export async function resolveDependency(dependency, bundle, callRpc) {
   if (dependency.evidenceType === "RELAY_PATH") {
     return {
       ...dependency,
@@ -162,6 +172,7 @@ async function resolveDependency(dependency, bundle, callRpc) {
   if (!dependency.transactionHash) throw new Error(`${dependency.dependencyId}: missing transaction hash`);
   const receipt = await callRpc("eth_getTransactionReceipt", [dependency.transactionHash]);
   if (!receipt) throw new Error(`${dependency.dependencyId}: receipt not found`);
+  if (receipt.status == null || BigInt(receipt.status) !== 1n) throw new Error(`${dependency.dependencyId}: receipt reverted`);
   const blockNumber = hexNumber(receipt.blockNumber);
   if (["SETTLEMENT", "RECIPROCAL_SETTLEMENT"].includes(dependency.evidenceType)
       && (blockNumber < bundle.period.startBlock || blockNumber >= bundle.period.endBlockExclusive)) {
@@ -169,7 +180,15 @@ async function resolveDependency(dependency, bundle, callRpc) {
   }
   authenticationGroup(blockNumber);
   const transactionIndex = hexNumber(receipt.transactionIndex);
-  const resolved = { ...dependency, blockNumber, transactionIndex };
+  let authenticatedTimestamp = dependency.timestamp;
+  if (dependency.timestamp != null) {
+    const block = await callRpc("eth_getBlockByNumber", [receipt.blockNumber, false]);
+    if (!block || hexNumber(block.number) !== blockNumber || normalizeHash(block.hash) !== normalizeHash(receipt.blockHash)) {
+      throw new Error(`${dependency.dependencyId}: receipt block identity mismatch`);
+    }
+    authenticatedTimestamp = hexNumber(block.timestamp);
+  }
+  const resolved = { ...dependency, blockNumber, transactionIndex, ...(authenticatedTimestamp == null ? {} : { timestamp: authenticatedTimestamp }) };
   if (dependency.evidenceType === "NATIVE_FUNDING") {
     const transaction = await callRpc("eth_getTransactionByHash", [dependency.transactionHash]);
     if (!transaction) throw new Error(`${dependency.dependencyId}: transaction not found`);
@@ -177,7 +196,7 @@ async function resolveDependency(dependency, bundle, callRpc) {
     if (![0, 1, 2].includes(type)) throw new Error(`${dependency.dependencyId}: unsupported transaction type ${type}`);
     if (normalize(transaction.from) !== dependency.funder
         || normalize(transaction.to) !== dependency.buyer
-        || BigInt(transaction.value) <= 0n
+        || BigInt(transaction.value) < MINIMUM_NATIVE_FUNDING_WEI
         || BigInt(transaction.value) !== BigInt(dependency.amountWei)) {
       throw new Error(`${dependency.dependencyId}: native funding parties/value mismatch`);
     }
@@ -186,12 +205,18 @@ async function resolveDependency(dependency, bundle, callRpc) {
   const log = locateLog(receipt.logs ?? [], dependency, bundle.contracts);
   validateLog(log, dependency, bundle.contracts);
   const resolvedLog = { ...resolved, logIndex: hexNumber(log.logIndex), receiptLogIndex: (receipt.logs ?? []).indexOf(log) };
+  if (dependency.evidenceType === "USDC_FUNDING") {
+    if (BigInt(dependency.amountRaw) < MINIMUM_USDC_FUNDING_RAW) throw new Error(`${dependency.dependencyId}: USDC funding is below the guest minimum`);
+    const transaction = await callRpc("eth_getTransactionByHash", [dependency.transactionHash]);
+    if (!transaction || normalize(transaction.from) !== dependency.funder) throw new Error(`${dependency.dependencyId}: funding transaction signer mismatch`);
+  }
   if (dependency.evidenceType === "USDC_FUNDING" && topicAddress(log.topics?.[2]?.toLowerCase()) === normalize(bundle.contracts.deposits)) {
     const deposited = (receipt.logs ?? []).filter((candidate) => normalize(candidate.address) === normalize(bundle.contracts.deposits)
       && candidate.topics?.[0]?.toLowerCase() === DEPOSITED_TOPIC
       && topicAddress(candidate.topics?.[1]?.toLowerCase()) === dependency.buyer
       && dataWord(candidate.data, 0) === BigInt(dependency.amountRaw));
     if (deposited.length !== 1) throw new Error(`${dependency.dependencyId}: expected one matching Deposited log, found ${deposited.length}`);
+    if (hexNumber(deposited[0].logIndex) <= resolvedLog.logIndex) throw new Error(`${dependency.dependencyId}: Deposited log must follow the funding transfer`);
     return { ...resolvedLog, depositLogIndex: hexNumber(deposited[0].logIndex), depositReceiptLogIndex: (receipt.logs ?? []).indexOf(deposited[0]) };
   }
   return resolvedLog;
@@ -470,7 +495,8 @@ function selectClosureForFunder(dependencies, funder, approvedBuyers, seller) {
       && (evidenceClass !== "DIRECT_SELLER_BUYER" || approvedBuyers.includes(entry.buyer))
       && (evidenceClass === "DIRECT_SELLER_BUYER" || entry.funder === funder)
       && atomicEvidence(entry).every(nonSelfTransfer)
-      && (evidenceClass === "RELAY_PATH" || BigInt(entry.amountRaw) > 0n));
+      && (evidenceClass === "RELAY_PATH" || BigInt(entry.amountRaw) >= MINIMUM_CLOSURE_RAW)
+      && atomicEvidence(entry).every((evidence) => evidence.blockNumber >= PERIOD_START_BLOCK && evidence.blockNumber < PERIOD_END_BLOCK_EXCLUSIVE));
     if (candidates.length === 0) continue;
     if (evidenceClass !== "RELAY_PATH") {
       candidates.sort(compareEvidence);
@@ -496,21 +522,22 @@ function closureOccursAfterThreshold(settlements, closureEvidence) {
   return closureEvidence.flatMap(atomicEvidence).every((entry) => compareEvidence(entry, crossing) > 0);
 }
 
-function validRelayPath(path) {
+export function validRelayPath(path) {
   const first = path.sellerPayment;
   const second = path.relayForward;
   const third = path.funderReceipt;
   if (![first, second, third].every((entry) => Number.isSafeInteger(entry.blockNumber))) return false;
-  if (second.blockNumber < first.blockNumber || third.blockNumber < second.blockNumber) return false;
+  if (compareEvidence(first, second) >= 0 || compareEvidence(second, third) >= 0) return false;
   if (second.timestamp < first.timestamp || third.timestamp < second.timestamp) return false;
-  if (second.timestamp - first.timestamp > 86_400 || third.timestamp - second.timestamp > 86_400) return false;
+  if (third.timestamp - first.timestamp > MAX_RELAY_SECONDS) return false;
+  if (![first, second, third].every((entry) => entry.blockNumber >= PERIOD_START_BLOCK && entry.blockNumber < PERIOD_END_BLOCK_EXCLUSIVE)) return false;
   const firstAmount = BigInt(first.amountRaw);
   const secondAmount = BigInt(second.amountRaw);
   const thirdAmount = BigInt(third.amountRaw);
-  if (firstAmount <= 0n || secondAmount <= 0n || thirdAmount <= 0n || thirdAmount > secondAmount) return false;
-  if (absolute(firstAmount - secondAmount) > 1_000n) return false;
-  const retained = secondAmount - thirdAmount;
-  return retained <= 1_000_000n || thirdAmount * 10_000n >= secondAmount * 9_800n;
+  if (firstAmount < MINIMUM_CLOSURE_RAW || secondAmount <= 0n || thirdAmount <= 0n || thirdAmount > firstAmount || thirdAmount > secondAmount) return false;
+  if (absolute(firstAmount - secondAmount) > MAX_RELAY_EARLY_DELTA_RAW) return false;
+  const loss = firstAmount - thirdAmount;
+  return loss <= MAX_RELAY_LOSS_RAW || thirdAmount * 10_000n >= firstAmount * MIN_RELAY_RETAINED_BPS;
 }
 
 function nonSelfTransfer(entry) {
@@ -671,7 +698,10 @@ function logMatches(log, dependency, contracts) {
   const to = topicAddress(topics[2]);
   if (dependency.from && from !== dependency.from) return false;
   if (dependency.to && to !== dependency.to) return false;
-  if (dependency.funder && dependency.buyer && !((from === dependency.funder && to === dependency.buyer) || to === normalize(contracts.deposits))) return false;
+  if (dependency.funder && dependency.buyer) {
+    if (from !== dependency.funder) return false;
+    if (to !== dependency.buyer && to !== normalize(contracts.deposits)) return false;
+  }
   return dependency.amountRaw == null || dataWord(log.data, 0) === BigInt(dependency.amountRaw);
 }
 
@@ -795,6 +825,7 @@ function canonicalEvidence(entries) { return [...entries].map((entry) => entry.d
 function sumRaw(entries) { return entries.reduce((total, entry) => total + BigInt(entry.amountRaw), 0n); }
 function absolute(value) { return value < 0n ? -value : value; }
 function normalize(value) { return typeof value === "string" ? value.toLowerCase() : null; }
+function normalizeHash(value) { return typeof value === "string" && /^0x[0-9a-f]{64}$/i.test(value) ? value.toLowerCase() : null; }
 function topicAddress(topic) { return topic ? `0x${topic.slice(-40)}`.toLowerCase() : null; }
 function dataWord(data, index) { return BigInt(`0x${data.slice(2 + index * 64, 2 + (index + 1) * 64)}`); }
 function hexNumber(value) { const number = Number(BigInt(value)); if (!Number.isSafeInteger(number)) throw new Error(`unsafe numeric RPC value ${value}`); return number; }

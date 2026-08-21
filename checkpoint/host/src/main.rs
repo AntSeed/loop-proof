@@ -45,6 +45,12 @@ struct Args {
     )]
     beacon_api_url: Url,
 
+    #[arg(long, requires = "expected_l1_block_hash")]
+    l1_block_number: Option<u64>,
+
+    #[arg(long, requires = "l1_block_number")]
+    expected_l1_block_hash: Option<B256>,
+
     #[arg(long, default_value_t = DEFAULT_GAME)]
     game: Address,
 
@@ -77,9 +83,25 @@ async fn main() -> Result<()> {
         .init();
     let args = Args::parse();
 
+    let l1_block = if let Some(block_number) = args.l1_block_number {
+        let provider = ProviderBuilder::new().connect_http(args.l1_rpc_url.clone());
+        let block = provider
+            .get_block_by_number(block_number.into())
+            .hashes()
+            .await?
+            .with_context(|| format!("Ethereum block {block_number} not found"))?;
+        ensure!(
+            Some(block.header.hash) == args.expected_l1_block_hash,
+            "finalized Ethereum block hash differs from checkpoint plan"
+        );
+        BlockNumberOrTag::Number(block_number)
+    } else {
+        BlockNumberOrTag::Finalized
+    };
+
     let mut ethereum_env = EthEvmEnv::builder()
         .rpc(args.l1_rpc_url)
-        .block_number_or_tag(BlockNumberOrTag::Finalized)
+        .block_number_or_tag(l1_block)
         .beacon_api(args.beacon_api_url)
         .chain_spec(&ETH_MAINNET_CHAIN_SPEC)
         .build()

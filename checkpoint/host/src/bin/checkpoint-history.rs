@@ -8,9 +8,10 @@ use alloy_rlp::Decodable;
 use anyhow::{Context, Result, bail, ensure};
 use boundless_market::{
     Client, Deployment, GuestEnv, StorageUploaderConfig,
-    alloy::signers::local::PrivateKeySigner as BoundlessPrivateKeySigner,
+    alloy::signers::local::PrivateKeySigner as BoundlessPrivateKeySigner, price_oracle::Amount,
     request_builder::OfferParams,
 };
+use checkpoint_host::state_plan::{StatePlan, check as state_check, entry as state_entry};
 use clap::{Args, Parser, Subcommand};
 use futures::{StreamExt, TryStreamExt, stream};
 use history_core::{
@@ -50,6 +51,10 @@ sol! {
         function beginHistoricalBackfill();
         function submitHistoricalChunk(bytes seal, bytes journalData);
         function materializeHistoricalBlocks(HistoricalBlockProof[] proofs);
+        function historicalBackfillStarted() external view returns (bool);
+        function consumedJournalDigests(bytes32 journalDigest) external view returns (bool);
+        function historicalChunkRoots(uint16 chunkIndex) external view returns (bytes32);
+        function canonicalBlockHashes(uint64 blockNumber) external view returns (bytes32);
     }
 }
 
@@ -125,6 +130,10 @@ struct ProveArgs {
 
     #[arg(long)]
     confirm_paid_proving: bool,
+
+    /// Exact maximum aggregate market price for all selected chunks.
+    #[arg(long)]
+    confirm_max_total_price: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -239,24 +248,6 @@ struct HistoryManifest {
     image_id: String,
     historical_root: Option<B256>,
     chunks: Vec<ChunkArtifact>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct UnsignedTransaction {
-    order: usize,
-    purpose: String,
-    to: Address,
-    value: String,
-    data: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct TransactionPlan {
-    chain_id: u64,
-    oracle: Address,
-    historical_start_block: u64,
-    historical_anchor_block: u64,
-    transactions: Vec<UnsignedTransaction>,
 }
 
 #[tokio::main]
@@ -584,6 +575,24 @@ async fn prove(artifact_dir: &Path, args: ProveArgs) -> Result<()> {
         args.offer.max_price.is_some(),
         "paid proving requires an explicit --max-price"
     );
+    let selected_indexes = selected_chunk_indexes(&args.selection)?;
+    let max_price = args.offer.max_price.as_ref().expect("checked above");
+    let aggregate_max_price = Amount::new(
+        max_price
+            .value
+            .checked_mul(U256::from(selected_indexes.len()))
+            .context("aggregate proving price overflow")?,
+        max_price.asset,
+    );
+    let confirmed = args
+        .confirm_max_total_price
+        .as_deref()
+        .context("paid proving requires --confirm-max-total-price")?;
+    ensure!(
+        confirmed.parse::<Amount>()? == aggregate_max_price,
+        "aggregate proving price confirmation mismatch; expected {aggregate_max_price}"
+    );
+    println!("maximum aggregate proving price: {aggregate_max_price}");
     let mut manifest = load_manifest(artifact_dir)?;
     let client = Client::builder()
         .with_rpc_url(args.rpc_url)
@@ -594,7 +603,7 @@ async fn prove(artifact_dir: &Path, args: ProveArgs) -> Result<()> {
         .build()
         .await?;
 
-    for index in selected_chunk_indexes(&args.selection)? {
+    for index in selected_indexes {
         let artifact = &manifest.chunks[index];
         ensure!(
             artifact.status != ChunkStatus::Planned && artifact.status != ChunkStatus::Fetched,
@@ -669,41 +678,64 @@ fn tx_plan(artifact_dir: &Path, args: TxPlanArgs) -> Result<()> {
         "all 112 chunks must be proven before creating the complete transaction plan"
     );
 
-    let mut transactions = vec![unsigned_transaction(
+    let mut entries = vec![state_entry(
+        "historical-backfill:begin",
         0,
-        "begin historical backfill".into(),
+        "begin historical backfill",
         args.oracle,
-        IHistoricalCheckpointOracle::beginHistoricalBackfillCall {}.abi_encode(),
+        &IHistoricalCheckpointOracle::beginHistoricalBackfillCall {}.abi_encode(),
+        vec![state_check(
+            args.oracle,
+            &IHistoricalCheckpointOracle::historicalBackfillStartedCall {}.abi_encode(),
+            &true.abi_encode(),
+        )],
     )];
     for (index, artifact) in manifest.chunks.iter().enumerate() {
         let seal = fs::read(artifact_dir.join(&artifact.seal_file))?;
         let journal = fs::read(artifact_dir.join(&artifact.journal_file))?;
+        let journal_digest = B256::from_slice(&Sha256::digest(&journal));
+        let block_root = artifact
+            .block_root
+            .context("proven historical chunk is missing its block root")?;
         let data = IHistoricalCheckpointOracle::submitHistoricalChunkCall {
             seal: seal.into(),
             journalData: journal.into(),
         }
         .abi_encode();
-        transactions.push(unsigned_transaction(
+        entries.push(state_entry(
+            format!("historical-backfill:chunk:{index:03}"),
             index + 1,
             format!(
                 "submit historical chunk {} ({}-{})",
                 artifact.index_from_newest, artifact.start_block, artifact.end_block
             ),
             args.oracle,
-            data,
+            &data,
+            vec![
+                state_check(
+                    args.oracle,
+                    &IHistoricalCheckpointOracle::consumedJournalDigestsCall {
+                        journalDigest: journal_digest,
+                    }
+                    .abi_encode(),
+                    &true.abi_encode(),
+                ),
+                state_check(
+                    args.oracle,
+                    &IHistoricalCheckpointOracle::historicalChunkRootsCall {
+                        chunkIndex: artifact.index_from_newest,
+                    }
+                    .abi_encode(),
+                    &block_root.abi_encode(),
+                ),
+            ],
         ));
     }
-    let plan = TransactionPlan {
-        chain_id: BASE_CHAIN_ID,
-        oracle: args.oracle,
-        historical_start_block: HISTORICAL_START_BLOCK,
-        historical_anchor_block: HISTORICAL_ANCHOR_BLOCK,
-        transactions,
-    };
+    let plan = StatePlan::new(BASE_CHAIN_ID, args.oracle, entries)?;
     write_json(&args.out, &plan)?;
     println!(
-        "wrote {} unsigned transactions to {}",
-        plan.transactions.len(),
+        "wrote {} state plan entries to {}",
+        plan.entries.len(),
         args.out.display()
     );
     Ok(())
@@ -753,32 +785,48 @@ fn materialize_plan(artifact_dir: &Path, args: MaterializePlanArgs) -> Result<()
         });
     }
 
-    let transactions = proofs
+    let entries = proofs
         .chunks(args.batch_size)
         .enumerate()
         .map(|(index, batch)| {
-            unsigned_transaction(
+            let first = batch
+                .first()
+                .expect("materialization batch is non-empty")
+                .blockNumber;
+            let last = batch
+                .last()
+                .expect("materialization batch is non-empty")
+                .blockNumber;
+            state_entry(
+                format!("historical-materialization:{first}-{last}"),
                 index,
                 format!("materialize {} historical Base blocks", batch.len()),
                 args.oracle,
-                IHistoricalCheckpointOracle::materializeHistoricalBlocksCall {
+                &IHistoricalCheckpointOracle::materializeHistoricalBlocksCall {
                     proofs: batch.to_vec(),
                 }
                 .abi_encode(),
+                batch
+                    .iter()
+                    .map(|proof| {
+                        state_check(
+                            args.oracle,
+                            &IHistoricalCheckpointOracle::canonicalBlockHashesCall {
+                                blockNumber: proof.blockNumber,
+                            }
+                            .abi_encode(),
+                            &proof.blockHash.abi_encode(),
+                        )
+                    })
+                    .collect(),
             )
         })
         .collect::<Vec<_>>();
-    let plan = TransactionPlan {
-        chain_id: BASE_CHAIN_ID,
-        oracle: args.oracle,
-        historical_start_block: HISTORICAL_START_BLOCK,
-        historical_anchor_block: HISTORICAL_ANCHOR_BLOCK,
-        transactions,
-    };
+    let plan = StatePlan::new(BASE_CHAIN_ID, args.oracle, entries)?;
     write_json(&args.out, &plan)?;
     println!(
-        "wrote {} materialization transactions to {}",
-        plan.transactions.len(),
+        "wrote {} materialization entries to {}",
+        plan.entries.len(),
         args.out.display()
     );
     Ok(())
@@ -1005,21 +1053,6 @@ fn parse_json_u64(value: &Value) -> Result<u64> {
 
 fn guest_stdin(witness: &HistoricalChunkWitness) -> Result<Vec<u8>> {
     Ok(GuestEnv::builder().write(witness)?.build_env().stdin)
-}
-
-fn unsigned_transaction(
-    order: usize,
-    purpose: String,
-    to: Address,
-    data: Vec<u8>,
-) -> UnsignedTransaction {
-    UnsignedTransaction {
-        order,
-        purpose,
-        to,
-        value: "0x0".into(),
-        data: format!("0x{}", alloy::hex::encode(data)),
-    }
 }
 
 fn parse_u256(value: &str) -> Result<U256> {
