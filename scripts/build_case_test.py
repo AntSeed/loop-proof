@@ -56,5 +56,27 @@ class BuildCaseTests(unittest.TestCase):
             )
 
 
+    def test_cohort_excludes_the_funder(self):
+        fundings = {"0xaaa": [], "0xbbb": []}
+        settlements = {"0xaaa": [], "0xbbb": []}
+        self.assertEqual(build_case.cohort(fundings, settlements, "0xAAA"), ["0xbbb"])
+
+    def test_oversized_range_is_distinguished_from_rate_limiting(self):
+        self.assertTrue(build_case._is_response_too_large(Exception("Log response size exceeded")))
+        self.assertFalse(
+            build_case._is_response_too_large(
+                Exception("Your app has exceeded its compute units per second capacity")
+            )
+        )
+
+    def test_selection_carries_the_funding_kind(self):
+        buyers = ["0xaaa"]
+        settlements = {"0xaaa": [{"amount": 100}]}
+        fundings = {"0xaaa": [{"tx": "0x1", "amount": 100, "block": 1}]}
+        selected = build_case.select_case_fundings(
+            buyers, settlements, fundings, {"0xaaa": 0}, kind="deposit"
+        )
+        self.assertTrue(all(entry["kind"] == "deposit" for entry in selected))
+
 if __name__ == "__main__":
     unittest.main()
