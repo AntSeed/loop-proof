@@ -2054,6 +2054,7 @@ dependencies = [
  "alloy-trie",
  "loop-core",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

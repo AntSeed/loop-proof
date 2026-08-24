@@ -105,6 +105,31 @@ buyers, return paths). `--expect-reject` asserts that the predicate
 correctly rejects the evidence — use it for honest-seller test vectors
 where the conserved-loop shape is absent.
 
+### P0 development artifacts
+
+Development mode executes the real SP1 guest and requires its public journal
+to match native verification, but skips Groth16 generation and writes
+`proofBytes: 0x01`. These artifacts are accepted only by the loopback Anvil
+harness; production submission continues to require `--prove --production`.
+
+```bash
+cargo run -p loop-host --features sp1 -- run fixture.json \
+  --elf program/closed-loop/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/closed-loop-guest \
+  --result proof-artifacts/flash.json
+
+cargo run -p loop-host -- batch-manifest \
+  --results-dir proof-artifacts \
+  --blockhash-store 0x0000000000000000000000000000000000000040 \
+  --closed-loop-vkey 0x... \
+  --reciprocal-vkey 0x... \
+  --out proof-results.json \
+  --development
+```
+
+`scripts/build-case.py` reads each buyer's Deposits balance at the period-end
+block and selects funding that satisfies the P0 ledger inequality per buyer
+before topping up the aggregate 90% funding requirement.
+
 ## Production batch pipeline
 
 Production proving starts from the approved detection bundle and never from an

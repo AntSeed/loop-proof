@@ -24,24 +24,33 @@ import sys
 import time
 from collections import defaultdict
 from typing import Optional
+from urllib.request import Request, urlopen
 
 # AIP-4 contract addresses (Base mainnet)
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 CHANNELS = "0xBA66d3b4fbCf472F6F11D6F9F96aaCE96516F09d"
+DEPOSITS = "0x0F7a3a8f4Da01637d1202bb5443fcF7F88F99fD2"
 
 # Event signatures
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 SETTLED_TOPIC = "0x0b287f37d8bd14ef37f2966734ab387c243cc1a1663616a25a4cc259877736b1"
+BUYERS_SELECTOR = "0x97a993aa"
 
 PERIOD_START = 44_471_575
 PERIOD_END = 49_936_172
 CHUNK = 100_000
+ALPHA_FUND_BPS = 9_000
+EPSILON_LEDGER_BPS = 500
 
 def addr_topic(addr: str) -> str:
     return "0x" + addr.lower().replace("0x", "").rjust(64, "0")
 
 def parse_addr(topic: str) -> str:
     return "0x" + topic[-40:]
+
+
+def ceil_div(numerator: int, denominator: int) -> int:
+    return (numerator + denominator - 1) // denominator
 
 
 class RPC:
@@ -54,19 +63,35 @@ class RPC:
     @property
     def session(self):
         if self._session is None:
-            import requests
-            self._session = requests.Session()
+            try:
+                import requests
+                self._session = requests.Session()
+            except ImportError:
+                self._session = False
         return self._session
+
+    def post(self, payload: dict) -> dict:
+        if self.session:
+            response = self.session.post(self.url, json=payload, timeout=30)
+            response.raise_for_status()
+            return response.json()
+        request = Request(
+            self.url,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=30) as response:
+            return json.load(response)
 
     def call(self, method: str, params: list, retries: int = 3):
         for attempt in range(retries):
             self._id += 1
             try:
-                r = self.session.post(self.url, json={
+                body = self.post({
                     "jsonrpc": "2.0", "id": self._id,
                     "method": method, "params": params
-                }, timeout=30)
-                body = r.json()
+                })
                 if "error" in body and body["error"]:
                     if attempt < retries - 1:
                         time.sleep(0.5 * (attempt + 1))
@@ -186,6 +211,22 @@ def find_funder(rpc: RPC, buyers: dict, target_funder: Optional[str] = None) -> 
     return top_funder, fundings
 
 
+def find_buyer_end_balances(rpc: RPC, buyers: list[str]) -> dict[str, int]:
+    """Read each buyer's protocol balance at the P0 period end."""
+    print(f"\nReading period-end protocol balances for {len(buyers)} buyers...")
+    balances = {}
+    for index, buyer in enumerate(buyers):
+        calldata = BUYERS_SELECTOR + buyer.lower().replace("0x", "").rjust(64, "0")
+        result = rpc.call("eth_call", [{"to": DEPOSITS, "data": calldata}, hex(PERIOD_END)])
+        data = result.removeprefix("0x")
+        if len(data) < 64:
+            raise ValueError(f"buyers({buyer}) returned malformed data at block {PERIOD_END}")
+        balances[buyer] = int(data[:64], 16)
+        if (index + 1) % 10 == 0:
+            print(f"  Read {index + 1}/{len(buyers)} buyer balances...")
+    return balances
+
+
 def find_returns(rpc: RPC, seller: str, funder: str, max_hops: int = 4, max_paths: int = 50) -> list:
     """Find USDC transfer chains seller → ... → funder."""
     print(f"\nSearching for return paths ({seller[:10]}... → {funder[:10]}...)...")
@@ -269,8 +310,68 @@ def _trace_chain(rpc: RPC, current: str, target: str, prev_amount: int, after_bl
     return None
 
 
+def required_funding(settled: int, balance_end: int) -> int:
+    """Minimum funding satisfying balance_end + settled <= funded * (1 + epsilon)."""
+    return ceil_div((balance_end + settled) * 10_000, 10_000 + EPSILON_LEDGER_BPS)
+
+
+def select_case_fundings(funded_buyers: list[str], buyer_settlements: dict,
+                         buyer_fundings: dict, buyer_end_balances: dict) -> list[dict]:
+    """Select evidence satisfying both per-buyer ledger and aggregate FUND rules."""
+    selected = []
+    remaining = []
+    funded_total = 0
+
+    for buyer in funded_buyers:
+        settled = sum(entry["amount"] for entry in buyer_settlements[buyer])
+        target = required_funding(settled, buyer_end_balances[buyer])
+        candidates = sorted(
+            buyer_fundings[buyer],
+            key=lambda entry: (-entry["amount"], entry["tx"]),
+        )
+        if not candidates:
+            raise ValueError(f"buyer {buyer} has no funding evidence")
+
+        buyer_total = 0
+        selected_count = 0
+        while selected_count < len(candidates) and buyer_total < target:
+            entry = candidates[selected_count]
+            selected.append({"kind": "usdc", "buyer": buyer, **entry})
+            buyer_total += entry["amount"]
+            funded_total += entry["amount"]
+            selected_count += 1
+
+        if buyer_total < target:
+            raise ValueError(
+                f"buyer {buyer} has {buyer_total} funding but needs {target} for ledger coverage"
+            )
+        remaining.extend(
+            {"kind": "usdc", "buyer": buyer, **entry}
+            for entry in candidates[selected_count:]
+        )
+
+    settled_total = sum(
+        sum(entry["amount"] for entry in buyer_settlements[buyer])
+        for buyer in funded_buyers
+    )
+    aggregate_target = ceil_div(settled_total * ALPHA_FUND_BPS, 10_000)
+    remaining.sort(key=lambda entry: (-entry["amount"], entry["tx"]))
+    for entry in remaining:
+        if funded_total >= aggregate_target:
+            break
+        selected.append(entry)
+        funded_total += entry["amount"]
+
+    if funded_total < aggregate_target:
+        raise ValueError(
+            f"case has {funded_total} funding but needs {aggregate_target} aggregate coverage"
+        )
+    return selected
+
+
 def build_case(seller: str, funder: str, buyer_settlements: dict, buyer_fundings: dict,
-               return_paths: list, alpha_fund: float = 0.90) -> dict:
+               buyer_end_balances: dict, return_paths: list,
+               max_settlements_per_buyer: int = 1_000) -> dict:
     """Build a minimal case file."""
     # Only include buyers funded by our funder
     funded_buyers = sorted(set(buyer_fundings.keys()) & set(buyer_settlements.keys()))
@@ -278,40 +379,22 @@ def build_case(seller: str, funder: str, buyer_settlements: dict, buyer_fundings
         print("ERROR: No funded buyers with settlements")
         sys.exit(1)
 
-    # Compute total settled volume for funded buyers
+    selected_settlements = {
+        buyer: buyer_settlements[buyer][:max_settlements_per_buyer]
+        for buyer in funded_buyers
+    }
+
     settled_total = sum(
-        sum(s["amount"] for s in buyer_settlements[b])
+        sum(s["amount"] for s in selected_settlements[b])
         for b in funded_buyers
     )
-
-    # Build funding list — minimum needed for α_fund coverage
-    all_fundings = []
-    for buyer in funded_buyers:
-        txs = sorted(buyer_fundings[buyer], key=lambda t: -t["amount"])
-        all_fundings.append({"buyer": buyer, "txs": txs})
-
-    # First pass: one per buyer (required)
-    case_fundings = []
-    funded_total = 0
-    remaining = []
-    for entry in all_fundings:
-        best = entry["txs"][0]
-        case_fundings.append({"kind": "usdc", "buyer": entry["buyer"], "tx": best["tx"]})
-        funded_total += best["amount"]
-        remaining.extend([
-            {"kind": "usdc", "buyer": entry["buyer"], "tx": t["tx"], "_amount": t["amount"]}
-            for t in entry["txs"][1:]
-        ])
-
-    # Second pass: add more if needed
-    target = settled_total * alpha_fund
-    if funded_total < target:
-        remaining.sort(key=lambda x: -x["_amount"])
-        for r in remaining:
-            if funded_total >= target:
-                break
-            case_fundings.append({"kind": r["kind"], "buyer": r["buyer"], "tx": r["tx"]})
-            funded_total += r["_amount"]
+    case_fundings = select_case_fundings(
+        funded_buyers,
+        selected_settlements,
+        buyer_fundings,
+        buyer_end_balances,
+    )
+    funded_total = sum(entry["amount"] for entry in case_fundings)
 
     print(f"\nCase summary:")
     print(f"  Buyers: {len(funded_buyers)}")
@@ -324,9 +407,12 @@ def build_case(seller: str, funder: str, buyer_settlements: dict, buyer_fundings
         "seller": seller,
         "funder": funder,
         "buyers": funded_buyers,
-        "fundings": [{"kind": f["kind"], "buyer": f["buyer"], "tx": f["tx"]} for f in case_fundings],
+        "fundings": [
+            {"kind": entry["kind"], "buyer": entry["buyer"], "tx": entry["tx"]}
+            for entry in case_fundings
+        ],
         "returns": return_paths,
-        "max_settlements_per_buyer": 200,
+        "max_settlements_per_buyer": max_settlements_per_buyer,
     }
 
 
@@ -339,6 +425,8 @@ def main():
     parser.add_argument("--delay", type=float, default=0.05, help="Delay between RPC calls (seconds)")
     parser.add_argument("--max-return-hops", type=int, default=4, help="Max hops in return paths")
     parser.add_argument("--max-return-paths", type=int, default=50, help="Max return paths to find")
+    parser.add_argument("--max-settlements-per-buyer", type=int, default=1_000,
+                        help="Settlement evidence cap used by loop-host (default: 1000)")
     args = parser.parse_args()
 
     rpc = RPC(args.rpc, delay=args.delay)
@@ -355,13 +443,25 @@ def main():
         target_funder=args.funder.lower() if args.funder else None,
     )
 
-    # Step 3: Find return paths
+    # Step 3: Bind funding selection to the period-end P0 ledger rule
+    funded_buyers = sorted(set(buyer_fundings.keys()) & set(buyer_settlements.keys()))
+    buyer_end_balances = find_buyer_end_balances(rpc, funded_buyers)
+
+    # Step 4: Find return paths
     return_paths = find_returns(rpc, args.seller, funder,
                                 max_hops=args.max_return_hops,
                                 max_paths=args.max_return_paths)
 
-    # Step 4: Build case
-    case = build_case(args.seller, funder, buyer_settlements, buyer_fundings, return_paths)
+    # Step 5: Build case
+    case = build_case(
+        args.seller,
+        funder,
+        buyer_settlements,
+        buyer_fundings,
+        buyer_end_balances,
+        return_paths,
+        args.max_settlements_per_buyer,
+    )
 
     # Write output
     with open(args.out, "w") as f:

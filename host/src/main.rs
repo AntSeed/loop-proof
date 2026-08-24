@@ -95,13 +95,14 @@ fn main() -> Result<()> {
             &arg_value(&args, "--closed-loop-vkey").context("--closed-loop-vkey required")?,
             &arg_value(&args, "--reciprocal-vkey").context("--reciprocal-vkey required")?,
             &arg_value(&args, "--out").context("--out required")?,
+            args.iter().any(|a| a == "--development"),
         ),
         Some("verify-layout") => {
             let addresses: Vec<String> = args[2..].to_vec();
             verify_layout(&addresses)
         }
         _ => bail!(
-            "usage: loop-host fetch --case case.json --out fixture.json [--expect-reject]\n       loop-host run fixture.json [--prove --elf path --result result.json --source-claim-id 0x... --production]\n       loop-host vkey --elf path\n       loop-host headers --start N --end M --out headers.json\n       loop-host batch-manifest --results-dir DIR --blockhash-store 0x... --closed-loop-vkey 0x... --reciprocal-vkey 0x... --out proof-results.json\n       loop-host verify-layout [seller_address ...]"
+            "usage: loop-host fetch --case case.json --out fixture.json [--expect-reject]\n       loop-host run fixture.json [--elf path --result result.json --source-claim-id 0x...] [--prove --production]\n       loop-host vkey --elf path\n       loop-host headers --start N --end M --out headers.json\n       loop-host batch-manifest --results-dir DIR --blockhash-store 0x... --closed-loop-vkey 0x... --reciprocal-vkey 0x... --out proof-results.json [--development]\n       loop-host verify-layout [seller_address ...]"
         ),
     }
 }
@@ -390,8 +391,8 @@ fn run(
     source_claim_id: Option<String>,
     production: bool,
 ) -> Result<()> {
-    if result_path.is_some() && !prove {
-        bail!("--result requires --prove");
+    if result_path.is_some() && elf.is_none() {
+        bail!("--result requires --elf");
     }
     if production && !prove {
         bail!("--production requires --prove");
@@ -488,6 +489,17 @@ fn sp1_run(
                 production,
             )?;
         }
+    } else if let Some(path) = result_path {
+        write_proof_result(
+            path,
+            native,
+            reciprocal,
+            source_claim_id,
+            &vkey,
+            "0x01",
+            instruction_count,
+            false,
+        )?;
     }
     Ok(())
 }
@@ -563,6 +575,7 @@ fn batch_manifest(
     closed_loop_vkey: &str,
     reciprocal_vkey: &str,
     out_path: &str,
+    development: bool,
 ) -> Result<()> {
     use alloy_primitives::{keccak256, Address, B256};
     use sha2::Digest;
@@ -570,6 +583,7 @@ fn batch_manifest(
     let store: Address = blockhash_store.parse().context("invalid BlockhashStore address")?;
     let closed_vkey: B256 = closed_loop_vkey.parse().context("invalid closed-loop vkey")?;
     let reciprocal_vkey: B256 = reciprocal_vkey.parse().context("invalid reciprocal vkey")?;
+    let security_mode = if development { "development" } else { "production" };
     let mut entries = Vec::<serde_json::Value>::new();
     for item in std::fs::read_dir(results_dir)? {
         let path = item?.path();
@@ -582,14 +596,14 @@ fn batch_manifest(
         }
         if value.get("version").and_then(|item| item.as_u64()) != Some(2)
             || value.get("chainId").and_then(|item| item.as_u64()) != Some(8_453)
-            || value.get("securityMode").and_then(|item| item.as_str()) != Some("production")
+            || value.get("securityMode").and_then(|item| item.as_str()) != Some(security_mode)
         {
-            bail!("{}: invalid production proof result", path.display());
+            bail!("{}: invalid {security_mode} proof result", path.display());
         }
         entries.push(value.get("entry").cloned().context("proof result entry missing")?);
     }
     if entries.is_empty() {
-        bail!("no production proof result files found");
+        bail!("no {security_mode} proof result files found");
     }
     entries.sort_by(|left, right| {
         left.get("claimId")
@@ -659,7 +673,7 @@ fn batch_manifest(
         "version": 2,
         "kind": "antseed-wash-trading-proof-results",
         "chainId": 8_453,
-        "securityMode": "production",
+        "securityMode": security_mode,
         "batch": {
             "domain": format!("{domain}"),
             "blockhashStore": format!("{store}"),
