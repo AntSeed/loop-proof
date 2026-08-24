@@ -15,8 +15,7 @@ use wash_predicate::{
     FundingEvidence, FundingKind, LogRef, ReceiptRef, ReciprocalInput, ReturnPath,
     SellerStatsWitness, StateRead, TransactionRef, BASE_CHAIN_ID, BUYER_ACCOUNT_BALANCE_OFFSET,
     CHANNELS_ADDRESS, CHANNELS_AGENT_STATS_SLOT, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT,
-    PERIOD_END_BLOCK, PERIOD_LEDGER_START_BLOCK, STAKING_ADDRESS,
-    STAKING_SELLER_AGENT_ID_SLOT,
+    PERIOD_END_BLOCK, STAKING_ADDRESS, STAKING_SELLER_AGENT_ID_SLOT,
 };
 
 #[derive(Debug, Deserialize)]
@@ -135,7 +134,6 @@ fn materialize_evidence(
 ) -> Result<MaterializedEvidence> {
     let atomic = evidence.iter().flat_map(atomic_evidence).collect::<Vec<_>>();
     let mut targets = BTreeMap::<u64, BlockTargets>::new();
-    targets.entry(PERIOD_LEDGER_START_BLOCK).or_default();
     targets.entry(PERIOD_END_BLOCK).or_default();
     for entry in &atomic {
         let block = required(entry.block_number, "block number", entry)?;
@@ -388,14 +386,6 @@ fn buyer_ledger(
         BUYER_ACCOUNT_BALANCE_OFFSET,
     );
     Ok(BuyerLedger {
-        start: state_read(
-            client,
-            materialized,
-            PERIOD_LEDGER_START_BLOCK,
-            DEPOSITS_ADDRESS,
-            slot,
-        )?
-        .0,
         end: state_read(
             client,
             materialized,

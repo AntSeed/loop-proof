@@ -89,8 +89,8 @@ cargo test
 cargo run -p loop-host -- verify-layout <seller_address> [seller_address ...]
 cargo test -p loop-host -- --ignored     # same check as a test
 
-# materialize an ad-hoc closed-loop case (archive RPC required for the two
-# period-boundary ledger proofs and the seller-stat proof)
+# materialize an ad-hoc closed-loop case (archive RPC required for the
+# period-end ledger and seller-stat proofs)
 cargo run -p loop-host -- fetch --case cases/<case>.json --out fixture.json [--expect-reject]
 
 # reproducible guest builds + vkey derivation (SP1 toolchain + Docker)
@@ -126,7 +126,7 @@ node scripts/build-guests-reproducibly.mjs --work-dir ../guest-repro-builds --ou
 node scripts/verify-guest-build-attestation.mjs guest-build-attestation.json
 
 # 3. Quote and explicitly approve real SP1 proving cost, then materialize and
-# prove every claim. BASE_RPC_URLS must provide archive eth_getProof support.
+# prove every claim. BASE_RPC_URLS must support eth_getProof at the period end.
 node scripts/prove-approved-batch.mjs \
   --plan proof-plan.json \
   --artifact-dir proof-artifacts \
@@ -141,10 +141,10 @@ node scripts/prove-approved-batch.mjs \
 
 `wash-trading-materialize-p0` consumes each claim's exact `selectedEvidence`.
 It authenticates the selected receipt and transaction tries, adds mandatory
-`Deposits.buyers[*].balance` proofs at both period boundaries, adds mandatory
-period-end seller-agent/stat proofs, and natively verifies the final witness
-before it is passed to SP1. Reciprocal claims also include pair-internal
-protocol deposits selected by the planner.
+period-end `Deposits.buyers[*].balance` proofs with no opening-balance credit,
+adds mandatory period-end seller-agent/stat proofs, and natively verifies the
+final witness before it is passed to SP1. Reciprocal claims also include
+pair-internal protocol deposits selected by the planner.
 
 The final `antseed-wash-trading-proof-results` v2 manifest contains subjects,
 journal volumes, program vkeys, journal bytes and SHA-256 digests, proof bytes,

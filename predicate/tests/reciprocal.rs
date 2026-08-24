@@ -33,9 +33,10 @@ fn self_financed_pair_produces_the_journal() {
 }
 
 #[test]
-fn externally_financed_volume_is_outside_the_predicate() {
-    // Same settled volume, but the pair's protocol inflow is not shown to
-    // come from within the pair: honest mutual trade financed elsewhere.
+fn pre_period_or_external_capital_is_outside_the_predicate() {
+    // Same settled volume, but no in-period pair deposit finances it.
+    // Hypothetical opening balances receive no credit because the witness
+    // deliberately contains only period-end state.
     let mut cfg = PairCfg::default();
     cfg.deposits = vec![];
     assert_rejects(&reciprocal_input(&cfg), "external capital");

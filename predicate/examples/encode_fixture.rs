@@ -19,7 +19,7 @@ fn main() {
         }],
         block_refs: vec![
             (
-                wash_predicate::PERIOD_LEDGER_START_BLOCK,
+                wash_predicate::PERIOD_START_BLOCK,
                 b256!("2222222222222222222222222222222222222222222222222222222222222222"),
             ),
             (

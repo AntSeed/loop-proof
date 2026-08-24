@@ -5,7 +5,7 @@ use common::*;
 use wash_predicate::{
     canonical_evidence_hash, closed_loop_claim_id, cohort_hash, verify_closed_loop,
     FundingEvidence, FundingKind, LogRef, ReceiptRef, ReturnPath, TransactionRef,
-    CLOSED_LOOP_PREDICATE_ID, PERIOD_END_BLOCK, PERIOD_LEDGER_START_BLOCK, PERIOD_START_BLOCK,
+    CLOSED_LOOP_PREDICATE_ID, PERIOD_END_BLOCK, PERIOD_START_BLOCK,
 };
 
 fn assert_rejects(input: &wash_predicate::ClosedLoopInput, needle: &str) {
@@ -34,13 +34,12 @@ fn valid_loop_produces_the_journal() {
             canonical_evidence_hash(&input).unwrap(),
         )
     );
-    // block refs sorted, unique, and covering both state boundaries
+    // Block refs are sorted, unique, and include the period-end state block.
     let numbers: Vec<u64> = journal.block_refs.iter().map(|(n, _)| *n).collect();
     let mut sorted = numbers.clone();
     sorted.sort_unstable();
     sorted.dedup();
     assert_eq!(numbers, sorted);
-    assert!(numbers.contains(&PERIOD_LEDGER_START_BLOCK));
     assert!(numbers.contains(&PERIOD_END_BLOCK));
 
     // ABI round trip
@@ -61,8 +60,8 @@ fn tampered_roots_are_rejected() {
     assert!(verify_closed_loop(&transactions).is_err());
 
     let mut state = base.clone();
-    let start_state = state.ledgers[0].start.block;
-    state.blocks[start_state].header.state_root = B256::ZERO;
+    let end_state = state.ledgers[0].end.block;
+    state.blocks[end_state].header.state_root = B256::ZERO;
     assert!(verify_closed_loop(&state).is_err());
 }
 
@@ -127,18 +126,20 @@ fn settlement_must_follow_its_buyers_funding() {
 #[test]
 fn funding_coverage_boundary_is_exact() {
     // Σ settle = 1_200_000_000; α_fund = 9_000 bps → funded ≥ 1_080_000_000.
-    // Pre-period balances absorb the per-buyer ledger slack.
-    let mut cfg = LoopCfg::default();
-    cfg.funded = vec![360_000_000; 3];
-    cfg.start_balances = vec![50_000_000; 3];
-    let input = closed_loop_input(&cfg);
-    verify_closed_loop(&input).unwrap();
-
     let mut cfg = LoopCfg::default();
     cfg.funded = vec![360_000_000, 360_000_000, 359_999_999];
-    cfg.start_balances = vec![50_000_000; 3];
     let input = closed_loop_input(&cfg);
     assert_rejects(&input, "funding below the coverage fraction");
+}
+
+#[test]
+fn pre_period_capital_receives_no_ledger_credit() {
+    // Aggregate funding sits exactly on α_fund, but each buyer settles 400
+    // from only 360 of authenticated in-period funding. Hypothetical opening
+    // balances are deliberately not part of the witness and cannot close the gap.
+    let mut cfg = LoopCfg::default();
+    cfg.funded = vec![360_000_000; 3];
+    assert_rejects(&closed_loop_input(&cfg), "ledger");
 }
 
 #[test]
@@ -163,11 +164,9 @@ fn ledger_witnesses_are_mandatory() {
 }
 
 #[test]
-fn ledger_witnesses_are_bound_to_the_boundary_blocks() {
+fn ledger_witnesses_are_bound_to_the_period_end_block() {
     let mut input = closed_loop_input(&LoopCfg::default());
-    // Point the start read at the end block: value and proof are valid for
-    // that block, but the rule pins the boundary.
-    input.ledgers[0].start = input.ledgers[0].end.clone();
+    input.ledgers[0].end.block = 0;
     assert_rejects(&input, "requires block");
 }
 
@@ -257,7 +256,6 @@ fn funder_cannot_be_its_own_buyer() {
     cfg.buyers = buyers;
     cfg.funded = vec![400_000_000; 4];
     cfg.settled = vec![400_000_000; 4];
-    cfg.start_balances = vec![0; 4];
     cfg.end_balances = vec![0; 4];
     assert_rejects(&closed_loop_input(&cfg), "funder cannot be its own buyer");
 }
@@ -269,7 +267,6 @@ fn a_single_funded_buyer_is_already_a_loop() {
     cfg.buyers = vec![BUYERS[0]];
     cfg.funded = vec![2_000_000];
     cfg.settled = vec![2_000_000];
-    cfg.start_balances = vec![0];
     cfg.end_balances = vec![0];
     cfg.return_paths = vec![vec![(FUNDER, 1_960_000)]];
     let journal = verify_closed_loop(&closed_loop_input(&cfg)).unwrap();
@@ -278,19 +275,8 @@ fn a_single_funded_buyer_is_already_a_loop() {
 
 #[test]
 fn evidence_outside_the_period_is_rejected() {
-    // A settlement on the pre-period boundary block is state-only territory.
     let mut input = closed_loop_input(&LoopCfg::default());
-    let reference = input.settlements[0];
-    let start_state = input.ledgers[0].start.block;
-    // Renumber the settlement block onto the ledger boundary: first remove
-    // the state block to avoid the duplicate-number rejection masking this.
-    input.blocks[reference.block].header.number = PERIOD_LEDGER_START_BLOCK;
-    input.blocks[start_state].header.number = PERIOD_START_BLOCK + 900;
-    assert_rejects(&input, "outside the fixed enforcement period");
-
-    // A block before the witness window fails authentication outright.
-    let mut input = closed_loop_input(&LoopCfg::default());
-    input.blocks[0].header.number = PERIOD_LEDGER_START_BLOCK - 1;
+    input.blocks[0].header.number = PERIOD_START_BLOCK - 1;
     assert_rejects(&input, "outside the witness window");
 }
 
@@ -341,7 +327,6 @@ fn native_funding_never_counts_toward_usdc_coverage() {
     cfg.buyers = vec![SELLER];
     cfg.funded = vec![0];
     cfg.settled = vec![400_000_000];
-    cfg.start_balances = vec![0];
     cfg.end_balances = vec![0];
     cfg.return_paths = vec![vec![(FUNDER, 320_000_000)]];
     let mut input = closed_loop_input(&cfg);

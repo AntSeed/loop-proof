@@ -48,8 +48,6 @@ pub const PERIOD_START_BLOCK: u64 = 44_471_575;
 /// Inclusive end block. The `LEDGER` witness and the `AgentStats` settled
 /// volume are read here, fixing every claim's ratio at proving time.
 pub const PERIOD_END_BLOCK: u64 = 49_936_172;
-/// The pre-period state boundary the ledger's start side is read at.
-pub const PERIOD_LEDGER_START_BLOCK: u64 = PERIOD_START_BLOCK - 1;
 
 // ─── Predicate parameters ─────────────────────────────────────────────────
 //
@@ -192,12 +190,11 @@ pub struct ReturnPath {
     pub transfers: Vec<LogRef>,
 }
 
-/// `LEDGER` witness for one buyer: `Deposits.buyers[buyer].balance` proven
-/// at both period bounds.
+/// `LEDGER` witness for one buyer: `Deposits.buyers[buyer].balance` proven at
+/// the period end. Opening balances receive no credit, making the predicate
+/// conservative without requiring pre-period historical state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BuyerLedger {
-    /// Read at `PERIOD_LEDGER_START_BLOCK`.
-    pub start: StateRead,
     /// Read at `PERIOD_END_BLOCK`.
     pub end: StateRead,
 }
@@ -326,7 +323,7 @@ pub(crate) fn authenticate_blocks(blocks: &[EvidenceBlock]) -> Result<Vec<(u64, 
     let mut refs = Vec::with_capacity(blocks.len());
     for block in blocks {
         let number = block.header.number;
-        if !(PERIOD_LEDGER_START_BLOCK..=PERIOD_END_BLOCK).contains(&number) {
+        if !(PERIOD_START_BLOCK..=PERIOD_END_BLOCK).contains(&number) {
             return Err(format!("block {number} outside the witness window"));
         }
         if !numbers.insert(number) {

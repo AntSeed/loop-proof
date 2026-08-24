@@ -11,7 +11,7 @@ use crate::{
     ALPHA_FUND_BPS, ALPHA_RETURN_BPS, BASE_CHAIN_ID, BUYER_ACCOUNT_BALANCE_OFFSET,
     CLOSED_LOOP_PREDICATE_ID, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT, EPSILON_LEDGER_BPS,
     H_MAX_INTERMEDIATE_HOPS, MAX_BUYERS, MAX_RETURN_PATHS, PERIOD_END_BLOCK,
-    PERIOD_LEDGER_START_BLOCK, PERIOD_START_BLOCK, RHO_HOP_BPS, T_PATH_SECONDS,
+    PERIOD_START_BLOCK, RHO_HOP_BPS, T_PATH_SECONDS,
 };
 use alloy_primitives::{Address, U256};
 use serde::{Deserialize, Serialize};
@@ -250,16 +250,14 @@ fn verify_settlements(
 
 /// Attribution: for each buyer, the capital it settled with must be the
 /// funder's, reconciled against the protocol's own accounting at the period
-/// bounds. With `balance` the deployed `AntseedDeposits` per-buyer state
-/// (there is no lifetime-cumulative deposit counter on-chain), conservation
-/// gives `deposits_in ≥ Δbalance + charges`, so the strongest O(1)-witness
-/// reconciliation is:
+/// end. Opening balances receive no credit, so only authenticated in-period
+/// funding can finance the selected settlements:
 ///
-///   balance_end + settledₑᵥ  ≤  balance_start + funded · (1 + ε_ledger)
+///   balance_end + settledₑᵥ  ≤  funded · (1 + ε_ledger)
 ///
-/// Any protocol inflow beyond what the funder demonstrably provided —
-/// e.g. the buyer depositing its own money during the period — breaks the
-/// inequality and rejects the claim.
+/// Any protocol capital beyond what the funder demonstrably provided breaks
+/// the inequality and rejects the claim. Pre-period capital can therefore
+/// cause a false negative, but can never make the predicate easier to satisfy.
 fn verify_ledgers(
     input: &ClosedLoopInput,
     resolver: &ChainResolver<'_>,
@@ -274,19 +272,12 @@ fn verify_ledgers(
             loop_core::mapping_slot_address(*buyer, DEPOSITS_BUYERS_SLOT),
             BUYER_ACCOUNT_BALANCE_OFFSET,
         );
-        let balance_start = resolver.storage_value(
-            &ledger.start,
-            PERIOD_LEDGER_START_BLOCK,
-            DEPOSITS_ADDRESS,
-            slot,
-        )?;
         let balance_end =
             resolver.storage_value(&ledger.end, PERIOD_END_BLOCK, DEPOSITS_ADDRESS, slot)?;
         let settled = settle.per_buyer.get(buyer).copied().unwrap_or(0);
         let funded = funding.usdc_per_buyer.get(buyer).copied().unwrap_or(0);
         let lhs = (balance_end + U256::from(settled)) * U256::from(10_000u64);
-        let rhs = balance_start * U256::from(10_000u64)
-            + U256::from(funded) * U256::from(10_000 + EPSILON_LEDGER_BPS);
+        let rhs = U256::from(funded) * U256::from(10_000 + EPSILON_LEDGER_BPS);
         if lhs > rhs {
             return Err(
                 "ledger: buyer inflow exceeds funder-attributed capital beyond tolerance".into(),

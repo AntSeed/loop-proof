@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use wash_predicate::{
     BuyerLedger, ClosedLoopInput, EvidenceBlock, FundingEvidence, FundingKind, LogRef, ReturnPath,
     SellerStatsWitness, StateRead, WashJournal, CHANNELS_ADDRESS, DEPOSITS_ADDRESS,
-    PERIOD_END_BLOCK, PERIOD_LEDGER_START_BLOCK, STAKING_ADDRESS, USDC_ADDRESS,
+    PERIOD_END_BLOCK, STAKING_ADDRESS, USDC_ADDRESS,
 };
 
 const DEFAULT_RPCS: &[&str] = &[
@@ -281,38 +281,26 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
         })
         .collect::<Result<_>>()?;
 
-    // 5. Boundary state witnesses.
+    // 5. Period-end state witnesses.
     let end_header = client.header(PERIOD_END_BLOCK)?;
     let end_block =
         EvidenceBlock { header: end_header.clone(), receipts: vec![], transactions: vec![] };
 
     let mut ledgers = Vec::new();
-    let start_header = client.header(PERIOD_LEDGER_START_BLOCK)?;
-    let start_block = EvidenceBlock {
-        header: start_header.clone(),
-        receipts: vec![],
-        transactions: vec![],
-    };
-    let start_index = blocks.len();
-    let end_index = blocks.len() + 1;
+    let end_index = blocks.len();
     for buyer in &case.buyers {
         let slot = loop_core::slot_offset(
             loop_core::mapping_slot_address(*buyer, wash_predicate::DEPOSITS_BUYERS_SLOT),
             wash_predicate::BUYER_ACCOUNT_BALANCE_OFFSET,
         );
-        let (start_proof, start_value) =
-            client.storage_witness(&start_header, DEPOSITS_ADDRESS, slot)?;
         let (end_proof, end_value) =
             client.storage_witness(&end_header, DEPOSITS_ADDRESS, slot)?;
-        println!("buyer {buyer}: balance {start_value} → {end_value}");
+        println!("buyer {buyer}: period-end balance {end_value}");
         ledgers.push(BuyerLedger {
-            start: StateRead { block: start_index, proof: start_proof },
             end: StateRead { block: end_index, proof: end_proof },
         });
     }
-    blocks.push(start_block);
 
-    let end_index = blocks.len();
     let agent_slot = loop_core::mapping_slot_address(
         case.seller,
         wash_predicate::STAKING_SELLER_AGENT_ID_SLOT,

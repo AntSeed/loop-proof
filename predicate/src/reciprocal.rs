@@ -15,7 +15,7 @@ use crate::{
     validate_chain, BuyerLedger, EvidenceBlock, LogRef, SellerStatsWitness, SubjectRecord,
     WashJournal, ALPHA_SELF_BPS, BASE_CHAIN_ID, BETA_RECIPROCAL_BPS,
     BUYER_ACCOUNT_BALANCE_OFFSET, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT, PERIOD_END_BLOCK,
-    PERIOD_LEDGER_START_BLOCK, PERIOD_START_BLOCK, RECIPROCAL_PREDICATE_ID,
+    PERIOD_START_BLOCK, RECIPROCAL_PREDICATE_ID,
 };
 use alloy_primitives::{Address, U256};
 use serde::{Deserialize, Serialize};
@@ -133,32 +133,22 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String>
 
     // ── Self-financing (LEDGER): external inflow ≤ (1 − α_self) · total ───
     //
-    //   Σ_w (balance_end + boughtₑᵥ)  ≤  Σ_w balance_start
-    //                                    + internal deposits
+    //   Σ_w (balance_end + boughtₑᵥ)  ≤  internal deposits
     //                                    + (1 − α_self) · total
     //
     // Each wallet's bought volume equals the other's sold volume, so
     // Σ_w boughtₑᵥ = total.
-    let balance =
-        |ledger: &BuyerLedger, member: Address| -> Result<(U256, U256), String> {
-            let slot = loop_core::slot_offset(
-                loop_core::mapping_slot_address(member, DEPOSITS_BUYERS_SLOT),
-                BUYER_ACCOUNT_BALANCE_OFFSET,
-            );
-            Ok((
-                resolver.storage_value(
-                    &ledger.start,
-                    PERIOD_LEDGER_START_BLOCK,
-                    DEPOSITS_ADDRESS,
-                    slot,
-                )?,
-                resolver.storage_value(&ledger.end, PERIOD_END_BLOCK, DEPOSITS_ADDRESS, slot)?,
-            ))
-        };
-    let (start_a, end_a) = balance(&input.ledger_a, input.address_a)?;
-    let (start_b, end_b) = balance(&input.ledger_b, input.address_b)?;
+    let balance = |ledger: &BuyerLedger, member: Address| -> Result<U256, String> {
+        let slot = loop_core::slot_offset(
+            loop_core::mapping_slot_address(member, DEPOSITS_BUYERS_SLOT),
+            BUYER_ACCOUNT_BALANCE_OFFSET,
+        );
+        resolver.storage_value(&ledger.end, PERIOD_END_BLOCK, DEPOSITS_ADDRESS, slot)
+    };
+    let end_a = balance(&input.ledger_a, input.address_a)?;
+    let end_b = balance(&input.ledger_b, input.address_b)?;
     let lhs = (end_a + end_b + U256::from(total)) * U256::from(10_000u64);
-    let rhs = (start_a + start_b + U256::from(internal_total)) * U256::from(10_000u64)
+    let rhs = U256::from(internal_total) * U256::from(10_000u64)
         + U256::from(total) * U256::from(10_000 - ALPHA_SELF_BPS);
     if lhs > rhs {
         return Err("reciprocal: pair volume financed by external capital".into());
