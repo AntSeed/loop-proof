@@ -3,9 +3,9 @@ mod common;
 use alloy_primitives::{address, B256};
 use common::*;
 use wash_predicate::{
-    closed_loop_claim_id, cohort_hash, verify_closed_loop, FundingEvidence, FundingKind, LogRef,
-    ReceiptRef, ReturnPath, TransactionRef, CLOSED_LOOP_PREDICATE_ID, PERIOD_END_BLOCK,
-    PERIOD_LEDGER_START_BLOCK, PERIOD_START_BLOCK,
+    canonical_evidence_hash, closed_loop_claim_id, cohort_hash, verify_closed_loop,
+    FundingEvidence, FundingKind, LogRef, ReceiptRef, ReturnPath, TransactionRef,
+    CLOSED_LOOP_PREDICATE_ID, PERIOD_END_BLOCK, PERIOD_LEDGER_START_BLOCK, PERIOD_START_BLOCK,
 };
 
 fn assert_rejects(input: &wash_predicate::ClosedLoopInput, needle: &str) {
@@ -27,7 +27,12 @@ fn valid_loop_produces_the_journal() {
     assert_eq!(journal.subjects[0].settled_volume, 2_400_000_000);
     assert_eq!(
         journal.claim_id,
-        closed_loop_claim_id(SELLER, FUNDER, cohort_hash(&BUYERS))
+        closed_loop_claim_id(
+            SELLER,
+            FUNDER,
+            cohort_hash(&BUYERS),
+            canonical_evidence_hash(&input).unwrap(),
+        )
     );
     // block refs sorted, unique, and covering both state boundaries
     let numbers: Vec<u64> = journal.block_refs.iter().map(|(n, _)| *n).collect();
@@ -148,6 +153,13 @@ fn ledger_rejects_buyer_capital_beyond_tolerance() {
     let mut cfg = LoopCfg::default();
     cfg.end_balances = vec![20_000_000, 0, 0];
     verify_closed_loop(&closed_loop_input(&cfg)).unwrap();
+}
+
+#[test]
+fn ledger_witnesses_are_mandatory() {
+    let mut input = closed_loop_input(&LoopCfg::default());
+    input.ledgers.clear();
+    assert_rejects(&input, "exactly one witness per buyer required");
 }
 
 #[test]

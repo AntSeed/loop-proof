@@ -11,6 +11,7 @@ path = "src/main.rs"
 loop-core = { workspace = true }
 wash-predicate = { workspace = true }
 alloy-primitives = { workspace = true, features = ["std"] }
+alloy-sol-types = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-eips = { workspace = true }
 alloy-network = { version = "=1.5.2" }

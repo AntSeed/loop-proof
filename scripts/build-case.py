@@ -31,7 +31,7 @@ CHANNELS = "0xBA66d3b4fbCf472F6F11D6F9F96aaCE96516F09d"
 
 # Event signatures
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-SETTLED_TOPIC = "0x987d620f307ff6b94d58743cb7a7509f24571571a641e3e75d02c7d3c4fc6735"
+SETTLED_TOPIC = "0x0b287f37d8bd14ef37f2966734ab387c243cc1a1663616a25a4cc259877736b1"
 
 PERIOD_START = 44_471_575
 PERIOD_END = 49_936_172
@@ -367,7 +367,7 @@ def main():
     with open(args.out, "w") as f:
         json.dump(case, f, indent=2)
     print(f"\nCase written to {args.out}")
-    print(f"Run: BASE_RPC_URLS=\"{args.rpc}\" cargo run --release -p loop-host -- fetch --case {args.out} --out fixture.json --no-ledger")
+    print(f"Run: BASE_RPC_URLS=\"{args.rpc}\" cargo run --release -p loop-host -- fetch --case {args.out} --out fixture.json")
 
 
 if __name__ == "__main__":

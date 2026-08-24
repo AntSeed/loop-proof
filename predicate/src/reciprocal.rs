@@ -8,7 +8,8 @@
 //! therefore outside the predicate.
 
 use crate::{
-    authenticate_blocks, ensure_event_in_period, meets_ratio, reciprocal_claim_id,
+    authenticate_blocks, canonical_evidence_hash, ensure_event_in_period, meets_ratio,
+    reciprocal_claim_id,
     resolver::{ChainResolver, LogKey},
     stats::verify_subject_stats,
     validate_chain, BuyerLedger, EvidenceBlock, LogRef, SellerStatsWitness, SubjectRecord,
@@ -172,7 +173,11 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String>
         chain_id: BASE_CHAIN_ID,
         period_start_block: PERIOD_START_BLOCK,
         period_end_block: PERIOD_END_BLOCK,
-        claim_id: reciprocal_claim_id(input.address_a, input.address_b),
+        claim_id: reciprocal_claim_id(
+            input.address_a,
+            input.address_b,
+            canonical_evidence_hash(input)?,
+        ),
         subjects: vec![
             SubjectRecord {
                 subject: input.address_a,

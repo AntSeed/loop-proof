@@ -3093,6 +3093,7 @@ dependencies = [
  "alloy-network",
  "alloy-primitives",
  "alloy-rlp",
+ "alloy-sol-types",
  "alloy-trie",
  "anyhow",
  "loop-core",

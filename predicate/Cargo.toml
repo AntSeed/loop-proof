@@ -12,6 +12,6 @@ alloy-trie = { workspace = true }
 alloy-rlp = { workspace = true }
 alloy-sol-types = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }

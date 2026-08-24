@@ -3,7 +3,7 @@ mod common;
 use alloy_primitives::address;
 use common::*;
 use wash_predicate::{
-    reciprocal_claim_id, verify_reciprocal, RECIPROCAL_PREDICATE_ID,
+    canonical_evidence_hash, reciprocal_claim_id, verify_reciprocal, RECIPROCAL_PREDICATE_ID,
 };
 
 fn assert_rejects(input: &wash_predicate::ReciprocalInput, needle: &str) {
@@ -13,9 +13,13 @@ fn assert_rejects(input: &wash_predicate::ReciprocalInput, needle: &str) {
 
 #[test]
 fn self_financed_pair_produces_the_journal() {
-    let journal = verify_reciprocal(&reciprocal_input(&PairCfg::default())).unwrap();
+    let input = reciprocal_input(&PairCfg::default());
+    let journal = verify_reciprocal(&input).unwrap();
     assert_eq!(journal.predicate_id, RECIPROCAL_PREDICATE_ID);
-    assert_eq!(journal.claim_id, reciprocal_claim_id(PAIR_A, PAIR_B));
+    assert_eq!(
+        journal.claim_id,
+        reciprocal_claim_id(PAIR_A, PAIR_B, canonical_evidence_hash(&input).unwrap())
+    );
     assert_eq!(journal.subjects.len(), 2);
     assert_eq!(journal.subjects[0].subject, PAIR_A);
     assert_eq!(journal.subjects[0].wash_volume, 500_000_000);

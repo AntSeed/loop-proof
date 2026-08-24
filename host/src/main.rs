@@ -73,13 +73,15 @@ fn main() -> Result<()> {
             &arg_value(&args, "--case").context("--case required")?,
             &arg_value(&args, "--out").context("--out required")?,
             args.iter().any(|a| a == "--expect-reject"),
-            args.iter().any(|a| a == "--no-ledger"),
         ),
         Some("run") => run(
             args.get(2).context("usage: loop-host run fixture.json")?,
             args.iter().any(|a| a == "--prove"),
             arg_value(&args, "--elf"),
             args.iter().any(|a| a == "--reciprocal"),
+            arg_value(&args, "--result"),
+            arg_value(&args, "--source-claim-id"),
+            args.iter().any(|a| a == "--production"),
         ),
         Some("vkey") => vkey(&arg_value(&args, "--elf").context("--elf required")?),
         Some("headers") => headers(
@@ -87,12 +89,19 @@ fn main() -> Result<()> {
             arg_value(&args, "--end").context("--end required")?.parse()?,
             &arg_value(&args, "--out").context("--out required")?,
         ),
+        Some("batch-manifest") => batch_manifest(
+            &arg_value(&args, "--results-dir").context("--results-dir required")?,
+            &arg_value(&args, "--blockhash-store").context("--blockhash-store required")?,
+            &arg_value(&args, "--closed-loop-vkey").context("--closed-loop-vkey required")?,
+            &arg_value(&args, "--reciprocal-vkey").context("--reciprocal-vkey required")?,
+            &arg_value(&args, "--out").context("--out required")?,
+        ),
         Some("verify-layout") => {
             let addresses: Vec<String> = args[2..].to_vec();
             verify_layout(&addresses)
         }
         _ => bail!(
-            "usage: loop-host fetch --case case.json --out fixture.json [--expect-reject]\n       loop-host run fixture.json [--prove --elf path]\n       loop-host vkey --elf path\n       loop-host headers --start N --end M --out headers.json\n       loop-host verify-layout [seller_address ...]"
+            "usage: loop-host fetch --case case.json --out fixture.json [--expect-reject]\n       loop-host run fixture.json [--prove --elf path --result result.json --source-claim-id 0x... --production]\n       loop-host vkey --elf path\n       loop-host headers --start N --end M --out headers.json\n       loop-host batch-manifest --results-dir DIR --blockhash-store 0x... --closed-loop-vkey 0x... --reciprocal-vkey 0x... --out proof-results.json\n       loop-host verify-layout [seller_address ...]"
         ),
     }
 }
@@ -127,7 +136,7 @@ impl Targets {
     }
 }
 
-fn fetch(case_path: &str, out_path: &str, expect_reject: bool, skip_ledger: bool) -> Result<()> {
+fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
     let case: Case = serde_json::from_str(&std::fs::read_to_string(case_path)?)?;
     let client = rpc::Client::new(&endpoints());
     let mut targets = Targets::default();
@@ -278,34 +287,30 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool, skip_ledger: bool
         EvidenceBlock { header: end_header.clone(), receipts: vec![], transactions: vec![] };
 
     let mut ledgers = Vec::new();
-    if !skip_ledger {
-        let start_header = client.header(PERIOD_LEDGER_START_BLOCK)?;
-        let start_block = EvidenceBlock {
-            header: start_header.clone(),
-            receipts: vec![],
-            transactions: vec![],
-        };
-        let start_index = blocks.len();
-        let end_index = blocks.len() + 1;
-        for buyer in &case.buyers {
-            let slot = loop_core::slot_offset(
-                loop_core::mapping_slot_address(*buyer, wash_predicate::DEPOSITS_BUYERS_SLOT),
-                wash_predicate::BUYER_ACCOUNT_BALANCE_OFFSET,
-            );
-            let (start_proof, start_value) =
-                client.storage_witness(&start_header, DEPOSITS_ADDRESS, slot)?;
-            let (end_proof, end_value) =
-                client.storage_witness(&end_header, DEPOSITS_ADDRESS, slot)?;
-            println!("buyer {buyer}: balance {start_value} → {end_value}");
-            ledgers.push(BuyerLedger {
-                start: StateRead { block: start_index, proof: start_proof },
-                end: StateRead { block: end_index, proof: end_proof },
-            });
-        }
-        blocks.push(start_block);
-    } else {
-        println!("skipping LEDGER witnesses (--no-ledger)");
+    let start_header = client.header(PERIOD_LEDGER_START_BLOCK)?;
+    let start_block = EvidenceBlock {
+        header: start_header.clone(),
+        receipts: vec![],
+        transactions: vec![],
+    };
+    let start_index = blocks.len();
+    let end_index = blocks.len() + 1;
+    for buyer in &case.buyers {
+        let slot = loop_core::slot_offset(
+            loop_core::mapping_slot_address(*buyer, wash_predicate::DEPOSITS_BUYERS_SLOT),
+            wash_predicate::BUYER_ACCOUNT_BALANCE_OFFSET,
+        );
+        let (start_proof, start_value) =
+            client.storage_witness(&start_header, DEPOSITS_ADDRESS, slot)?;
+        let (end_proof, end_value) =
+            client.storage_witness(&end_header, DEPOSITS_ADDRESS, slot)?;
+        println!("buyer {buyer}: balance {start_value} → {end_value}");
+        ledgers.push(BuyerLedger {
+            start: StateRead { block: start_index, proof: start_proof },
+            end: StateRead { block: end_index, proof: end_proof },
+        });
     }
+    blocks.push(start_block);
 
     let end_index = blocks.len();
     let agent_slot = loop_core::mapping_slot_address(
@@ -388,7 +393,21 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool, skip_ledger: bool
 
 // ─────────────────────────────── run / prove ───────────────────────────────
 
-fn run(fixture_path: &str, prove: bool, elf: Option<String>, reciprocal: bool) -> Result<()> {
+fn run(
+    fixture_path: &str,
+    prove: bool,
+    elf: Option<String>,
+    reciprocal: bool,
+    result_path: Option<String>,
+    source_claim_id: Option<String>,
+    production: bool,
+) -> Result<()> {
+    if result_path.is_some() && !prove {
+        bail!("--result requires --prove");
+    }
+    if production && !prove {
+        bail!("--production requires --prove");
+    }
     let raw = std::fs::read_to_string(fixture_path)?;
     let (journal, input_bytes) = if reciprocal {
         let input: wash_predicate::ReciprocalInput = serde_json::from_str(&raw)?;
@@ -407,7 +426,16 @@ fn run(fixture_path: &str, prove: bool, elf: Option<String>, reciprocal: bool) -
 
     #[cfg(feature = "sp1")]
     if let Some(elf_path) = elf {
-        return sp1_run(&input_bytes, &elf_path, &journal, prove);
+        return sp1_run(
+            &input_bytes,
+            &elf_path,
+            &journal,
+            prove,
+            reciprocal,
+            result_path.as_deref(),
+            source_claim_id.as_deref(),
+            production,
+        );
     }
     let _ = input_bytes;
     #[cfg(not(feature = "sp1"))]
@@ -415,39 +443,301 @@ fn run(fixture_path: &str, prove: bool, elf: Option<String>, reciprocal: bool) -
         bail!("rebuild with --features sp1 to execute or prove");
     }
     let _ = prove;
+    let _ = result_path;
+    let _ = source_claim_id;
+    let _ = production;
     Ok(())
 }
 
 #[cfg(feature = "sp1")]
-fn sp1_run(input_bytes: &[u8], elf_path: &str, native: &WashJournal, prove: bool) -> Result<()> {
+fn sp1_run(
+    input_bytes: &[u8],
+    elf_path: &str,
+    native: &WashJournal,
+    prove: bool,
+    reciprocal: bool,
+    result_path: Option<&str>,
+    source_claim_id: Option<&str>,
+    production: bool,
+) -> Result<()> {
     use sp1_sdk::blocking::{ProveRequest, Prover, ProverClient};
     use sp1_sdk::{Elf, HashableKey, ProvingKey, SP1Stdin};
     let elf = Elf::Dynamic(std::fs::read(elf_path)?.into());
     let client = ProverClient::from_env();
     let key = client.setup(elf.clone())?;
     let vkey = key.verifying_key().bytes32();
-    let mut stdin = SP1Stdin::new();
-    stdin.write(&input_bytes.to_vec());
+    let mut execution_stdin = SP1Stdin::new();
+    execution_stdin.write(&input_bytes.to_vec());
+    let (public_values, report) = client.execute(elf.clone(), execution_stdin).run()?;
+    let instruction_count = report.total_instruction_count();
+    println!("guest executed: {instruction_count} instructions");
+    if public_values.as_slice() != native.abi_encode() {
+        bail!("guest journal differs from native journal");
+    }
+    println!("guest journal matches the native journal");
+    println!("vkey: {vkey}");
     if prove {
+        let mut proving_stdin = SP1Stdin::new();
+        proving_stdin.write(&input_bytes.to_vec());
         let start = std::time::Instant::now();
-        let proof = client.prove(&key, stdin).groth16().run()?;
+        let proof = client.prove(&key, proving_stdin).groth16().run()?;
         println!("proved in {:?}", start.elapsed());
         client.verify(&proof, key.verifying_key(), None)?;
         if proof.public_values.as_slice() != native.abi_encode() {
             bail!("guest journal differs from native journal");
         }
-        println!("vkey: {vkey}");
-        println!("proof bytes: 0x{}", alloy_primitives::hex::encode(proof.bytes()));
-    } else {
-        let (public_values, report) = client.execute(elf, stdin).run()?;
-        println!("guest executed: {} instructions", report.total_instruction_count());
-        if public_values.as_slice() != native.abi_encode() {
-            bail!("guest journal differs from native journal");
+        let proof_bytes = format!("0x{}", alloy_primitives::hex::encode(proof.bytes()));
+        println!("proof bytes: {proof_bytes}");
+        if let Some(path) = result_path {
+            write_proof_result(
+                path,
+                native,
+                reciprocal,
+                source_claim_id,
+                &vkey,
+                &proof_bytes,
+                instruction_count,
+                production,
+            )?;
         }
-        println!("guest journal matches the native journal");
-        println!("vkey: {vkey}");
     }
     Ok(())
+}
+
+#[cfg(feature = "sp1")]
+fn write_proof_result(
+    path: &str,
+    journal: &WashJournal,
+    reciprocal: bool,
+    source_claim_id: Option<&str>,
+    program_vkey: &str,
+    proof_bytes: &str,
+    instruction_count: u64,
+    production: bool,
+) -> Result<()> {
+    use sha2::Digest;
+    let journal_bytes = journal.abi_encode();
+    let journal_digest = format!("0x{}", alloy_primitives::hex::encode(sha2::Sha256::digest(&journal_bytes)));
+    let block_references: Vec<_> = journal
+        .block_refs
+        .iter()
+        .map(|(number, block_hash)| serde_json::json!({
+            "number": number.to_string(),
+            "blockHash": format!("{block_hash}"),
+        }))
+        .collect();
+    let subjects: Vec<_> = journal.subjects.iter().map(|subject| format!("{}", subject.subject)).collect();
+    let metrics = if reciprocal {
+        serde_json::json!({
+            "volumeAToBRaw": journal.subjects[1].wash_volume.to_string(),
+            "volumeBToARaw": journal.subjects[0].wash_volume.to_string(),
+            "journalVolumeAToBRaw": journal.subjects[1].wash_volume.to_string(),
+            "journalVolumeBToARaw": journal.subjects[0].wash_volume.to_string(),
+            "authenticatedReceiptVolumeAToBRaw": journal.subjects[1].wash_volume.to_string(),
+            "authenticatedReceiptVolumeBToARaw": journal.subjects[0].wash_volume.to_string(),
+        })
+    } else {
+        serde_json::json!({
+            "qualifiedVolumeRaw": journal.subjects[0].wash_volume.to_string(),
+            "journalWashVolumeRaw": journal.subjects[0].wash_volume.to_string(),
+            "authenticatedReceiptVolumeRaw": journal.subjects[0].wash_volume.to_string(),
+        })
+    };
+    let result = serde_json::json!({
+        "version": 2,
+        "kind": "antseed-wash-trading-proof-result",
+        "chainId": journal.chain_id,
+        "securityMode": if production { "production" } else { "development" },
+        "entry": {
+            "claimId": format!("{}", journal.claim_id),
+            "sourceClaimId": source_claim_id,
+            "claimType": if reciprocal { "P0_RECIPROCAL" } else { "P0_CLOSED_LOOP" },
+            "subjects": subjects,
+            "metrics": metrics,
+            "programVKey": program_vkey,
+            "journalBytes": format!("0x{}", alloy_primitives::hex::encode(journal_bytes)),
+            "journalDigest": journal_digest,
+            "proofBytes": proof_bytes,
+            "blockReferences": block_references,
+            "instructionCount": instruction_count,
+        },
+    });
+    std::fs::write(path, serde_json::to_vec_pretty(&result)?)?;
+    println!("proof result written to {path}");
+    Ok(())
+}
+
+// ─────────────────────────────── batch manifest ──────────────────────────
+
+fn batch_manifest(
+    results_dir: &str,
+    blockhash_store: &str,
+    closed_loop_vkey: &str,
+    reciprocal_vkey: &str,
+    out_path: &str,
+) -> Result<()> {
+    use alloy_primitives::{keccak256, Address, B256};
+    use sha2::Digest;
+
+    let store: Address = blockhash_store.parse().context("invalid BlockhashStore address")?;
+    let closed_vkey: B256 = closed_loop_vkey.parse().context("invalid closed-loop vkey")?;
+    let reciprocal_vkey: B256 = reciprocal_vkey.parse().context("invalid reciprocal vkey")?;
+    let mut entries = Vec::<serde_json::Value>::new();
+    for item in std::fs::read_dir(results_dir)? {
+        let path = item?.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+        if value.get("kind").and_then(|item| item.as_str()) != Some("antseed-wash-trading-proof-result") {
+            continue;
+        }
+        if value.get("version").and_then(|item| item.as_u64()) != Some(2)
+            || value.get("chainId").and_then(|item| item.as_u64()) != Some(8_453)
+            || value.get("securityMode").and_then(|item| item.as_str()) != Some("production")
+        {
+            bail!("{}: invalid production proof result", path.display());
+        }
+        entries.push(value.get("entry").cloned().context("proof result entry missing")?);
+    }
+    if entries.is_empty() {
+        bail!("no production proof result files found");
+    }
+    entries.sort_by(|left, right| {
+        left.get("claimId")
+            .and_then(|value| value.as_str())
+            .cmp(&right.get("claimId").and_then(|value| value.as_str()))
+    });
+
+    let mut commitments = Vec::new();
+    let mut previous = B256::ZERO;
+    for entry in &entries {
+        let claim: B256 = entry
+            .get("claimId")
+            .and_then(|value| value.as_str())
+            .context("claimId missing")?
+            .parse()
+            .context("invalid claimId")?;
+        if claim <= previous {
+            bail!("proof claim IDs must be unique and strictly ordered");
+        }
+        previous = claim;
+        let journal_hex = entry
+            .get("journalBytes")
+            .and_then(|value| value.as_str())
+            .context("journalBytes missing")?
+            .strip_prefix("0x")
+            .context("journalBytes must be hex")?;
+        let journal_bytes = alloy_primitives::hex::decode(journal_hex)?;
+        let journal = WashJournal::abi_decode(&journal_bytes).map_err(anyhow::Error::msg)?;
+        if journal.claim_id != claim {
+            bail!("{claim}: journal claim ID mismatch");
+        }
+        let journal_digest = B256::from_slice(&sha2::Sha256::digest(&journal_bytes));
+        let declared_digest: B256 = entry
+            .get("journalDigest")
+            .and_then(|value| value.as_str())
+            .context("journalDigest missing")?
+            .parse()
+            .context("invalid journalDigest")?;
+        if journal_digest != declared_digest {
+            bail!("{claim}: journal digest mismatch");
+        }
+        let claim_type = entry.get("claimType").and_then(|value| value.as_str());
+        let program_vkey: B256 = entry
+            .get("programVKey")
+            .and_then(|value| value.as_str())
+            .context("programVKey missing")?
+            .parse()
+            .context("invalid programVKey")?;
+        match claim_type {
+            Some("P0_CLOSED_LOOP") if program_vkey == closed_vkey => {}
+            Some("P0_RECIPROCAL") if program_vkey == reciprocal_vkey => {}
+            _ => bail!("{claim}: predicate type and vkey mismatch"),
+        }
+        commitments.push((claim, journal_digest));
+    }
+
+    let domain = keccak256("ANTSEED_AIP4_BACKFILL_V1");
+    let digest = compute_batch_digest(store, closed_vkey, reciprocal_vkey, &commitments);
+    let commitment_values: Vec<_> = commitments
+        .iter()
+        .map(|(claim, journal_digest)| serde_json::json!({
+            "claimId": format!("{claim}"),
+            "journalDigest": format!("{journal_digest}"),
+        }))
+        .collect();
+    let manifest = serde_json::json!({
+        "version": 2,
+        "kind": "antseed-wash-trading-proof-results",
+        "chainId": 8_453,
+        "securityMode": "production",
+        "batch": {
+            "domain": format!("{domain}"),
+            "blockhashStore": format!("{store}"),
+            "closedLoopVKey": format!("{closed_vkey}"),
+            "reciprocalVKey": format!("{reciprocal_vkey}"),
+            "expectedBatchCount": entries.len(),
+            "expectedBatchDigest": format!("{digest}"),
+            "commitments": commitment_values,
+        },
+        "entries": entries,
+    });
+    std::fs::write(out_path, serde_json::to_vec_pretty(&manifest)?)?;
+    println!("batch manifest written to {out_path}");
+    println!("expectedBatchCount {}", commitments.len());
+    println!("expectedBatchDigest {digest}");
+    Ok(())
+}
+
+fn compute_batch_digest(
+    blockhash_store: alloy_primitives::Address,
+    closed_loop_vkey: alloy_primitives::B256,
+    reciprocal_vkey: alloy_primitives::B256,
+    commitments: &[(alloy_primitives::B256, alloy_primitives::B256)],
+) -> alloy_primitives::B256 {
+    use alloy_primitives::{keccak256, U256};
+    use alloy_sol_types::SolValue;
+    let domain = keccak256("ANTSEED_AIP4_BACKFILL_V1");
+    let mut digest = keccak256(
+        (
+            domain,
+            8_453u64,
+            closed_loop_vkey,
+            reciprocal_vkey,
+            blockhash_store,
+            U256::from(commitments.len()),
+        )
+            .abi_encode(),
+    );
+    for (claim, journal_digest) in commitments {
+        digest = keccak256((digest, *claim, *journal_digest).abi_encode());
+    }
+    digest
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::compute_batch_digest;
+    use alloy_primitives::{Address, B256};
+
+    #[test]
+    fn batch_digest_matches_solidity_and_ethers() {
+        let store: Address = "0x78b69899C8cD252126cBB1A50171ec37286C3877".parse().unwrap();
+        let closed: B256 = format!("0x{}", "55".repeat(32)).parse().unwrap();
+        let reciprocal: B256 = format!("0x{}", "66".repeat(32)).parse().unwrap();
+        let claim: B256 = format!("0x{}", "11".repeat(32)).parse().unwrap();
+        let journal: B256 =
+            "0xa5b524c49d791184e67724513c459f42e290127c33496dd59e933e329f3c815e"
+                .parse()
+                .unwrap();
+        assert_eq!(
+            compute_batch_digest(store, closed, reciprocal, &[(claim, journal)]),
+            "0xbdbd8ffe503030c82e83e23a9496b7bd106dd934b19e1ec976ddf48c50ec3175"
+                .parse::<B256>()
+                .unwrap()
+        );
+    }
 }
 
 fn vkey(elf_path: &str) -> Result<()> {

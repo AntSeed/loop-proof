@@ -224,6 +224,7 @@ alloy_sol_types::sol! {
         address seller;
         address funder;
         bytes32 cohortHash;
+        bytes32 evidenceHash;
     }
     struct SolReciprocalClaimId {
         uint256 chainId;
@@ -233,6 +234,7 @@ alloy_sol_types::sol! {
         uint64 periodEndBlock;
         address addressA;
         address addressB;
+        bytes32 evidenceHash;
     }
 }
 
@@ -240,7 +242,18 @@ pub fn cohort_hash(buyers: &[Address]) -> B256 {
     keccak256(buyers.to_vec().abi_encode())
 }
 
-pub fn closed_loop_claim_id(seller: Address, funder: Address, cohort: B256) -> B256 {
+pub fn canonical_evidence_hash<T: Serialize>(input: &T) -> Result<B256, String> {
+    serde_json::to_vec(input)
+        .map(keccak256)
+        .map_err(|error| format!("canonical evidence serialization: {error}"))
+}
+
+pub fn closed_loop_claim_id(
+    seller: Address,
+    funder: Address,
+    cohort: B256,
+    evidence_hash: B256,
+) -> B256 {
     keccak256(
         SolClosedLoopClaimId {
             chainId: U256::from(BASE_CHAIN_ID),
@@ -251,12 +264,13 @@ pub fn closed_loop_claim_id(seller: Address, funder: Address, cohort: B256) -> B
             seller,
             funder,
             cohortHash: cohort,
+            evidenceHash: evidence_hash,
         }
         .abi_encode(),
     )
 }
 
-pub fn reciprocal_claim_id(address_a: Address, address_b: Address) -> B256 {
+pub fn reciprocal_claim_id(address_a: Address, address_b: Address, evidence_hash: B256) -> B256 {
     keccak256(
         SolReciprocalClaimId {
             chainId: U256::from(BASE_CHAIN_ID),
@@ -266,6 +280,7 @@ pub fn reciprocal_claim_id(address_a: Address, address_b: Address) -> B256 {
             periodEndBlock: PERIOD_END_BLOCK,
             addressA: address_a,
             addressB: address_b,
+            evidenceHash: evidence_hash,
         }
         .abi_encode(),
     )

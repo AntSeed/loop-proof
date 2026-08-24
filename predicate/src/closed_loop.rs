@@ -2,7 +2,8 @@
 //! the seller S.
 
 use crate::{
-    authenticate_blocks, closed_loop_claim_id, cohort_hash, ensure_event_in_period, meets_ratio,
+    authenticate_blocks, canonical_evidence_hash, closed_loop_claim_id, cohort_hash,
+    ensure_event_in_period, meets_ratio,
     resolver::{ChainResolver, LogKey},
     stats::verify_subject_stats,
     validate_chain, validate_sorted_unique_addresses, BuyerLedger, EvidenceBlock, FundingEvidence,
@@ -29,8 +30,7 @@ pub struct ClosedLoopInput {
     pub settlements: Vec<LogRef>,
     /// Empty iff `seller == funder` (the return leg holds by identity).
     pub returns: Vec<ReturnPath>,
-    /// One per buyer in `buyers` order, or empty to skip the ledger check
-    /// (useful when archive state is unavailable at the period boundaries).
+    /// Exactly one authenticated ledger witness per buyer, in `buyers` order.
     pub ledgers: Vec<BuyerLedger>,
     pub seller_stats: SellerStatsWitness,
 }
@@ -64,9 +64,7 @@ pub fn verify_closed_loop(input: &ClosedLoopInput) -> Result<WashJournal, String
     }
 
     // ── Attribution (LEDGER) ──────────────────────────────────────────────
-    if !input.ledgers.is_empty() {
-        verify_ledgers(input, &resolver, &funding, &settle)?;
-    }
+    verify_ledgers(input, &resolver, &funding, &settle)?;
 
     // ── RETURN ────────────────────────────────────────────────────────────
     verify_returns(input, &resolver, &settle, &mut used_logs)?;
@@ -79,7 +77,12 @@ pub fn verify_closed_loop(input: &ClosedLoopInput) -> Result<WashJournal, String
         chain_id: BASE_CHAIN_ID,
         period_start_block: PERIOD_START_BLOCK,
         period_end_block: PERIOD_END_BLOCK,
-        claim_id: closed_loop_claim_id(input.seller, input.funder, cohort_hash(&input.buyers)),
+        claim_id: closed_loop_claim_id(
+            input.seller,
+            input.funder,
+            cohort_hash(&input.buyers),
+            canonical_evidence_hash(input)?,
+        ),
         subjects: vec![SubjectRecord {
             subject: input.seller,
             wash_volume: settle.total,

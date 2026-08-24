@@ -89,8 +89,8 @@ cargo test
 cargo run -p loop-host -- verify-layout <seller_address> [seller_address ...]
 cargo test -p loop-host -- --ignored     # same check as a test
 
-# materialize evidence for a claim (archive RPC required for the two
-# period-boundary state proofs; set BASE_RPC_URLS=<archive>,...)
+# materialize an ad-hoc closed-loop case (archive RPC required for the two
+# period-boundary ledger proofs and the seller-stat proof)
 cargo run -p loop-host -- fetch --case cases/<case>.json --out fixture.json [--expect-reject]
 
 # reproducible guest builds + vkey derivation (SP1 toolchain + Docker)
@@ -104,6 +104,64 @@ Case files in `cases/` describe a claim's participants (seller, funder,
 buyers, return paths). `--expect-reject` asserts that the predicate
 correctly rejects the evidence — use it for honest-seller test vectors
 where the conserved-loop shape is absent.
+
+## Production batch pipeline
+
+Production proving starts from the approved detection bundle and never from an
+operator-maintained case list. The planner authenticates every dependency,
+requires its selected settlement volume to equal the bundle's approved analysis
+metrics, and emits `antseed-wash-trading-proof-plan` v2. Claim IDs emitted by
+the guests additionally bind the complete authenticated witness, so two
+different evidence selections cannot occupy the same on-chain claim ID.
+
+```bash
+# 1. Authenticate and plan the exact approved claim set.
+node scripts/plan-wash-trading-proofs.mjs \
+  --bundle proof-bundle.json \
+  --out proof-plan.json \
+  --rpc-url "$BASE_RPC_URL"
+
+# 2. Build both guests twice in isolated snapshots and compare ELFs/vkeys.
+node scripts/build-guests-reproducibly.mjs --work-dir ../guest-repro-builds --out guest-build-attestation.json
+node scripts/verify-guest-build-attestation.mjs guest-build-attestation.json
+
+# 3. Quote and explicitly approve real SP1 proving cost, then materialize and
+# prove every claim. BASE_RPC_URLS must provide archive eth_getProof support.
+node scripts/prove-approved-batch.mjs \
+  --plan proof-plan.json \
+  --artifact-dir proof-artifacts \
+  --closed-loop-elf target/guests/closed-loop/elf \
+  --reciprocal-elf target/guests/reciprocal/elf \
+  --closed-loop-vkey 0x... \
+  --reciprocal-vkey 0x... \
+  --cost-quote proof-cost.json \
+  --approve-cost-digest 0x... \
+  --confirm-production-proving
+```
+
+`wash-trading-materialize-p0` consumes each claim's exact `selectedEvidence`.
+It authenticates the selected receipt and transaction tries, adds mandatory
+`Deposits.buyers[*].balance` proofs at both period boundaries, adds mandatory
+period-end seller-agent/stat proofs, and natively verifies the final witness
+before it is passed to SP1. Reciprocal claims also include pair-internal
+protocol deposits selected by the planner.
+
+The final `antseed-wash-trading-proof-results` v2 manifest contains subjects,
+journal volumes, program vkeys, journal bytes and SHA-256 digests, proof bytes,
+block references, instruction counts, ordered `(claimId, journalDigest)`
+commitments, and the exact `expectedBatchDigest` pinned by the Solidity
+registry constructor.
+
+Use `loop-host headers --start N --end M --out headers.json` to export
+self-checked RLP headers needed to populate missing Chainlink BlockhashStore
+entries. `storeVerifyHeader(n, header)` consumes the header for block `n + 1`,
+so an old missing range requires a continuous child-header chain back from an
+already stored anchor; this feasibility must be checked before deployment.
+
+Before production submission, run the coverage report and the AntSeed
+repository's volume verifier. The signed analysis baseline, current planner,
+refetched authenticated receipts, host metrics, and journal wash volumes must
+all agree exactly.
 
 ## Rule identity
 
