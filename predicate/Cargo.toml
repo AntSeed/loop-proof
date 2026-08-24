@@ -1,0 +1,17 @@
+[package]
+name = "wash-predicate"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+loop-core = { workspace = true }
+alloy-primitives = { workspace = true }
+alloy-consensus = { workspace = true }
+alloy-eips = { workspace = true }
+alloy-trie = { workspace = true }
+alloy-rlp = { workspace = true }
+alloy-sol-types = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

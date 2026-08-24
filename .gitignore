@@ -1,3 +1,4 @@
 target/
 cases/flash-fixture.json
 prove.log
+program/*/target/

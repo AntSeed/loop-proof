@@ -1,19 +1,24 @@
 [workspace]
 resolver = "2"
-members = ["core", "host", "methods"]
+members = ["core", "predicate", "host"]
+exclude = ["program/closed-loop", "program/reciprocal"]
 
 [workspace.dependencies]
 loop-core = { path = "core" }
-methods = { path = "methods" }
+wash-predicate = { path = "predicate" }
 
-alloy-primitives = { version = "1", default-features = false, features = ["rlp", "serde"] }
-alloy-consensus = { version = "1", default-features = false, features = ["serde"] }
+alloy-primitives = { version = "=1.4.1", default-features = false, features = ["rlp", "serde"] }
+alloy-consensus = { version = "=1.5.2", default-features = false, features = ["serde", "k256"] }
+alloy-eips = { version = "=1.5.2", default-features = false }
 alloy-rlp = { version = "0.3", default-features = false }
-alloy-trie = { version = "0.9", default-features = false }
+alloy-trie = { version = "0.9", default-features = false, features = ["ethereum"] }
+alloy-sol-types = { version = "=1.4.1", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = { version = "0.10", default-features = false }
 
-risc0-build = { version = "3.0" }
+sp1-build = { version = "=6.1.0" }
+sp1-sdk = { version = "=6.1.0", default-features = false }
 
 # Reduce proving time for release runs
 [profile.release]
