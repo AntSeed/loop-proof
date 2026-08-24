@@ -10,7 +10,10 @@ use alloy_trie::{proof::ProofRetainer, HashBuilder, Nibbles};
 use anyhow::{anyhow, bail, Context, Result};
 use op_alloy_consensus::OpTxEnvelope;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{atomic::{AtomicUsize, Ordering}, Mutex},
+};
 use loop_core::{rlp_bytes, rlp_list, rlp_uint};
 use wash_predicate::EvidenceBlock;
 
@@ -218,6 +221,38 @@ impl Client {
             EvidenceBlock { header, receipts: receipts_out, transactions: transactions_out },
             log_position_map,
         ))
+    }
+
+    pub fn block_evidence_many(
+        &self,
+        targets: &[(u64, Vec<u64>, Vec<u64>)],
+        concurrency: usize,
+    ) -> Result<Vec<(EvidenceBlock, BTreeMap<u64, usize>)>> {
+        let next = AtomicUsize::new(0);
+        let results = Mutex::new(
+            (0..targets.len())
+                .map(|_| None)
+                .collect::<Vec<Option<Result<(EvidenceBlock, BTreeMap<u64, usize>)>>>>(),
+        );
+        std::thread::scope(|scope| {
+            for _ in 0..concurrency.max(1).min(targets.len().max(1)) {
+                scope.spawn(|| loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some((number, receipt_targets, transaction_targets)) = targets.get(index)
+                    else {
+                        break;
+                    };
+                    let result = self.block_evidence(*number, receipt_targets, transaction_targets);
+                    results.lock().expect("block evidence results lock")[index] = Some(result);
+                });
+            }
+        });
+        results
+            .into_inner()
+            .expect("block evidence results lock")
+            .into_iter()
+            .map(|result| result.context("block evidence worker did not return")?)
+            .collect()
     }
 
     // ── state witnesses ────────────────────────────────────────────────

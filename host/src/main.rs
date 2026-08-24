@@ -244,11 +244,20 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
     let mut receipt_pos: BTreeMap<(u64, u64), usize> = BTreeMap::new();
     let mut tx_pos: BTreeMap<(u64, u64), usize> = BTreeMap::new();
     let mut log_maps: BTreeMap<u64, BTreeMap<u64, usize>> = BTreeMap::new();
-    let block_count = targets.receipts.len();
-    for (idx, (number, receipt_targets)) in targets.receipts.iter().enumerate() {
-        let tx_targets = targets.transactions.get(number).cloned().unwrap_or_default();
-        let (evidence, log_map) =
-            client.block_evidence(*number, receipt_targets, &tx_targets)?;
+    let block_targets = targets.receipts.iter().map(|(number, receipt_targets)| (
+        *number,
+        receipt_targets.clone(),
+        targets.transactions.get(number).cloned().unwrap_or_default(),
+    )).collect::<Vec<_>>();
+    let block_count = block_targets.len();
+    let concurrency = std::env::var("LOOP_RPC_CONCURRENCY")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(4);
+    let block_evidence = client.block_evidence_many(&block_targets, concurrency)?;
+    for (idx, ((number, _, _), (evidence, log_map))) in
+        block_targets.into_iter().zip(block_evidence).enumerate()
+    {
         if (idx + 1) % 100 == 0 || idx + 1 == block_count {
             println!(
                 "block {}/{block_count}: {number} ({} receipts, {} transactions)",
@@ -258,13 +267,13 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
             );
         }
         for (pos, rp) in evidence.receipts.iter().enumerate() {
-            receipt_pos.insert((*number, rp.tx_index), pos);
+            receipt_pos.insert((number, rp.tx_index), pos);
         }
         for (pos, tp) in evidence.transactions.iter().enumerate() {
-            tx_pos.insert((*number, tp.tx_index), pos);
+            tx_pos.insert((number, tp.tx_index), pos);
         }
-        log_maps.insert(*number, log_map);
-        block_index.insert(*number, blocks.len());
+        log_maps.insert(number, log_map);
+        block_index.insert(number, blocks.len());
         blocks.push(evidence);
     }
 

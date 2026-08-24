@@ -150,10 +150,17 @@ fn materialize_evidence(
     let mut receipt_positions = BTreeMap::new();
     let mut transaction_positions = BTreeMap::new();
     let mut log_positions = BTreeMap::new();
-    for (block_number, block_targets) in targets {
-        let receipts = block_targets.receipts.into_iter().collect::<Vec<_>>();
-        let transactions = block_targets.transactions.into_iter().collect::<Vec<_>>();
-        let (block, located_logs) = client.block_evidence(block_number, &receipts, &transactions)?;
+    let targets = targets.into_iter().map(|(block_number, block_targets)| (
+        block_number,
+        block_targets.receipts.into_iter().collect::<Vec<_>>(),
+        block_targets.transactions.into_iter().collect::<Vec<_>>(),
+    )).collect::<Vec<_>>();
+    let concurrency = env::var("LOOP_RPC_CONCURRENCY")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(4);
+    let evidence = client.block_evidence_many(&targets, concurrency)?;
+    for ((block_number, _, _), (block, located_logs)) in targets.into_iter().zip(evidence) {
         let block_position = blocks.len();
         block_positions.insert(block_number, block_position);
         for (position, proof) in block.receipts.iter().enumerate() {
