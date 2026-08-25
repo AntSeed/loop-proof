@@ -9,13 +9,22 @@ use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_trie::{proof::ProofRetainer, HashBuilder, Nibbles};
 use anyhow::{anyhow, bail, Context, Result};
 use op_alloy_consensus::OpTxEnvelope;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
+    fs::{self, File},
+    io::Write as _,
+    path::{Path, PathBuf},
     sync::{atomic::{AtomicUsize, Ordering}, Mutex},
 };
 use loop_core::{rlp_bytes, rlp_list, rlp_uint};
 use wash_predicate::EvidenceBlock;
+
+const BLOCK_EVIDENCE_CACHE_VERSION: u32 = 1;
+const DEFAULT_BLOCK_EVIDENCE_CACHE_DIR: &str = "cache/block-evidence-v1";
+static CACHE_TEMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub struct Client {
     endpoints: Vec<String>,
@@ -23,6 +32,16 @@ pub struct Client {
 
 /// (block_number, tx_index, log_index_within_receipt)
 pub type LogLoc = (u64, usize, usize);
+
+#[derive(Deserialize, Serialize)]
+struct CachedBlockEvidence {
+    version: u32,
+    block_number: u64,
+    receipt_targets: Vec<u64>,
+    transaction_targets: Vec<u64>,
+    evidence: EvidenceBlock,
+    log_position_map: BTreeMap<u64, usize>,
+}
 
 impl Client {
     pub fn new(endpoints: &[String]) -> Self {
@@ -34,7 +53,7 @@ impl Client {
         for attempt in 0..3 {
             for url in &self.endpoints {
                 let res = ureq::post(url)
-                    .timeout(std::time::Duration::from_secs(30))
+                    .timeout(std::time::Duration::from_secs(90))
                     .send_json(json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}));
                 match res {
                     Ok(r) => {
@@ -228,7 +247,16 @@ impl Client {
         targets: &[(u64, Vec<u64>, Vec<u64>)],
         concurrency: usize,
     ) -> Result<Vec<(EvidenceBlock, BTreeMap<u64, usize>)>> {
+        let cache_dir = std::env::var_os("LOOP_EVIDENCE_CACHE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_BLOCK_EVIDENCE_CACHE_DIR));
+        fs::create_dir_all(&cache_dir)
+            .with_context(|| format!("create evidence cache {}", cache_dir.display()))?;
+        eprintln!("block evidence cache: {}", cache_dir.display());
         let next = AtomicUsize::new(0);
+        let completed = AtomicUsize::new(0);
+        let cache_hits = AtomicUsize::new(0);
+        let rpc_fetches = AtomicUsize::new(0);
         let results = Mutex::new(
             (0..targets.len())
                 .map(|_| None)
@@ -242,7 +270,32 @@ impl Client {
                     else {
                         break;
                     };
-                    let result = self.block_evidence(*number, receipt_targets, transaction_targets);
+                    let receipt_targets = canonical_targets(receipt_targets);
+                    let transaction_targets = canonical_targets(transaction_targets);
+                    let result = self
+                        .cached_block_evidence(
+                            &cache_dir,
+                            *number,
+                            &receipt_targets,
+                            &transaction_targets,
+                        )
+                        .map(|(evidence, log_position_map, cached)| {
+                            if cached {
+                                cache_hits.fetch_add(1, Ordering::Relaxed);
+                            } else {
+                                rpc_fetches.fetch_add(1, Ordering::Relaxed);
+                            }
+                            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                            if done % 100 == 0 || done == targets.len() {
+                                eprintln!(
+                                    "block evidence {done}/{} ({} cached, {} fetched)",
+                                    targets.len(),
+                                    cache_hits.load(Ordering::Relaxed),
+                                    rpc_fetches.load(Ordering::Relaxed),
+                                );
+                            }
+                            (evidence, log_position_map)
+                        });
                     results.lock().expect("block evidence results lock")[index] = Some(result);
                 });
             }
@@ -253,6 +306,34 @@ impl Client {
             .into_iter()
             .map(|result| result.context("block evidence worker did not return")?)
             .collect()
+    }
+
+    fn cached_block_evidence(
+        &self,
+        cache_dir: &Path,
+        number: u64,
+        receipt_targets: &[u64],
+        transaction_targets: &[u64],
+    ) -> Result<(EvidenceBlock, BTreeMap<u64, usize>, bool)> {
+        let cache_path =
+            block_evidence_cache_path(cache_dir, number, receipt_targets, transaction_targets)?;
+        if let Some(cached) =
+            load_cached_block_evidence(&cache_path, number, receipt_targets, transaction_targets)?
+        {
+            return Ok((cached.evidence, cached.log_position_map, true));
+        }
+        let (evidence, log_position_map) =
+            self.block_evidence(number, receipt_targets, transaction_targets)?;
+        let cached = CachedBlockEvidence {
+            version: BLOCK_EVIDENCE_CACHE_VERSION,
+            block_number: number,
+            receipt_targets: receipt_targets.to_vec(),
+            transaction_targets: transaction_targets.to_vec(),
+            evidence,
+            log_position_map,
+        };
+        write_cached_block_evidence(&cache_path, &cached)?;
+        Ok((cached.evidence, cached.log_position_map, false))
     }
 
     // ── state witnesses ────────────────────────────────────────────────
@@ -299,6 +380,132 @@ impl Client {
             bail!("block {number} {contract} slot {slot}: proof value {checked} != RPC {value}");
         }
         Ok((witness, value))
+    }
+}
+
+fn canonical_targets(targets: &[u64]) -> Vec<u64> {
+    let mut targets = targets.to_vec();
+    targets.sort_unstable();
+    targets.dedup();
+    targets
+}
+
+fn block_evidence_cache_path(
+    cache_dir: &Path,
+    number: u64,
+    receipt_targets: &[u64],
+    transaction_targets: &[u64],
+) -> Result<PathBuf> {
+    let key = serde_json::to_vec(&(
+        BLOCK_EVIDENCE_CACHE_VERSION,
+        number,
+        receipt_targets,
+        transaction_targets,
+    ))?;
+    let digest = Sha256::digest(key)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(cache_dir.join(format!("{number}-{digest}.json")))
+}
+
+fn load_cached_block_evidence(
+    cache_path: &Path,
+    number: u64,
+    receipt_targets: &[u64],
+    transaction_targets: &[u64],
+) -> Result<Option<CachedBlockEvidence>> {
+    let bytes = match fs::read(cache_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error)
+            .with_context(|| format!("read evidence cache {}", cache_path.display())),
+    };
+    let cached: CachedBlockEvidence = match serde_json::from_slice(&bytes) {
+        Ok(cached) => cached,
+        Err(error) => {
+            eprintln!("ignoring invalid evidence cache {}: {error}", cache_path.display());
+            return Ok(None);
+        }
+    };
+    let receipt_indices = canonical_targets(
+        &cached.evidence.receipts.iter().map(|proof| proof.tx_index).collect::<Vec<_>>(),
+    );
+    let transaction_indices = canonical_targets(
+        &cached.evidence.transactions.iter().map(|proof| proof.tx_index).collect::<Vec<_>>(),
+    );
+    if cached.version != BLOCK_EVIDENCE_CACHE_VERSION
+        || cached.block_number != number
+        || cached.evidence.header.number != number
+        || cached.receipt_targets != receipt_targets
+        || cached.transaction_targets != transaction_targets
+        || receipt_indices != receipt_targets
+        || transaction_indices != transaction_targets
+    {
+        eprintln!("ignoring mismatched evidence cache {}", cache_path.display());
+        return Ok(None);
+    }
+    Ok(Some(cached))
+}
+
+fn write_cached_block_evidence(cache_path: &Path, cached: &CachedBlockEvidence) -> Result<()> {
+    let parent = cache_path.parent().context("evidence cache path has no parent")?;
+    let counter = CACHE_TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let file_name = cache_path.file_name().and_then(|name| name.to_str())
+        .context("evidence cache path has invalid file name")?;
+    let temporary = parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), counter));
+    let result = (|| -> Result<()> {
+        let mut file = File::create(&temporary)
+            .with_context(|| format!("create evidence checkpoint {}", temporary.display()))?;
+        serde_json::to_writer(&mut file, cached)
+            .with_context(|| format!("serialize evidence checkpoint {}", temporary.display()))?;
+        file.flush()?;
+        file.sync_all()?;
+        fs::rename(&temporary, cache_path).with_context(|| format!(
+            "publish evidence checkpoint {} -> {}",
+            temporary.display(), cache_path.display()
+        ))?;
+        File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_evidence_cache_round_trips_and_keys_targets() {
+        let directory = std::env::temp_dir().join(format!(
+            "loop-proof-block-cache-{}-{}",
+            std::process::id(),
+            CACHE_TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let mut header = alloy_consensus::Header::default();
+        header.number = 42;
+        let cached = CachedBlockEvidence {
+            version: BLOCK_EVIDENCE_CACHE_VERSION,
+            block_number: 42,
+            receipt_targets: vec![],
+            transaction_targets: vec![],
+            evidence: EvidenceBlock { header, receipts: vec![], transactions: vec![] },
+            log_position_map: BTreeMap::from([(7, 3)]),
+        };
+        let path = block_evidence_cache_path(&directory, 42, &[], &[]).unwrap();
+        let other_path = block_evidence_cache_path(&directory, 42, &[1], &[]).unwrap();
+        assert_ne!(path, other_path);
+        write_cached_block_evidence(&path, &cached).unwrap();
+        let loaded = load_cached_block_evidence(&path, 42, &[], &[]).unwrap().unwrap();
+        assert_eq!(loaded.block_number, 42);
+        assert_eq!(loaded.evidence.header.number, 42);
+        assert_eq!(loaded.log_position_map, BTreeMap::from([(7, 3)]));
+        assert!(load_cached_block_evidence(&path, 42, &[1], &[]).unwrap().is_none());
+        fs::remove_dir_all(directory).unwrap();
     }
 }
 

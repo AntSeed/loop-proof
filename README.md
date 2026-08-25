@@ -105,6 +105,13 @@ buyers, return paths). `--expect-reject` asserts that the predicate
 correctly rejects the evidence — use it for honest-seller test vectors
 where the conserved-loop shape is absent.
 
+Block evidence is checkpointed atomically after every successful RPC fetch in
+`cache/block-evidence-v1/`. Re-running the same case resumes from those files,
+and progress reports separate cache hits from RPC fetches. Set
+`LOOP_EVIDENCE_CACHE_DIR` to place the checkpoint outside the repository; the
+cache key includes the block number and exact receipt/transaction targets, so
+evidence from a different selection is never reused.
+
 ### P0 development artifacts
 
 Development mode executes the real SP1 guest and requires its public journal
