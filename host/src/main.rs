@@ -19,8 +19,8 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use wash_predicate::{
     BuyerLedger, ClosedLoopInput, EvidenceBlock, FundingEvidence, FundingKind, LogRef, ReturnPath,
-    SellerStatsWitness, StateRead, WashJournal, CHANNELS_ADDRESS, DEPOSITS_ADDRESS,
-    PERIOD_END_BLOCK, STAKING_ADDRESS, USDC_ADDRESS,
+    StateRead, WashJournal, CHANNELS_ADDRESS, DEPOSITS_ADDRESS, PERIOD_END_BLOCK, STAKING_ADDRESS,
+    USDC_ADDRESS,
 };
 
 const DEFAULT_RPCS: &[&str] = &[
@@ -314,15 +314,8 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
         })
         .collect::<Result<_>>()?;
 
-    // 5. Exact-period boundary state witnesses.
-    let start_header = client.header(wash_predicate::PERIOD_START_BLOCK - 1)?;
+    // 5. Boundary state witnesses.
     let end_header = client.header(PERIOD_END_BLOCK)?;
-    let start_index = blocks.len();
-    blocks.push(EvidenceBlock {
-        header: start_header.clone(),
-        receipts: vec![],
-        transactions: vec![],
-    });
     let end_index = blocks.len();
     let end_block = EvidenceBlock {
         header: end_header.clone(),
@@ -346,41 +339,6 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
         });
     }
 
-    let agent_slot =
-        loop_core::mapping_slot_address(case.seller, wash_predicate::STAKING_SELLER_AGENT_ID_SLOT);
-    let (agent_proof, agent_id) =
-        client.storage_witness(&end_header, STAKING_ADDRESS, agent_slot)?;
-    println!("seller {}: agent id {agent_id}", case.seller);
-    if agent_id.is_zero() {
-        bail!("seller has no agent id at period end");
-    }
-    let volume_slot = loop_core::slot_offset(
-        loop_core::mapping_slot_u256(agent_id, wash_predicate::CHANNELS_AGENT_STATS_SLOT),
-        wash_predicate::AGENT_STATS_TOTAL_VOLUME_OFFSET,
-    );
-    let (start_volume_proof, start_volume) =
-        client.storage_witness(&start_header, CHANNELS_ADDRESS, volume_slot)?;
-    let (end_volume_proof, end_volume) =
-        client.storage_witness(&end_header, CHANNELS_ADDRESS, volume_slot)?;
-    println!(
-        "seller {}: exact-period volume {}",
-        case.seller,
-        end_volume.saturating_sub(start_volume)
-    );
-    let seller_stats = SellerStatsWitness {
-        end_agent_id_read: StateRead {
-            block: end_index,
-            proof: agent_proof,
-        },
-        start_volume_read: StateRead {
-            block: start_index,
-            proof: start_volume_proof,
-        },
-        end_volume_read: StateRead {
-            block: end_index,
-            proof: end_volume_proof,
-        },
-    };
     blocks.push(end_block);
 
     // 6. Assemble the input.
@@ -389,10 +347,12 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
         receipt: receipt_pos[&(loc.0, loc.1 as u64)],
         log: loc.2,
     };
+    let settlement_refs = settlement_locs.iter().map(to_ref).collect::<Vec<_>>();
     let input = ClosedLoopInput {
         chain_id: wash_predicate::BASE_CHAIN_ID,
         period_start_block: wash_predicate::PERIOD_START_BLOCK,
         period_end_block: PERIOD_END_BLOCK,
+        source_claim_id: alloy_primitives::keccak256(std::fs::read(case_path)?),
         seller: case.seller,
         funder: case.funder,
         buyers: case.buyers.clone(),
@@ -412,7 +372,7 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
                 },
             })
             .collect(),
-        settlements: settlement_locs.iter().map(to_ref).collect(),
+        settlements: settlement_refs,
         returns: return_locs
             .iter()
             .map(|hops| ReturnPath {
@@ -420,7 +380,6 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
             })
             .collect(),
         ledgers,
-        seller_stats,
     };
 
     // 7. Native predicate check before writing the fixture.
@@ -985,18 +944,10 @@ fn print_journal(journal: &WashJournal) {
     );
     println!("  claim id  {}", journal.claim_id);
     for subject in &journal.subjects {
-        let ratio = if subject.total_volume == 0 {
-            1.0
-        } else {
-            (subject.wash_volume as f64 / subject.total_volume as f64).min(1.0)
-        };
         println!(
-            "  agent {} subject {}  wash ${:.2}  total ${:.2}  ratio {:.4}",
-            subject.agent_id,
+            "  subject {}  proven wash ${:.2}",
             subject.subject,
             subject.wash_volume as f64 / 1e6,
-            subject.total_volume as f64 / 1e6,
-            ratio
         );
     }
     println!("  blocks relied on: {}", journal.block_refs.len());

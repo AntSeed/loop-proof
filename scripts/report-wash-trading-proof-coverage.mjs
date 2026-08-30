@@ -59,7 +59,7 @@ export function buildCoverageReport(bundle, plan, results = null) {
     let selectedSettlements = 0;
     for (const evidence of planned.selectedEvidence) {
       if (!["SETTLEMENT", "RECIPROCAL_SETTLEMENT"].includes(evidence.evidenceType)) continue;
-      const dependency = JSON.parse(evidence.dependencyLeaf);
+      const dependency = evidence.dependencyLeaf ? JSON.parse(evidence.dependencyLeaf) : evidence;
       const receiptLogIndex = evidence.receiptLogIndex ?? dependency.logIndex;
       if (!Number.isSafeInteger(receiptLogIndex) || receiptLogIndex < 0) throw new Error(`${claimId}: settlement lacks an authenticated receipt log index`);
       const identity = `${dependency.transactionHash}:${receiptLogIndex}`.toLowerCase();

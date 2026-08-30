@@ -12,10 +12,8 @@ use std::{
 };
 use wash_predicate::{
     reciprocal::PairDepositEvidence, BuyerLedger, ClosedLoopInput, EvidenceBlock, FundingEvidence,
-    FundingKind, LogRef, ReceiptRef, ReciprocalInput, ReturnPath, SellerStatsWitness, StateRead,
-    TransactionRef, BASE_CHAIN_ID, BUYER_ACCOUNT_BALANCE_OFFSET, CHANNELS_ADDRESS,
-    CHANNELS_AGENT_STATS_SLOT, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT, STAKING_ADDRESS,
-    STAKING_SELLER_AGENT_ID_SLOT,
+    FundingKind, LogRef, ReceiptRef, ReciprocalInput, ReturnPath, StateRead, TransactionRef,
+    BASE_CHAIN_ID, BUYER_ACCOUNT_BALANCE_OFFSET, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT,
 };
 
 #[derive(Debug, Deserialize)]
@@ -24,9 +22,15 @@ struct ProofPlan {
     version: u64,
     kind: String,
     chain_id: u64,
+    period: ProofPeriod,
+    claims: Vec<PlannedClaim>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProofPeriod {
     start_block: u64,
     end_block_exclusive: u64,
-    claims: Vec<PlannedClaim>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,14 +111,14 @@ fn main() -> Result<()> {
     }
 
     let client = Client::new(&rpc_endpoints()?);
-    if plan.start_block == 0 || plan.start_block >= plan.end_block_exclusive {
+    if plan.period.start_block == 0 || plan.period.start_block >= plan.period.end_block_exclusive {
         bail!("invalid proof period");
     }
-    let period_end_block = plan.end_block_exclusive - 1;
+    let period_end_block = plan.period.end_block_exclusive - 1;
     let materialized = materialize_evidence(
         &client,
         &claim.selected_evidence,
-        plan.start_block,
+        plan.period.start_block,
         period_end_block,
     )?;
     let (input, journal) = match claim.claim_type.as_str() {
@@ -123,7 +127,7 @@ fn main() -> Result<()> {
                 &client,
                 claim,
                 &materialized,
-                plan.start_block,
+                plan.period.start_block,
                 period_end_block,
             )?;
             let journal = wash_predicate::verify_closed_loop(&input).map_err(anyhow::Error::msg)?;
@@ -134,7 +138,7 @@ fn main() -> Result<()> {
                 &client,
                 claim,
                 &materialized,
-                plan.start_block,
+                plan.period.start_block,
                 period_end_block,
             )?;
             let journal = wash_predicate::verify_reciprocal(&input).map_err(anyhow::Error::msg)?;
@@ -157,7 +161,7 @@ fn main() -> Result<()> {
 fn materialize_evidence(
     client: &Client,
     evidence: &[PlannedEvidence],
-    period_start_block: u64,
+    _period_start_block: u64,
     period_end_block: u64,
 ) -> Result<MaterializedEvidence> {
     let atomic = evidence
@@ -165,7 +169,6 @@ fn materialize_evidence(
         .flat_map(atomic_evidence)
         .collect::<Vec<_>>();
     let mut targets = BTreeMap::<u64, BlockTargets>::new();
-    targets.entry(period_start_block - 1).or_default();
     targets.entry(period_end_block).or_default();
     for entry in &atomic {
         let block = required(entry.block_number, "block number", entry)?;
@@ -277,22 +280,19 @@ fn build_closed_loop(
         })
         .collect::<Result<Vec<_>>>()?;
     let returns = build_return_paths(claim, seller, funder, materialized)?;
-    let ledgers = buyers
-        .iter()
-        .map(|buyer| buyer_ledger(client, materialized, *buyer, period_end_block))
-        .collect::<Result<Vec<_>>>()?;
-    let seller_stats = seller_stats(
-        client,
-        materialized,
-        seller,
-        period_start_block,
-        period_end_block,
-    )?;
-
+    let ledgers = if funding_entries[0].evidence_type == "NATIVE_FUNDING" {
+        Vec::new()
+    } else {
+        buyers
+            .iter()
+            .map(|buyer| buyer_ledger(client, materialized, *buyer, period_end_block))
+            .collect::<Result<Vec<_>>>()?
+    };
     Ok(ClosedLoopInput {
         chain_id: BASE_CHAIN_ID,
         period_start_block,
         period_end_block,
+        source_claim_id: claim.claim_id.parse().context("invalid source claim ID")?,
         seller,
         funder,
         buyers,
@@ -301,7 +301,6 @@ fn build_closed_loop(
         settlements,
         returns,
         ledgers,
-        seller_stats,
     })
 }
 
@@ -357,6 +356,7 @@ fn build_reciprocal(
         chain_id: BASE_CHAIN_ID,
         period_start_block,
         period_end_block,
+        source_claim_id: claim.claim_id.parse().context("invalid source claim ID")?,
         address_a: subjects[0],
         address_b: subjects[1],
         blocks: materialized.blocks.clone(),
@@ -364,20 +364,6 @@ fn build_reciprocal(
         internal_deposits,
         ledger_a: buyer_ledger(client, materialized, subjects[0], period_end_block)?,
         ledger_b: buyer_ledger(client, materialized, subjects[1], period_end_block)?,
-        stats_a: seller_stats(
-            client,
-            materialized,
-            subjects[0],
-            period_start_block,
-            period_end_block,
-        )?,
-        stats_b: seller_stats(
-            client,
-            materialized,
-            subjects[1],
-            period_start_block,
-            period_end_block,
-        )?,
     })
 }
 
@@ -486,51 +472,6 @@ fn buyer_ledger(
             slot,
         )?
         .0,
-    })
-}
-
-fn seller_stats(
-    client: &Client,
-    materialized: &MaterializedEvidence,
-    seller: Address,
-    period_start_block: u64,
-    period_end_block: u64,
-) -> Result<SellerStatsWitness> {
-    let agent_slot = loop_core::mapping_slot_address(seller, STAKING_SELLER_AGENT_ID_SLOT);
-    let (end_agent_id_read, agent_id) = state_read(
-        client,
-        materialized,
-        period_end_block,
-        STAKING_ADDRESS,
-        agent_slot,
-    )?;
-    if agent_id.is_zero() {
-        bail!("seller has no agent id at period end");
-    }
-    let volume_slot = loop_core::slot_offset(
-        loop_core::mapping_slot_u256(agent_id, CHANNELS_AGENT_STATS_SLOT),
-        wash_predicate::AGENT_STATS_TOTAL_VOLUME_OFFSET,
-    );
-    let start_volume_read = state_read(
-        client,
-        materialized,
-        period_start_block - 1,
-        CHANNELS_ADDRESS,
-        volume_slot,
-    )?
-    .0;
-    let end_volume_read = state_read(
-        client,
-        materialized,
-        period_end_block,
-        CHANNELS_ADDRESS,
-        volume_slot,
-    )?
-    .0;
-    Ok(SellerStatsWitness {
-        end_agent_id_read,
-        start_volume_read,
-        end_volume_read,
     })
 }
 

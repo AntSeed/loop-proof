@@ -8,8 +8,8 @@
 #[test]
 #[ignore = "hits live Base RPC endpoints"]
 fn storage_layout_bindings_hold_on_mainnet() {
-    let seller = std::env::var("VERIFY_SELLER")
-        .expect("set VERIFY_SELLER=<address> to run this test");
+    let seller =
+        std::env::var("VERIFY_SELLER").expect("set VERIFY_SELLER=<address> to run this test");
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_loop-host"))
         .arg("verify-layout")
         .arg(&seller)

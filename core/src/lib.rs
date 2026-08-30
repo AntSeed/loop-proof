@@ -176,14 +176,34 @@ pub fn trie_index_key(i: u64) -> Vec<u8> {
 
 pub fn verify_receipt_inclusion(header: &Header, rp: &ReceiptProof) -> Result<(), String> {
     let key = Nibbles::unpack(trie_index_key(rp.tx_index));
-    verify_proof(header.receipts_root, key, Some(rp.value.to_vec()), rp.proof.iter())
-        .map_err(|e| format!("block {}: receipt {} inclusion: {e}", header.number, rp.tx_index))
+    verify_proof(
+        header.receipts_root,
+        key,
+        Some(rp.value.to_vec()),
+        rp.proof.iter(),
+    )
+    .map_err(|e| {
+        format!(
+            "block {}: receipt {} inclusion: {e}",
+            header.number, rp.tx_index
+        )
+    })
 }
 
 pub fn verify_transaction_inclusion(header: &Header, tp: &TransactionProof) -> Result<(), String> {
     let key = Nibbles::unpack(trie_index_key(tp.tx_index));
-    verify_proof(header.transactions_root, key, Some(tp.value.to_vec()), tp.proof.iter())
-        .map_err(|e| format!("block {}: transaction {} inclusion: {e}", header.number, tp.tx_index))
+    verify_proof(
+        header.transactions_root,
+        key,
+        Some(tp.value.to_vec()),
+        tp.proof.iter(),
+    )
+    .map_err(|e| {
+        format!(
+            "block {}: transaction {} inclusion: {e}",
+            header.number, tp.tx_index
+        )
+    })
 }
 
 // ─────────────────────────── state proofs ───────────────────────────
@@ -205,12 +225,15 @@ pub fn verify_storage_value(
         None => {
             // Account does not exist — every slot is zero.
             if !proof.storage_proof.is_empty() {
-                return Err(format!("account {address}: storage proof for absent account"));
+                return Err(format!(
+                    "account {address}: storage proof for absent account"
+                ));
             }
             return Ok(U256::ZERO);
         }
-        Some(rlp) => decode_account_storage_root(&rlp)
-            .map_err(|e| format!("account {address}: {e}"))?,
+        Some(rlp) => {
+            decode_account_storage_root(&rlp).map_err(|e| format!("account {address}: {e}"))?
+        }
     };
     if storage_root == EMPTY_TRIE_ROOT {
         if !proof.storage_proof.is_empty() {
@@ -372,7 +395,10 @@ mod tests {
 
     #[test]
     fn event_topics_match_signatures() {
-        assert_eq!(keccak256("Transfer(address,address,uint256)"), TRANSFER_TOPIC);
+        assert_eq!(
+            keccak256("Transfer(address,address,uint256)"),
+            TRANSFER_TOPIC
+        );
         assert_eq!(keccak256("Deposited(address,uint256)"), DEPOSITED_TOPIC);
         assert_eq!(
             keccak256(
@@ -518,7 +544,10 @@ mod tests {
             .collect();
 
         // Present account with empty storage: every slot is zero, no storage proof.
-        let proof = StorageProof { account_proof: nodes.clone(), storage_proof: vec![] };
+        let proof = StorageProof {
+            account_proof: nodes.clone(),
+            storage_proof: vec![],
+        };
         assert_eq!(
             verify_storage_value(state_root, present, B256::ZERO, &proof).unwrap(),
             U256::ZERO

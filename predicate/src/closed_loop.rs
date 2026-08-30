@@ -5,15 +5,13 @@ use crate::{
     authenticate_blocks, canonical_evidence_hash, closed_loop_claim_id, cohort_hash,
     ensure_event_in_period, meets_ratio,
     resolver::{ChainResolver, LogKey},
-    stats::verify_subject_stats,
     validate_chain, validate_sorted_unique_addresses, BuyerLedger, EvidenceBlock, FundingEvidence,
-    FundingKind, LogRef, ReturnPath, SellerStatsWitness, SubjectRecord, WashJournal,
-    ALPHA_FUND_BPS, ALPHA_RETURN_BPS, BASE_CHAIN_ID, BUYER_ACCOUNT_BALANCE_OFFSET,
-    CHANNELS_SOURCE_ID, CLOSED_LOOP_PREDICATE_ID, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT,
-    EMISSIONS_GENESIS, EPOCH_DURATION, EPSILON_LEDGER_BPS, H_MAX_INTERMEDIATE_HOPS, MAX_BUYERS,
+    FundingKind, LogRef, ReturnPath, SubjectRecord, WashJournal, ALPHA_FUND_BPS, ALPHA_RETURN_BPS,
+    BASE_CHAIN_ID, BUYER_ACCOUNT_BALANCE_OFFSET, CLOSED_LOOP_PREDICATE_ID, DEPOSITS_ADDRESS,
+    DEPOSITS_BUYERS_SLOT, EPSILON_LEDGER_BPS, H_MAX_INTERMEDIATE_HOPS, MAX_BUYERS,
     MAX_RETURN_PATHS, RHO_HOP_BPS, T_PATH_SECONDS,
 };
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{Address, B256, U256};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -22,6 +20,7 @@ pub struct ClosedLoopInput {
     pub chain_id: u64,
     pub period_start_block: u64,
     pub period_end_block: u64,
+    pub source_claim_id: B256,
     pub seller: Address,
     pub funder: Address,
     /// Sorted, unique, nonzero; must not contain the funder. May contain the
@@ -34,7 +33,6 @@ pub struct ClosedLoopInput {
     pub returns: Vec<ReturnPath>,
     /// Exactly one authenticated ledger witness per buyer, in `buyers` order.
     pub ledgers: Vec<BuyerLedger>,
-    pub seller_stats: SellerStatsWitness,
 }
 
 pub fn verify_closed_loop(input: &ClosedLoopInput) -> Result<WashJournal, String> {
@@ -70,40 +68,28 @@ pub fn verify_closed_loop(input: &ClosedLoopInput) -> Result<WashJournal, String
     let settle = verify_settlements(input, &resolver, &funding, &mut used_logs)?;
 
     // ── Funding coverage: Σ FUND ≥ α_fund · Σ SETTLE ──────────────────────
-    if !meets_ratio(funding.total_usdc, settle.total, ALPHA_FUND_BPS) {
-        return Err("closed loop: funding below the coverage fraction".into());
-    }
+    if funding.native_mode {
+        if !input.ledgers.is_empty() {
+            return Err("ledger: native funding must not include USDC ledgers".into());
+        }
+    } else {
+        if !meets_ratio(funding.total_usdc, settle.total, ALPHA_FUND_BPS) {
+            return Err("closed loop: funding below the coverage fraction".into());
+        }
 
-    // ── Attribution (LEDGER) ──────────────────────────────────────────────
-    verify_ledgers(input, &resolver, &funding, &settle)?;
+        // ── Attribution (LEDGER) ──────────────────────────────────────────
+        verify_ledgers(input, &resolver, &funding, &settle)?;
+    }
 
     // ── RETURN ────────────────────────────────────────────────────────────
     verify_returns(input, &resolver, &settle, &mut used_logs)?;
 
-    // ── Subject identity and exact-period total volume ────────────────────
-    let (agent_id, total_volume) = verify_subject_stats(
-        &resolver,
-        input.seller,
-        &input.seller_stats,
-        input.period_start_block,
-        input.period_end_block,
-    )?;
-    let end_timestamp = input
-        .blocks
-        .iter()
-        .find(|block| block.header.number == input.period_end_block)
-        .ok_or("closed loop: missing period end block")?
-        .header
-        .timestamp;
-    let offense_epoch = end_timestamp.saturating_sub(EMISSIONS_GENESIS) / EPOCH_DURATION;
-
     Ok(WashJournal {
         predicate_id: CLOSED_LOOP_PREDICATE_ID,
-        source_id: CHANNELS_SOURCE_ID,
         chain_id: BASE_CHAIN_ID,
         period_start_block: input.period_start_block,
         period_end_block: input.period_end_block,
-        offense_epoch,
+        source_claim_id: input.source_claim_id,
         claim_id: closed_loop_claim_id(
             input.period_start_block,
             input.period_end_block,
@@ -114,9 +100,7 @@ pub fn verify_closed_loop(input: &ClosedLoopInput) -> Result<WashJournal, String
         ),
         subjects: vec![SubjectRecord {
             subject: input.seller,
-            agent_id,
             wash_volume: settle.total,
-            total_volume,
         }],
         block_refs,
     })
@@ -128,6 +112,7 @@ struct FundingSummary {
     total_usdc: u128,
     /// Earliest funding timestamp per buyer — settlements must come after.
     earliest_time: BTreeMap<Address, u64>,
+    native_mode: bool,
 }
 
 fn verify_fundings(
@@ -137,10 +122,22 @@ fn verify_fundings(
     used_transactions: &mut BTreeSet<(u64, u64)>,
 ) -> Result<FundingSummary, String> {
     let cohort: BTreeSet<Address> = input.buyers.iter().copied().collect();
+    let has_native = input
+        .fundings
+        .iter()
+        .any(|evidence| matches!(evidence.kind, FundingKind::Native { .. }));
+    let has_usdc = input
+        .fundings
+        .iter()
+        .any(|evidence| !matches!(evidence.kind, FundingKind::Native { .. }));
+    if has_native && has_usdc {
+        return Err("funding: cannot mix native and USDC evidence".into());
+    }
     let mut summary = FundingSummary {
         usdc_per_buyer: BTreeMap::new(),
         total_usdc: 0,
         earliest_time: BTreeMap::new(),
+        native_mode: has_native,
     };
     for evidence in &input.fundings {
         if !cohort.contains(&evidence.buyer) {
@@ -378,7 +375,7 @@ fn verify_returns(
         let mut previous_amount: Option<u128> = None;
         let mut previous_key: Option<LogKey> = None;
         let mut first_time = 0u64;
-        let mut last_amount = 0u128;
+        let mut path_credit = u128::MAX;
         for (position, reference) in path.transfers.iter().enumerate() {
             let key = resolver.log_key(*reference)?;
             if !used_logs.insert(key) {
@@ -419,13 +416,13 @@ fn verify_returns(
             expected_from = to;
             previous_amount = Some(amount);
             previous_key = Some(key);
-            last_amount = amount;
+            path_credit = path_credit.min(amount);
         }
         if expected_from != input.funder {
             return Err("return: path does not terminate at the funder".into());
         }
         returned = returned
-            .checked_add(last_amount)
+            .checked_add(path_credit)
             .ok_or("return: overflow")?;
     }
     if !meets_ratio(returned, settle.total, ALPHA_RETURN_BPS) {

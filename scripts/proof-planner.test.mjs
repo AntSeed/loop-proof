@@ -34,6 +34,52 @@ test("closed-loop planner prioritizes direct seller-funder over relays", () => {
   assert.equal(plan.selectedEvidence.filter((entry) => entry.evidenceType.startsWith("RELAY")).length, 0);
 });
 
+test("closed-loop planner retains replenishments before the final settlement", () => {
+  const claim = { claimId: "claim", type: "P0_CLOSED_LOOP", subjects: ["seller"], approvedBuyers: ["a"], approvedFunders: ["funder"], dependencyRoot: "0x1", metrics: { qualifiedVolumeRaw: "10" } };
+  const dependencies = [
+    { ...evidence("direct", null, 46_303_100, 1n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
+    { ...evidence("funding-early", "a", 46_303_001, 4n), evidenceType: "USDC_FUNDING", funder: "funder" },
+    { ...evidence("funding-replenish", "a", 46_303_020, 6n), evidenceType: "USDC_FUNDING", funder: "funder" },
+    { ...evidence("settlement-one", "a", 46_303_031, 5n), evidenceType: "SETTLEMENT" },
+    { ...evidence("funding-late", "a", 46_303_040, 100n), evidenceType: "USDC_FUNDING", funder: "funder" },
+    { ...evidence("settlement-two", "a", 46_303_050, 5n), evidenceType: "SETTLEMENT" },
+    { ...evidence("funding-after-final", "a", 46_303_060, 200n), evidenceType: "USDC_FUNDING", funder: "funder" },
+  ];
+  const plan = planClaim(claim, dependencies, { reportRoot: "0x2" });
+  assert.deepEqual(plan.selectedEvidence.filter((entry) => entry.evidenceType === "USDC_FUNDING").map((entry) => entry.dependencyId), ["funding-early", "funding-replenish", "funding-late"]);
+  assert.deepEqual(plan.fundingDiagnostics, [{
+    buyer: "a",
+    retainedRecords: 3,
+    excludedLateRecords: 1,
+    totalRecords: 4,
+    fundingUnit: "usdc_raw",
+    retainedAmountRaw: "110",
+    excludedLateAmountRaw: "200",
+    totalAmountRaw: "310",
+  }]);
+});
+
+test("closed-loop planner reports native funding diagnostics in wei", () => {
+  const claim = { claimId: "claim", type: "P0_CLOSED_LOOP", subjects: ["seller"], approvedBuyers: ["a"], approvedFunders: ["funder"], dependencyRoot: "0x1", metrics: { qualifiedVolumeRaw: "10" } };
+  const dependencies = [
+    { ...evidence("closure", null, 46_303_100, 3n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
+    { dependencyId: "native", evidenceType: "NATIVE_FUNDING", buyer: "a", funder: "funder", blockNumber: 46_303_001, transactionIndex: 0, logIndex: 0, valueWei: "7" },
+    evidence("settlement", "a", 46_303_031, 10n),
+  ];
+  const plan = planClaim(claim, dependencies, { reportRoot: "0x2" });
+  assert.equal(plan.fundingStrategy, "NATIVE");
+  assert.deepEqual(plan.fundingDiagnostics, [{
+    buyer: "a",
+    retainedRecords: 1,
+    excludedLateRecords: 0,
+    totalRecords: 1,
+    fundingUnit: "wei",
+    retainedAmountRaw: "7",
+    excludedLateAmountRaw: "0",
+    totalAmountRaw: "7",
+  }]);
+});
+
 test("closed-loop planner uses authenticated self-funded closure without self-transfer evidence", () => {
   const claim = { claimId: "claim", type: "P0_CLOSED_LOOP", subjects: ["SeLlEr"], approvedBuyers: ["a", "b", "c"], approvedFunders: ["seller"], dependencyRoot: "0x1" };
   const dependencies = [

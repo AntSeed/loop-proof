@@ -37,6 +37,11 @@ export async function planProofBundle(bundle, { rpcUrl, concurrency = 20, fetchJ
       }
     });
     for (const entry of entries) (entry.dependency ? resolved : rejected).push(entry.dependency ?? entry.rejection);
+    const requiredRejections = rejected.filter((entry) => entry.evidenceType === "TOTAL_SETTLEMENT");
+    if (requiredRejections.length > 0) {
+      const rejectionCounts = Object.fromEntries([...groupBy(requiredRejections, (entry) => entry.reason).entries()].map(([reason, values]) => [reason, values.length]));
+      throw new Error(`${claim.claimId}: incomplete total-settlement authentication; rejected=${requiredRejections.length}; rejectionCounts=${JSON.stringify(rejectionCounts)}`);
+    }
     onProgress(`[${claimIndex + 1}/${selectedClaims.length}] optimizing ${resolved.length} authenticated dependencies`);
     let planned;
     try {
@@ -117,6 +122,36 @@ function authenticationGroup(blockNumber) {
 }
 
 export function merkleMembership(hashes, targetHash) {
+  return merkleMembershipIndex(hashes).get(targetHash);
+}
+
+function merkleMembershipIndex(hashes) {
+  const levels = [[...hashes].sort()];
+  while (levels.at(-1).length > 1) {
+    const level = levels.at(-1);
+    const next = [];
+    for (let cursor = 0; cursor < level.length; cursor += 2) {
+      next.push(sha256Hex(Buffer.concat([Buffer.from([1]), hexBytes(level[cursor]), hexBytes(level[cursor + 1] ?? level[cursor])])));
+    }
+    levels.push(next);
+  }
+  const positions = new Map(levels[0].map((hash, index) => [hash, index]));
+  return {
+    get(targetHash) {
+      let index = positions.get(targetHash);
+      if (index == null) throw new Error(`Merkle target ${targetHash} not found`);
+      const steps = [];
+      for (const level of levels.slice(0, -1)) {
+        const siblingIndex = index % 2 === 0 ? Math.min(index + 1, level.length - 1) : index - 1;
+        steps.push({ sibling: level[siblingIndex], sibling_on_left: siblingIndex < index });
+        index = Math.floor(index / 2);
+      }
+      return { steps };
+    },
+  };
+}
+
+function legacyMerkleMembership(hashes, targetHash) {
   let level = [...hashes].sort();
   let index = level.indexOf(targetHash);
   if (index < 0) throw new Error(`Merkle target ${targetHash} not found`);
@@ -136,6 +171,9 @@ export function merkleMembership(hashes, targetHash) {
 
 export async function resolveDependency(dependency, bundle, callRpc) {
   if (dependency.evidenceType === "RELAY_PATH") {
+    if (Array.isArray(dependency.hops)) {
+      return { ...dependency, hops: await Promise.all(dependency.hops.map((hop) => resolveDependency(hop, bundle, callRpc))) };
+    }
     return {
       ...dependency,
       sellerPayment: await resolveDependency(dependency.sellerPayment, bundle, callRpc),
@@ -148,7 +186,7 @@ export async function resolveDependency(dependency, bundle, callRpc) {
   if (!receipt) throw new Error(`${dependency.dependencyId}: receipt not found`);
   if (receipt.status == null || BigInt(receipt.status) !== 1n) throw new Error(`${dependency.dependencyId}: receipt reverted`);
   const blockNumber = hexNumber(receipt.blockNumber);
-  if (["SETTLEMENT", "RECIPROCAL_SETTLEMENT"].includes(dependency.evidenceType)
+  if (["SETTLEMENT", "RECIPROCAL_SETTLEMENT", "TOTAL_SETTLEMENT"].includes(dependency.evidenceType)
       && (blockNumber < bundle.period.startBlock || blockNumber >= bundle.period.endBlockExclusive)) {
     throw new Error(`${dependency.dependencyId}: block ${blockNumber} outside approved period`);
   }
@@ -204,7 +242,8 @@ function planCohort(claim, dependencies, bundle) {
   if (strategyCandidates.length === 0) throw new Error(`${claim.claimId}: no valid cohort funding strategy; ${cohortDiagnostics(claim, dependencies)}`);
   strategyCandidates.sort(compareCost);
   const selected = strategyCandidates[0];
-  const evidence = [...selected.closure.evidence, ...selected.funding, ...selected.settlements];
+  const totals = dependencies.filter((entry) => entry.evidenceType === "TOTAL_SETTLEMENT");
+  const evidence = [...selected.closure.evidence, ...selected.funding, ...selected.settlements, ...totals];
   return finalizePlanClaim(claim, evidence, {
     selectionReason: `${selected.strategy} cohort; ${selected.closure.evidenceClass ?? "no closure"}; cost=${selected.cost.join("/")}`,
     rejectedAlternatives: [...selected.closure.rejected, ...strategyCandidates.slice(1).map(summarizeAlternative)],
@@ -213,6 +252,7 @@ function planCohort(claim, dependencies, bundle) {
     fundingStrategy: selected.strategy,
     closureType: selected.closure.evidenceClass,
     optimizationMode: selected.optimizationMode,
+    fundingDiagnostics: selected.fundingDiagnostics,
   }, bundle);
 }
 
@@ -249,11 +289,13 @@ function buildCohortStrategies(strategy, claim, dependencies, period) {
 function buildCohortStrategy(strategy, fundings, settlements, closure, approvedVolumeRaw) {
   const fundingByBuyer = new Map();
   for (const funding of fundings) {
-    const current = fundingByBuyer.get(funding.buyer);
-    if (!current || compareEvidence(funding, current) < 0) fundingByBuyer.set(funding.buyer, funding);
+    if (!fundingByBuyer.has(funding.buyer)) fundingByBuyer.set(funding.buyer, []);
+    fundingByBuyer.get(funding.buyer).push(funding);
   }
+  for (const records of fundingByBuyer.values()) records.sort(compareEvidence);
+  const earliestFundingByBuyer = new Map([...fundingByBuyer].map(([buyer, records]) => [buyer, records[0]]));
   const eligibleSettlements = settlements.filter((entry) => {
-    const funding = fundingByBuyer.get(entry.buyer);
+    const funding = earliestFundingByBuyer.get(entry.buyer);
     return funding && entry.blockNumber > funding.blockNumber;
   });
   if (fundingByBuyer.size === 0 || eligibleSettlements.length === 0) return null;
@@ -261,14 +303,39 @@ function buildCohortStrategy(strategy, fundings, settlements, closure, approvedV
   const requiredBuyers = closure.evidence.filter((entry) => entry.evidenceType === "DIRECT_SELLER_BUYER").map((entry) => entry.buyer);
   const selection = selectApprovedSettlements(
     eligibleSettlements,
-    fundingByBuyer,
+    earliestFundingByBuyer,
     fixedBlocks,
     requiredBuyers,
     approvedVolumeRaw,
   );
   if (!selection) return null;
   if (closure.evidence.length > 0 && !closureOccursAfterSettlements(selection.settlements, closure.evidence)) return null;
-  const funding = selection.buyers.map((buyer) => fundingByBuyer.get(buyer));
+  const latestSettlementByBuyer = new Map();
+  for (const settlement of selection.settlements) {
+    const current = latestSettlementByBuyer.get(settlement.buyer);
+    if (!current || compareEvidence(current, settlement) < 0) latestSettlementByBuyer.set(settlement.buyer, settlement);
+  }
+  const funding = selection.buyers.flatMap((buyer) => (fundingByBuyer.get(buyer) ?? [])
+    .filter((entry) => entry.blockNumber < latestSettlementByBuyer.get(buyer).blockNumber));
+  const fundingDiagnostics = selection.buyers.map((buyer) => {
+    const records = fundingByBuyer.get(buyer) ?? [];
+    const retained = funding.filter((entry) => entry.buyer === buyer);
+    const excludedLate = records.filter((entry) => !retained.includes(entry));
+    const total = (values) => values.reduce(
+      (sum, entry) => sum + BigInt(strategy === "NATIVE" ? entry.valueWei : entry.amountRaw),
+      0n,
+    ).toString();
+    return {
+      buyer,
+      retainedRecords: retained.length,
+      excludedLateRecords: excludedLate.length,
+      totalRecords: records.length,
+      fundingUnit: strategy === "NATIVE" ? "wei" : "usdc_raw",
+      retainedAmountRaw: total(retained),
+      excludedLateAmountRaw: total(excludedLate),
+      totalAmountRaw: total(records),
+    };
+  });
   const allEvidence = [...closure.evidence, ...funding, ...selection.settlements];
   return {
     strategy,
@@ -277,6 +344,7 @@ function buildCohortStrategy(strategy, fundings, settlements, closure, approvedV
     settlements: selection.settlements,
     buyers: selection.buyers,
     volumeRaw: selection.volumeRaw,
+    fundingDiagnostics,
     optimizationMode: selection.optimizationMode,
     cost: costTuple(allEvidence),
   };
@@ -296,6 +364,7 @@ export function selectApprovedSettlements(settlements, fundingByBuyer, fixedBloc
 }
 function planReciprocal(claim, dependencies, bundle) {
   const selected = dependencies.filter((entry) => entry.evidenceType === "RECIPROCAL_SETTLEMENT").sort(compareEvidence);
+  const totals = dependencies.filter((entry) => entry.evidenceType === "TOTAL_SETTLEMENT").sort(compareEvidence);
   const volumeAToB = sumRaw(selected.filter((entry) => entry.buyer === claim.walletA && entry.seller === claim.walletB));
   const volumeBToA = sumRaw(selected.filter((entry) => entry.buyer === claim.walletB && entry.seller === claim.walletA));
   if (!reciprocalVolumesQualify(volumeAToB, volumeBToA)) {
@@ -306,7 +375,7 @@ function planReciprocal(claim, dependencies, bundle) {
     && entry.depositLogIndex != null
     && subjects.has(normalize(entry.buyer))
     && subjects.has(normalize(entry.funder)));
-  return finalizePlanClaim(claim, [...internalDeposits, ...selected], {
+  return finalizePlanClaim(claim, [...internalDeposits, ...selected, ...totals], {
     selectionReason: `exact approved settlements; at least 80% volume reciprocity; cost=${costTuple(selected).join("/")}`,
     rejectedAlternatives: [],
     provenSettlementCount: selected.length,
@@ -345,20 +414,16 @@ function closureOccursAfterSettlements(settlements, closureEvidence) {
 }
 
 export function validRelayPath(path, period = null) {
-  const first = path.sellerPayment;
-  const second = path.relayForward;
-  const third = path.funderReceipt;
-  if (![first, second, third].every((entry) => Number.isSafeInteger(entry.blockNumber))) return false;
-  if (compareEvidence(first, second) >= 0 || compareEvidence(second, third) >= 0) return false;
-  if (second.timestamp < first.timestamp || third.timestamp < second.timestamp) return false;
-  if (third.timestamp - first.timestamp > MAX_RELAY_SECONDS) return false;
-  if (period && ![first, second, third].every((entry) => entry.blockNumber >= period.startBlock && entry.blockNumber < period.endBlockExclusive)) return false;
-  const firstAmount = BigInt(first.amountRaw);
-  const secondAmount = BigInt(second.amountRaw);
-  const thirdAmount = BigInt(third.amountRaw);
-  if (firstAmount <= 0n || secondAmount <= 0n || thirdAmount <= 0n) return false;
-  return secondAmount * 10_000n >= firstAmount * MIN_RELAY_RETAINED_BPS
-    && thirdAmount * 10_000n >= secondAmount * MIN_RELAY_RETAINED_BPS;
+  const hops = atomicEvidence(path);
+  if (hops.length === 0 || hops.length > 9 || !hops.every((entry) => Number.isSafeInteger(entry.blockNumber))) return false;
+  if (period && !hops.every((entry) => entry.blockNumber >= period.startBlock && entry.blockNumber < period.endBlockExclusive)) return false;
+  for (let index = 0; index < hops.length; index += 1) {
+    if (BigInt(hops[index].amountRaw) <= 0n) return false;
+    if (index === 0) continue;
+    if (compareEvidence(hops[index - 1], hops[index]) >= 0 || hops[index].timestamp < hops[index - 1].timestamp) return false;
+    if (BigInt(hops[index].amountRaw) * 10_000n < BigInt(hops[index - 1].amountRaw) * MIN_RELAY_RETAINED_BPS) return false;
+  }
+  return hops.at(-1).timestamp - hops[0].timestamp <= MAX_RELAY_SECONDS;
 }
 
 function nonSelfTransfer(entry) {
@@ -366,7 +431,7 @@ function nonSelfTransfer(entry) {
 }
 
 function flattenRelay(path) {
-  return [path.sellerPayment, path.relayForward, path.funderReceipt];
+  return atomicEvidence(path);
 }
 
 function finalizePlanClaim(claim, evidence, details, bundle) {
@@ -408,6 +473,7 @@ function validateAnalysisVolume(claim, selected) {
 
 function attachMemberships(plan, claim, allClaims) {
   const dependencyHashes = claim.dependencies.map((entry) => entry.dependencyId);
+  const dependencyMemberships = merkleMembershipIndex(dependencyHashes);
   const originalById = new Map(claim.dependencies.map((entry) => [entry.dependencyId, entry]));
   const claimLeaf = { ...claim };
   delete claimLeaf.leafHash;
@@ -424,7 +490,7 @@ function attachMemberships(plan, claim, allClaims) {
       return {
         ...entry,
         dependencyLeaf: canonicalJson(dependencyLeaf),
-        dependencyMembership: merkleMembership(dependencyHashes, entry.dependencyId),
+        dependencyMembership: dependencyMemberships.get(entry.dependencyId),
       };
     }),
   };
@@ -453,7 +519,7 @@ function validateLog(log, dependency, contracts) {
 
 function logMatches(log, dependency, contracts) {
   const topics = (log.topics ?? []).map((topic) => topic.toLowerCase());
-  if (["SETTLEMENT", "RECIPROCAL_SETTLEMENT"].includes(dependency.evidenceType)) {
+  if (["SETTLEMENT", "RECIPROCAL_SETTLEMENT", "TOTAL_SETTLEMENT"].includes(dependency.evidenceType)) {
     return normalize(log.address) === normalize(contracts.channels)
       && topics[0] === CHANNEL_SETTLED_TOPIC
       && topicAddress(topics[2]) === dependency.buyer
@@ -492,12 +558,12 @@ function validateBundle(bundle) {
 
 async function rpc(url, method, params, fetchJson) {
   let lastError;
-  for (let attempt = 0; attempt < 6; attempt += 1) {
+  for (let attempt = 0; attempt < 9; attempt += 1) {
     const response = await fetchJson(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
     if (!response.error) return response.result;
     lastError = new Error(`${method}: ${JSON.stringify(response.error)}`);
     if (![-32_000, -32_005, -32_600, -32_603].includes(response.error.code)) throw lastError;
-    await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)));
+    await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** Math.min(attempt, 6))));
   }
   throw lastError;
 }
@@ -511,7 +577,7 @@ async function rpcBatch(url, requests, fetchJson) {
 
 async function defaultFetchJson(url, options) {
   let lastError;
-  for (let attempt = 0; attempt < 6; attempt += 1) {
+  for (let attempt = 0; attempt < 9; attempt += 1) {
     try {
       const response = await fetch(url, { ...options, signal: AbortSignal.timeout(20_000) });
       if (response.ok) return response.json();
@@ -520,7 +586,7 @@ async function defaultFetchJson(url, options) {
     } catch (error) {
       lastError = error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)));
+    await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** Math.min(attempt, 6))));
   }
   throw lastError;
 }
@@ -558,7 +624,7 @@ function hexNumber(value) { const number = Number(BigInt(value)); if (!Number.is
 function numberAscending(left, right) { return left - right; }
 function groupBy(values, key) { const result = new Map(); for (const value of values) { const group = key(value); const rows = result.get(group) ?? []; rows.push(value); result.set(group, rows); } return result; }
 function dedupe(values) { const result = new Map(); for (const value of values) result.set(value.dependencyId ?? JSON.stringify(value), value); return [...result.values()]; }
-function atomicEvidence(value) { return value.evidenceType === "RELAY_PATH" ? [value.sellerPayment, value.relayForward, value.funderReceipt] : [value]; }
+function atomicEvidence(value) { return value.evidenceType === "RELAY_PATH" ? (value.hops ?? [value.sellerPayment, value.relayForward, value.funderReceipt]) : [value]; }
 function canonicalJson(value) { if (value === null || typeof value !== "object") return JSON.stringify(value); if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`; return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`; }
 function sha256Hex(value) { return `0x${(awaitableSha256(value))}`; }
 function awaitableSha256(value) { return createHash("sha256").update(value).digest("hex"); }

@@ -29,10 +29,9 @@ fn self_financed_pair_produces_the_journal() {
     assert_eq!(journal.subjects.len(), 2);
     assert_eq!(journal.subjects[0].subject, PAIR_A);
     assert_eq!(journal.subjects[0].wash_volume, 500_000_000);
-    assert_eq!(journal.subjects[0].total_volume, 1_000_000_000);
     assert_eq!(journal.subjects[1].subject, PAIR_B);
     assert_eq!(journal.subjects[1].wash_volume, 450_000_000);
-    assert_eq!(journal.subjects[1].total_volume, 900_000_000);
+    assert_eq!(journal.source_claim_id, input.source_claim_id);
 
     let bytes = journal.abi_encode();
     assert_eq!(
@@ -161,11 +160,4 @@ fn reverted_and_tampered_evidence_is_rejected() {
     let mut input = reciprocal_input(&PairCfg::default());
     input.blocks[0].header.receipts_root = alloy_primitives::B256::ZERO;
     assert!(verify_reciprocal(&input).is_err());
-}
-
-#[test]
-fn unstaked_member_is_rejected() {
-    let mut cfg = PairCfg::default();
-    cfg.agents = [(111, 1_000_000_000), (0, 0)];
-    assert_rejects(&reciprocal_input(&cfg), "no agent id");
 }

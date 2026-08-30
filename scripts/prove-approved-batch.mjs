@@ -7,7 +7,7 @@ import { approveCostQuote } from "./proving-cost-quote.mjs";
 
 const args = process.argv.slice(2);
 const value = (flag) => { const index = args.indexOf(flag); return index < 0 ? null : args[index + 1]; };
-const required = ["--plan", "--artifact-dir", "--closed-loop-elf", "--reciprocal-elf", "--aggregator-elf", "--cost-quote", "--approve-cost-digest"];
+const required = ["--plan", "--manifest", "--artifact-dir", "--closed-loop-elf", "--reciprocal-elf", "--aggregator-elf", "--cost-quote", "--approve-cost-digest"];
 for (const flag of required) if (!value(flag)) throw new Error(`missing ${flag}`);
 if (!args.includes("--confirm-production-proving")) throw new Error("production proving requires --confirm-production-proving");
 if (!process.env.BASE_RPC_URLS && !process.env.BASE_RPC_URL) throw new Error("BASE_RPC_URLS or BASE_RPC_URL is required");
@@ -48,6 +48,7 @@ const aggregateArgs = [
   "--aggregator-elf", resolve(value("--aggregator-elf")),
   "--closed-loop-elf", resolve(value("--closed-loop-elf")),
   "--reciprocal-elf", resolve(value("--reciprocal-elf")),
+  "--manifest", resolve(value("--manifest")),
   "--output", aggregatePath,
 ];
 for (const claim of plan.claims) aggregateArgs.push("--child", `${claim.aggregateKind}:${claim.witnessPath}`);
@@ -59,7 +60,8 @@ if (aggregate?.kind !== "antseed-wash-trading-aggregate-proof" || aggregate.chil
 console.log(JSON.stringify({
   aggregate: aggregatePath,
   childCount: aggregate.childCount,
-  findingCount: aggregate.findingCount,
+  sourceClaimCount: aggregate.sourceClaimCount,
+  sellerCount: aggregate.sellerCount,
   aggregateSha256: sha256(await readFile(aggregatePath)),
 }, null, 2));
 

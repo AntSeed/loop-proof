@@ -30,7 +30,6 @@ pub mod closed_loop;
 pub mod journal;
 pub mod reciprocal;
 pub mod resolver;
-pub mod stats;
 
 pub use aggregate::{AggregateJournal, ChildProofInput};
 pub use closed_loop::{verify_closed_loop, ClosedLoopInput};
@@ -39,14 +38,10 @@ pub use reciprocal::{verify_reciprocal, ReciprocalInput};
 
 // ─── Rule identity ────────────────────────────────────────────────────────
 
-pub const PREDICATE_VERSION: u32 = 3;
+pub const PREDICATE_VERSION: u32 = 5;
 pub const CLOSED_LOOP_PREDICATE_ID: u8 = 1;
 pub const RECIPROCAL_PREDICATE_ID: u8 = 2;
 pub const BASE_CHAIN_ID: u64 = 8_453;
-pub const EMISSIONS_GENESIS: u64 = 1_775_728_461;
-pub const EPOCH_DURATION: u64 = 7 * 24 * 60 * 60;
-pub const CHANNELS_SOURCE_ID: B256 =
-    alloy_primitives::b256!("4c8d4439455a826fc90fd39774c15979e9508c060c0bb1368c8560dbb9cfba29");
 pub const CLOSED_LOOP_PROGRAM_ID: B256 =
     alloy_primitives::b256!("8d4ca7dfd71be3492a82a21293943ea86911396bd13abf3a0979ca676b307c15");
 pub const RECIPROCAL_PROGRAM_ID: B256 =
@@ -71,7 +66,7 @@ pub const PERIOD_END_BLOCK: u64 = 49_936_172;
 pub const ALPHA_FUND_BPS: u64 = 9_000;
 /// RETURN must carry at least this share of the settled volume back to the
 /// funder.
-pub const ALPHA_RETURN_BPS: u64 = 3_000;
+pub const ALPHA_RETURN_BPS: u64 = 2_000;
 /// Each return hop must forward at least this share of what it received.
 /// Set low to accommodate real intermediary chains that batch or round
 /// transfer amounts (observed: conduit forwards round-number amounts,
@@ -212,14 +207,6 @@ pub struct ReturnPath {
 pub struct BuyerLedger {
     /// Read at `PERIOD_END_BLOCK`.
     pub end: StateRead,
-}
-
-/// Exact-period volume witness for one subject.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SellerStatsWitness {
-    pub end_agent_id_read: StateRead,
-    pub start_volume_read: StateRead,
-    pub end_volume_read: StateRead,
 }
 
 // ─── Claim identifiers ────────────────────────────────────────────────────

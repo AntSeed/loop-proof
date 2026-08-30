@@ -6,7 +6,9 @@
 mod common;
 
 fn main() {
-    let out = std::env::args().nth(1).expect("usage: write_fixture <out.json> [--reciprocal]");
+    let out = std::env::args()
+        .nth(1)
+        .expect("usage: write_fixture <out.json> [--reciprocal]");
     if std::env::args().any(|a| a == "--reciprocal") {
         let input = common::reciprocal_input(&common::PairCfg::default());
         wash_predicate::verify_reciprocal(&input).expect("fixture must satisfy the predicate");

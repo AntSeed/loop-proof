@@ -23,10 +23,15 @@ pub struct ChainResolver<'a> {
 
 impl ChainResolver<'_> {
     pub fn block(&self, index: usize) -> Result<&EvidenceBlock, String> {
-        self.blocks.get(index).ok_or("block reference out of range".into())
+        self.blocks
+            .get(index)
+            .ok_or("block reference out of range".into())
     }
 
-    pub fn receipt(&self, reference: ReceiptRef) -> Result<(&ReceiptProof, &EvidenceBlock), String> {
+    pub fn receipt(
+        &self,
+        reference: ReceiptRef,
+    ) -> Result<(&ReceiptProof, &EvidenceBlock), String> {
         let block = self.block(reference.block)?;
         Ok((
             block
@@ -38,9 +43,14 @@ impl ChainResolver<'_> {
     }
 
     /// Resolve a log from a successful receipt.
-    pub fn log(&self, reference: LogRef) -> Result<(ParsedLog, &ReceiptProof, &EvidenceBlock), String> {
-        let (receipt, block) =
-            self.receipt(ReceiptRef { block: reference.block, receipt: reference.receipt })?;
+    pub fn log(
+        &self,
+        reference: LogRef,
+    ) -> Result<(ParsedLog, &ReceiptProof, &EvidenceBlock), String> {
+        let (receipt, block) = self.receipt(ReceiptRef {
+            block: reference.block,
+            receipt: reference.receipt,
+        })?;
         if !receipt_success(&receipt.value)? {
             return Err("referenced receipt reverted".into());
         }
@@ -78,11 +88,16 @@ impl ChainResolver<'_> {
             .iter()
             .enumerate()
             .filter(|(_, transaction)| transaction.tx_index == receipt.tx_index);
-        let (position, _) = matches.next().ok_or("authenticated transaction missing for receipt")?;
+        let (position, _) = matches
+            .next()
+            .ok_or("authenticated transaction missing for receipt")?;
         if matches.next().is_some() {
             return Err("duplicate authenticated transaction for receipt".into());
         }
-        Ok(TransactionRef { block: reference.block, transaction: position })
+        Ok(TransactionRef {
+            block: reference.block,
+            transaction: position,
+        })
     }
 
     pub fn decoded_transaction(
@@ -91,13 +106,14 @@ impl ChainResolver<'_> {
     ) -> Result<(TxEnvelope, Address, &EvidenceBlock), String> {
         let (proof, block) = self.transaction(reference)?;
         let mut bytes = proof.value.as_ref();
-        let envelope =
-            TxEnvelope::decode_2718(&mut bytes).map_err(|error| format!("transaction decode: {error}"))?;
+        let envelope = TxEnvelope::decode_2718(&mut bytes)
+            .map_err(|error| format!("transaction decode: {error}"))?;
         if !bytes.is_empty() {
             return Err("transaction has trailing bytes".into());
         }
-        let signer =
-            envelope.recover_signer().map_err(|_| "transaction signer recovery failed")?;
+        let signer = envelope
+            .recover_signer()
+            .map_err(|_| "transaction signer recovery failed")?;
         Ok((envelope, signer, block))
     }
 
@@ -113,7 +129,10 @@ impl ChainResolver<'_> {
     }
 
     /// USDC `Transfer` log → (from, to, amount, block_number).
-    pub fn usdc_transfer(&self, reference: LogRef) -> Result<(Address, Address, u128, u64), String> {
+    pub fn usdc_transfer(
+        &self,
+        reference: LogRef,
+    ) -> Result<(Address, Address, u128, u64), String> {
         let (log, _, block) = self.log(reference)?;
         if log.address != USDC_ADDRESS
             || log.topics.len() != 3
@@ -131,7 +150,10 @@ impl ChainResolver<'_> {
     }
 
     /// `ChannelSettled` log → (channel_id, buyer, seller, delta, block_number).
-    pub fn settlement(&self, reference: LogRef) -> Result<(B256, Address, Address, u128, u64), String> {
+    pub fn settlement(
+        &self,
+        reference: LogRef,
+    ) -> Result<(B256, Address, Address, u128, u64), String> {
         let (log, _, block) = self.log(reference)?;
         if log.address != CHANNELS_ADDRESS
             || log.topics.len() != 4
@@ -162,7 +184,8 @@ impl ChainResolver<'_> {
         }
         Ok((
             crate::topic_address(log.topics[1]),
-            u128::try_from(U256::from_be_slice(&log.data)).map_err(|_| "deposit amount overflow")?,
+            u128::try_from(U256::from_be_slice(&log.data))
+                .map_err(|_| "deposit amount overflow")?,
             block.header.number,
         ))
     }

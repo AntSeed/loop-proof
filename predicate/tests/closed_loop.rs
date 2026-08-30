@@ -24,11 +24,7 @@ fn valid_loop_produces_the_journal() {
     assert_eq!(journal.subjects.len(), 1);
     assert_eq!(journal.subjects[0].subject, SELLER);
     assert_eq!(journal.subjects[0].wash_volume, 1_200_000_000);
-    assert_eq!(
-        journal.subjects[0].agent_id,
-        alloy_primitives::U256::from_limbs([AGENT_ID, 0, 0, 0])
-    );
-    assert_eq!(journal.subjects[0].total_volume, 2_400_000_000);
+    assert_eq!(journal.source_claim_id, input.source_claim_id);
     assert_eq!(
         journal.claim_id,
         closed_loop_claim_id(
@@ -199,13 +195,13 @@ fn missing_or_short_return_is_rejected() {
     cfg.return_paths = vec![];
     assert_rejects(&closed_loop_input(&cfg), "below the coverage fraction");
 
-    // Σ settle = 1_200_000_000; α_return = 3_000 bps → arrival ≥ 360_000_000.
+    // Σ settle = 1_200_000_000; α_return = 2_000 bps → arrival ≥ 240_000_000.
     let mut cfg = LoopCfg::default();
-    cfg.return_paths = vec![vec![(FUNDER, 360_000_000)]];
+    cfg.return_paths = vec![vec![(FUNDER, 240_000_000)]];
     verify_closed_loop(&closed_loop_input(&cfg)).unwrap();
 
     let mut cfg = LoopCfg::default();
-    cfg.return_paths = vec![vec![(FUNDER, 359_999_999)]];
+    cfg.return_paths = vec![vec![(FUNDER, 239_999_999)]];
     assert_rejects(&closed_loop_input(&cfg), "below the coverage fraction");
 }
 
@@ -222,6 +218,31 @@ fn return_hop_retention_boundary_is_exact() {
     assert_rejects(
         &closed_loop_input(&cfg),
         "retains more than the permitted share",
+    );
+}
+
+#[test]
+fn amplified_return_paths_credit_only_the_path_bottleneck() {
+    let mut cfg = LoopCfg::default();
+    cfg.funded = vec![10_000_000];
+    cfg.settled = vec![10_000_000];
+    cfg.buyers = vec![BUYERS[0]];
+    cfg.end_balances = vec![0];
+    cfg.return_paths = vec![vec![
+        (RELAY, 8_000_000),
+        (
+            address!("00000000000000000000000000000000000000dd"),
+            8_000_000,
+        ),
+        (FUNDER, 248_000_000),
+    ]];
+    verify_closed_loop(&closed_loop_input(&cfg)).unwrap();
+
+    cfg.settled = vec![40_000_001];
+    cfg.funded = vec![40_000_001];
+    assert_rejects(
+        &closed_loop_input(&cfg),
+        "value reaching the funder below the coverage fraction",
     );
 }
 
@@ -358,7 +379,7 @@ fn protocol_deposit_funding_is_accepted() {
 }
 
 #[test]
-fn native_funding_never_counts_toward_usdc_coverage() {
+fn native_funding_proves_seeding_without_cross_unit_coverage() {
     // SELLER is the raw transaction's `to`; use it as the funded buyer so the
     // native evidence itself is shape-valid.
     let mut cfg = LoopCfg::default();
@@ -385,24 +406,26 @@ fn native_funding_never_counts_toward_usdc_coverage() {
             },
         },
     };
-    // The evidence authenticates, but a USDC-settled loop cannot reach the
-    // coverage fraction on native funding alone.
-    assert_rejects(&input, "funding below the coverage fraction");
+    input.ledgers.clear();
+    let journal = verify_closed_loop(&input).unwrap();
+    assert_eq!(journal.subjects[0].wash_volume, 400_000_000);
 }
 
 #[test]
-fn unstaked_subject_is_rejected() {
-    let mut cfg = LoopCfg::default();
-    cfg.agent_id = 0;
-    cfg.agent_volume = 0;
-    assert_rejects(&closed_loop_input(&cfg), "no agent id");
-}
-
-#[test]
-fn stats_witness_must_match_the_proven_agent_id() {
+fn native_and_usdc_funding_cannot_be_mixed() {
     let mut input = closed_loop_input(&LoopCfg::default());
-    input.seller_stats.end_volume_read = input.seller_stats.start_volume_read.clone();
-    assert_rejects(&input, "rule requires block");
+    input.blocks[0] = transfer_block(PERIOD_START_BLOCK, 1_000, FUNDER, BUYERS[0], 1, true);
+    input.fundings[0].kind = FundingKind::Native {
+        transaction: TransactionRef {
+            block: 0,
+            transaction: 0,
+        },
+        receipt: ReceiptRef {
+            block: 0,
+            receipt: 0,
+        },
+    };
+    assert_rejects(&input, "cannot mix native and USDC evidence");
 }
 
 #[test]

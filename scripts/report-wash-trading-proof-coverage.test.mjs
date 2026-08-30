@@ -49,6 +49,18 @@ test("coverage report rejects result identity changes", () => {
   assert.throws(() => buildCoverageReport(bundle, plan, results), /result identity differs/);
 });
 
+test("coverage report accepts current plans with resolved evidence inline", () => {
+  const { bundle, plan } = coverageFixture();
+  plan.claims[0].selectedEvidence[0] = {
+    evidenceType: "SETTLEMENT",
+    transactionHash: `0x${"1".repeat(64)}`,
+    receiptLogIndex: 7,
+    amountRaw: "1000000000",
+  };
+  const report = buildCoverageReport(bundle, plan);
+  assert.equal(report.authenticatedSelectedVolume.uniqueAcrossAllClaimsRaw, "1000000000");
+});
+
 function coverageFixture() {
   const reportRoot = `0x${"2".repeat(64)}`;
   const dependencyLeaf = JSON.stringify({

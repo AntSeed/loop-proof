@@ -10,11 +10,9 @@ use alloy_trie::{proof::ProofRetainer, HashBuilder, Nibbles};
 use loop_core::{rlp_bytes, rlp_list, rlp_uint, ReceiptProof, StorageProof, TransactionProof};
 use std::collections::BTreeMap;
 use wash_predicate::{
-    BuyerLedger, EvidenceBlock, FundingEvidence, FundingKind, LogRef, ReturnPath,
-    SellerStatsWitness, StateRead, AGENT_STATS_TOTAL_VOLUME_OFFSET, BUYER_ACCOUNT_BALANCE_OFFSET,
-    CHANNELS_ADDRESS, CHANNELS_AGENT_STATS_SLOT, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT,
-    PERIOD_END_BLOCK, PERIOD_START_BLOCK, STAKING_ADDRESS, STAKING_SELLER_AGENT_ID_SLOT,
-    USDC_ADDRESS,
+    BuyerLedger, EvidenceBlock, FundingEvidence, FundingKind, LogRef, ReturnPath, StateRead,
+    BUYER_ACCOUNT_BALANCE_OFFSET, CHANNELS_ADDRESS, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT,
+    PERIOD_END_BLOCK, PERIOD_START_BLOCK, USDC_ADDRESS,
 };
 
 /// Signer-recoverable raw transaction (chain id 8453, to = SELLER, value 1
@@ -294,10 +292,6 @@ pub fn deposit_block(
 pub struct StateSpec {
     /// `Deposits.buyers[addr].balance`
     pub balances: Vec<(Address, U256)>,
-    /// `Staking.sellerAgentId[addr]`
-    pub agent_ids: Vec<(Address, U256)>,
-    /// `Channels._agentStats[id].totalVolumeUsdc`
-    pub agent_volumes: Vec<(U256, U256)>,
 }
 
 pub struct StateBlock {
@@ -325,26 +319,15 @@ pub fn balance_slot(buyer: Address) -> B256 {
     )
 }
 
-pub fn agent_id_slot(seller: Address) -> B256 {
-    loop_core::mapping_slot_address(seller, STAKING_SELLER_AGENT_ID_SLOT)
-}
-
-pub fn agent_volume_slot(agent_id: U256) -> B256 {
-    loop_core::slot_offset(
-        loop_core::mapping_slot_u256(agent_id, CHANNELS_AGENT_STATS_SLOT),
-        AGENT_STATS_TOTAL_VOLUME_OFFSET,
-    )
-}
-
-/// Build a boundary block whose state trie holds the three protocol
-/// accounts, retaining storage proofs for every slot in `retain`.
+/// Build a boundary block whose state trie holds the deposits account,
+/// retaining storage proofs for every slot in `retain`.
 pub fn state_block(
     number: u64,
     timestamp: u64,
     spec: &StateSpec,
     retain: &[(Address, B256)],
 ) -> StateBlock {
-    let contracts = [DEPOSITS_ADDRESS, STAKING_ADDRESS, CHANNELS_ADDRESS];
+    let contracts = [DEPOSITS_ADDRESS];
     let mut storage: BTreeMap<Address, Vec<(B256, Vec<u8>)>> = BTreeMap::new();
     for (buyer, balance) in &spec.balances {
         if !balance.is_zero() {
@@ -354,23 +337,6 @@ pub fn state_block(
                 .push((balance_slot(*buyer), storage_leaf(*balance)));
         }
     }
-    for (seller, id) in &spec.agent_ids {
-        if !id.is_zero() {
-            storage
-                .entry(STAKING_ADDRESS)
-                .or_default()
-                .push((agent_id_slot(*seller), storage_leaf(*id)));
-        }
-    }
-    for (id, volume) in &spec.agent_volumes {
-        if !volume.is_zero() {
-            storage
-                .entry(CHANNELS_ADDRESS)
-                .or_default()
-                .push((agent_volume_slot(*id), storage_leaf(*volume)));
-        }
-    }
-
     // storage tries + retained storage proofs per contract
     let mut storage_roots: BTreeMap<Address, B256> = BTreeMap::new();
     let mut storage_proofs: BTreeMap<(Address, B256), Vec<Bytes>> = BTreeMap::new();
@@ -455,8 +421,6 @@ pub struct LoopCfg {
     pub end_balances: Vec<u128>,
     /// Return paths: each a hop list of (to, amount); from starts at seller.
     pub return_paths: Vec<Vec<(Address, u128)>>,
-    pub agent_id: u64,
-    pub agent_volume: u128,
 }
 
 impl Default for LoopCfg {
@@ -470,8 +434,6 @@ impl Default for LoopCfg {
             end_balances: vec![0; 3],
             // Σ settle = 1200 USDC; α_return 0.8 needs ≥ 960 at the funder.
             return_paths: vec![vec![(RELAY, 1_176_000_000), (FUNDER, 1_170_000_000)]],
-            agent_id: AGENT_ID,
-            agent_volume: 2_400_000_000,
         }
     }
 }
@@ -551,17 +513,11 @@ pub fn closed_loop_input(cfg: &LoopCfg) -> wash_predicate::ClosedLoopInput {
         returns.push(ReturnPath { transfers: refs });
     }
 
-    // LEDGER + stats period-end block.
+    // LEDGER period-end block.
     let mut retain_end: Vec<(Address, B256)> = Vec::new();
     for buyer in &cfg.buyers {
         retain_end.push((DEPOSITS_ADDRESS, balance_slot(*buyer)));
     }
-    retain_end.push((STAKING_ADDRESS, agent_id_slot(cfg.seller)));
-    retain_end.push((
-        CHANNELS_ADDRESS,
-        agent_volume_slot(U256::from(cfg.agent_id)),
-    ));
-
     let end_spec = StateSpec {
         balances: cfg
             .buyers
@@ -569,21 +525,8 @@ pub fn closed_loop_input(cfg: &LoopCfg) -> wash_predicate::ClosedLoopInput {
             .zip(&cfg.end_balances)
             .map(|(b, v)| (*b, U256::from(*v)))
             .collect(),
-        agent_ids: vec![(cfg.seller, U256::from(cfg.agent_id))],
-        agent_volumes: vec![(U256::from(cfg.agent_id), U256::from(cfg.agent_volume))],
-    };
-
-    let start_spec = StateSpec {
-        agent_volumes: vec![(U256::from(cfg.agent_id), U256::ZERO)],
         ..Default::default()
     };
-    let retain_start = vec![(
-        CHANNELS_ADDRESS,
-        agent_volume_slot(U256::from(cfg.agent_id)),
-    )];
-    let start_state = state_block(PERIOD_START_BLOCK - 1, 900, &start_spec, &retain_start);
-    let start_index = blocks.len();
-    blocks.push(start_state.block.clone());
     let end_state = state_block(PERIOD_END_BLOCK, 9_000, &end_spec, &retain_end);
     let end_index = blocks.len();
     blocks.push(end_state.block.clone());
@@ -596,24 +539,11 @@ pub fn closed_loop_input(cfg: &LoopCfg) -> wash_predicate::ClosedLoopInput {
         })
         .collect();
 
-    let seller_stats = SellerStatsWitness {
-        end_agent_id_read: end_state.read(end_index, STAKING_ADDRESS, agent_id_slot(cfg.seller)),
-        start_volume_read: start_state.read(
-            start_index,
-            CHANNELS_ADDRESS,
-            agent_volume_slot(U256::from(cfg.agent_id)),
-        ),
-        end_volume_read: end_state.read(
-            end_index,
-            CHANNELS_ADDRESS,
-            agent_volume_slot(U256::from(cfg.agent_id)),
-        ),
-    };
-
     wash_predicate::ClosedLoopInput {
         chain_id: wash_predicate::BASE_CHAIN_ID,
         period_start_block: PERIOD_START_BLOCK,
         period_end_block: PERIOD_END_BLOCK,
+        source_claim_id: B256::from([0x11; 32]),
         seller: cfg.seller,
         funder: cfg.funder,
         buyers: cfg.buyers.clone(),
@@ -622,7 +552,6 @@ pub fn closed_loop_input(cfg: &LoopCfg) -> wash_predicate::ClosedLoopInput {
         settlements,
         returns,
         ledgers,
-        seller_stats,
     }
 }
 
@@ -640,8 +569,6 @@ pub struct PairCfg {
     /// Pair-internal deposits: (credited member, amount); payer/signer is A.
     pub deposits: Vec<(Address, u128)>,
     pub end_balances: (u128, u128),
-    /// (agent id, agent volume) for A and B.
-    pub agents: [(u64, u128); 2],
 }
 
 impl Default for PairCfg {
@@ -651,7 +578,6 @@ impl Default for PairCfg {
             b_sells: vec![225_000_000, 225_000_000],
             deposits: vec![(PAIR_A, 500_000_000), (PAIR_B, 450_000_000)],
             end_balances: (0, 0),
-            agents: [(111, 1_000_000_000), (222, 900_000_000)],
         }
     }
 }
@@ -710,55 +636,18 @@ pub fn reciprocal_input(cfg: &PairCfg) -> wash_predicate::ReciprocalInput {
         deposit_number += 1;
     }
 
-    let mut retain_end = vec![
+    let retain_end = vec![
         (DEPOSITS_ADDRESS, balance_slot(PAIR_A)),
         (DEPOSITS_ADDRESS, balance_slot(PAIR_B)),
     ];
-    retain_end.push((STAKING_ADDRESS, agent_id_slot(PAIR_A)));
-    retain_end.push((STAKING_ADDRESS, agent_id_slot(PAIR_B)));
-    retain_end.push((
-        CHANNELS_ADDRESS,
-        agent_volume_slot(U256::from(cfg.agents[0].0)),
-    ));
-    retain_end.push((
-        CHANNELS_ADDRESS,
-        agent_volume_slot(U256::from(cfg.agents[1].0)),
-    ));
 
     let end_spec = StateSpec {
         balances: vec![
             (PAIR_A, U256::from(cfg.end_balances.0)),
             (PAIR_B, U256::from(cfg.end_balances.1)),
         ],
-        agent_ids: vec![
-            (PAIR_A, U256::from(cfg.agents[0].0)),
-            (PAIR_B, U256::from(cfg.agents[1].0)),
-        ],
-        agent_volumes: vec![
-            (U256::from(cfg.agents[0].0), U256::from(cfg.agents[0].1)),
-            (U256::from(cfg.agents[1].0), U256::from(cfg.agents[1].1)),
-        ],
-    };
-    let start_spec = StateSpec {
-        agent_volumes: vec![
-            (U256::from(cfg.agents[0].0), U256::ZERO),
-            (U256::from(cfg.agents[1].0), U256::ZERO),
-        ],
         ..Default::default()
     };
-    let retain_start = vec![
-        (
-            CHANNELS_ADDRESS,
-            agent_volume_slot(U256::from(cfg.agents[0].0)),
-        ),
-        (
-            CHANNELS_ADDRESS,
-            agent_volume_slot(U256::from(cfg.agents[1].0)),
-        ),
-    ];
-    let start_state = state_block(PERIOD_START_BLOCK - 1, 900, &start_spec, &retain_start);
-    let start_index = blocks.len();
-    blocks.push(start_state.block.clone());
     let end_state = state_block(PERIOD_END_BLOCK, 9_000, &end_spec, &retain_end);
     let end_index = blocks.len();
     blocks.push(end_state.block.clone());
@@ -766,24 +655,11 @@ pub fn reciprocal_input(cfg: &PairCfg) -> wash_predicate::ReciprocalInput {
     let ledger = |member: Address| BuyerLedger {
         end: end_state.read(end_index, DEPOSITS_ADDRESS, balance_slot(member)),
     };
-    let stats = |member: Address, agent: (u64, u128)| SellerStatsWitness {
-        end_agent_id_read: end_state.read(end_index, STAKING_ADDRESS, agent_id_slot(member)),
-        start_volume_read: start_state.read(
-            start_index,
-            CHANNELS_ADDRESS,
-            agent_volume_slot(U256::from(agent.0)),
-        ),
-        end_volume_read: end_state.read(
-            end_index,
-            CHANNELS_ADDRESS,
-            agent_volume_slot(U256::from(agent.0)),
-        ),
-    };
-
     wash_predicate::ReciprocalInput {
         chain_id: wash_predicate::BASE_CHAIN_ID,
         period_start_block: PERIOD_START_BLOCK,
         period_end_block: PERIOD_END_BLOCK,
+        source_claim_id: B256::from([0x22; 32]),
         address_a: PAIR_A,
         address_b: PAIR_B,
         blocks,
@@ -791,7 +667,5 @@ pub fn reciprocal_input(cfg: &PairCfg) -> wash_predicate::ReciprocalInput {
         internal_deposits,
         ledger_a: ledger(PAIR_A),
         ledger_b: ledger(PAIR_B),
-        stats_a: stats(PAIR_A, cfg.agents[0]),
-        stats_b: stats(PAIR_B, cfg.agents[1]),
     }
 }

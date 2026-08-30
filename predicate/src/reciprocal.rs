@@ -11,13 +11,11 @@ use crate::{
     authenticate_blocks, canonical_evidence_hash, ensure_event_in_period, meets_ratio,
     reciprocal_claim_id,
     resolver::{ChainResolver, LogKey},
-    stats::verify_subject_stats,
-    validate_chain, BuyerLedger, EvidenceBlock, LogRef, SellerStatsWitness, SubjectRecord,
-    WashJournal, ALPHA_SELF_BPS, BASE_CHAIN_ID, BETA_RECIPROCAL_BPS, BUYER_ACCOUNT_BALANCE_OFFSET,
-    CHANNELS_SOURCE_ID, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT, EMISSIONS_GENESIS, EPOCH_DURATION,
-    RECIPROCAL_PREDICATE_ID,
+    validate_chain, BuyerLedger, EvidenceBlock, LogRef, SubjectRecord, WashJournal, ALPHA_SELF_BPS,
+    BASE_CHAIN_ID, BETA_RECIPROCAL_BPS, BUYER_ACCOUNT_BALANCE_OFFSET, DEPOSITS_ADDRESS,
+    DEPOSITS_BUYERS_SLOT, RECIPROCAL_PREDICATE_ID,
 };
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{Address, B256, U256};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -39,6 +37,7 @@ pub struct ReciprocalInput {
     pub chain_id: u64,
     pub period_start_block: u64,
     pub period_end_block: u64,
+    pub source_claim_id: B256,
     /// Normalized: `address_a < address_b`, both nonzero.
     pub address_a: Address,
     pub address_b: Address,
@@ -49,8 +48,6 @@ pub struct ReciprocalInput {
     pub internal_deposits: Vec<PairDepositEvidence>,
     pub ledger_a: BuyerLedger,
     pub ledger_b: BuyerLedger,
-    pub stats_a: SellerStatsWitness,
-    pub stats_b: SellerStatsWitness,
 }
 
 pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String> {
@@ -176,37 +173,12 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String>
         return Err("reciprocal: pair volume financed by external capital".into());
     }
 
-    // ── Denominators for both subjects ────────────────────────────────────
-    let (agent_a, total_a) = verify_subject_stats(
-        &resolver,
-        input.address_a,
-        &input.stats_a,
-        input.period_start_block,
-        input.period_end_block,
-    )?;
-    let (agent_b, total_b) = verify_subject_stats(
-        &resolver,
-        input.address_b,
-        &input.stats_b,
-        input.period_start_block,
-        input.period_end_block,
-    )?;
-    let end_timestamp = input
-        .blocks
-        .iter()
-        .find(|block| block.header.number == input.period_end_block)
-        .ok_or("reciprocal: missing period end block")?
-        .header
-        .timestamp;
-    let offense_epoch = end_timestamp.saturating_sub(EMISSIONS_GENESIS) / EPOCH_DURATION;
-
     Ok(WashJournal {
         predicate_id: RECIPROCAL_PREDICATE_ID,
-        source_id: CHANNELS_SOURCE_ID,
         chain_id: BASE_CHAIN_ID,
         period_start_block: input.period_start_block,
         period_end_block: input.period_end_block,
-        offense_epoch,
+        source_claim_id: input.source_claim_id,
         claim_id: reciprocal_claim_id(
             input.period_start_block,
             input.period_end_block,
@@ -217,15 +189,11 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String>
         subjects: vec![
             SubjectRecord {
                 subject: input.address_a,
-                agent_id: agent_a,
                 wash_volume: sells_a,
-                total_volume: total_a,
             },
             SubjectRecord {
                 subject: input.address_b,
-                agent_id: agent_b,
                 wash_volume: sells_b,
-                total_volume: total_b,
             },
         ],
         block_refs,
