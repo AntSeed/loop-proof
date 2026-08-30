@@ -24,10 +24,16 @@ fn valid_loop_produces_the_journal() {
     assert_eq!(journal.subjects.len(), 1);
     assert_eq!(journal.subjects[0].subject, SELLER);
     assert_eq!(journal.subjects[0].wash_volume, 1_200_000_000);
-    assert_eq!(journal.subjects[0].settled_volume, 2_400_000_000);
+    assert_eq!(
+        journal.subjects[0].agent_id,
+        alloy_primitives::U256::from_limbs([AGENT_ID, 0, 0, 0])
+    );
+    assert_eq!(journal.subjects[0].total_volume, 2_400_000_000);
     assert_eq!(
         journal.claim_id,
         closed_loop_claim_id(
+            PERIOD_START_BLOCK,
+            PERIOD_END_BLOCK,
             SELLER,
             FUNDER,
             cohort_hash(&BUYERS),
@@ -44,7 +50,10 @@ fn valid_loop_produces_the_journal() {
 
     // ABI round trip
     let bytes = journal.abi_encode();
-    assert_eq!(wash_predicate::WashJournal::abi_decode(&bytes).unwrap(), journal);
+    assert_eq!(
+        wash_predicate::WashJournal::abi_decode(&bytes).unwrap(),
+        journal
+    );
 }
 
 #[test]
@@ -85,7 +94,9 @@ fn duplicate_evidence_is_rejected() {
         FundingKind::Usdc { transfer } => transfer,
         _ => unreachable!(),
     };
-    reuse.returns.push(ReturnPath { transfers: vec![funding_ref] });
+    reuse.returns.push(ReturnPath {
+        transfers: vec![funding_ref],
+    });
     assert_rejects(&reuse, "duplicate");
 }
 
@@ -208,7 +219,10 @@ fn return_hop_retention_boundary_is_exact() {
     // …one unit less does not.
     let mut cfg = LoopCfg::default();
     cfg.return_paths = vec![vec![(RELAY, 1_300_000_000), (FUNDER, 363_999_999)]];
-    assert_rejects(&closed_loop_input(&cfg), "retains more than the permitted share");
+    assert_rejects(
+        &closed_loop_input(&cfg),
+        "retains more than the permitted share",
+    );
 }
 
 #[test]
@@ -244,7 +258,10 @@ fn self_funded_loop_needs_no_return_but_rejects_one() {
     cfg.seller = FUNDER;
     cfg.funder = FUNDER;
     cfg.return_paths = vec![vec![(RELAY, 1_000_000_000)]];
-    assert_rejects(&closed_loop_input(&cfg), "self-funded loop must not carry return paths");
+    assert_rejects(
+        &closed_loop_input(&cfg),
+        "self-funded loop must not carry return paths",
+    );
 }
 
 #[test]
@@ -276,7 +293,7 @@ fn a_single_funded_buyer_is_already_a_loop() {
 #[test]
 fn evidence_outside_the_period_is_rejected() {
     let mut input = closed_loop_input(&LoopCfg::default());
-    input.blocks[0].header.number = PERIOD_START_BLOCK - 1;
+    input.blocks[0].header.number = PERIOD_START_BLOCK - 2;
     assert_rejects(&input, "outside the witness window");
 }
 
@@ -301,20 +318,42 @@ fn funding_attribution_requires_the_recovered_signer() {
 fn protocol_deposit_funding_is_accepted() {
     let mut input = closed_loop_input(&LoopCfg::default());
     // Replace buyer 0's direct transfer with a protocol deposit.
-    let block = deposit_block(PERIOD_START_BLOCK, 1_000, FUNDER, BUYERS[0], 400_000_000, true);
+    let block = deposit_block(
+        PERIOD_START_BLOCK,
+        1_000,
+        FUNDER,
+        BUYERS[0],
+        400_000_000,
+        true,
+    );
     input.blocks[0] = block;
     input.fundings[0] = FundingEvidence {
         buyer: BUYERS[0],
         kind: FundingKind::ProtocolDeposit {
-            transfer: LogRef { block: 0, receipt: 0, log: 0 },
-            deposited: LogRef { block: 0, receipt: 0, log: 1 },
+            transfer: LogRef {
+                block: 0,
+                receipt: 0,
+                log: 0,
+            },
+            deposited: LogRef {
+                block: 0,
+                receipt: 0,
+                log: 1,
+            },
         },
     };
     verify_closed_loop(&input).unwrap();
 
     // Deposited log naming a different buyer is rejected.
     let mut wrong = input.clone();
-    wrong.blocks[0] = deposit_block(PERIOD_START_BLOCK, 1_000, FUNDER, BUYERS[1], 400_000_000, true);
+    wrong.blocks[0] = deposit_block(
+        PERIOD_START_BLOCK,
+        1_000,
+        FUNDER,
+        BUYERS[1],
+        400_000_000,
+        true,
+    );
     assert_rejects(&wrong, "invalid protocol-deposit funding");
 }
 
@@ -336,8 +375,14 @@ fn native_funding_never_counts_toward_usdc_coverage() {
     input.fundings[0] = FundingEvidence {
         buyer: SELLER,
         kind: FundingKind::Native {
-            transaction: TransactionRef { block: 0, transaction: 0 },
-            receipt: ReceiptRef { block: 0, receipt: 0 },
+            transaction: TransactionRef {
+                block: 0,
+                transaction: 0,
+            },
+            receipt: ReceiptRef {
+                block: 0,
+                receipt: 0,
+            },
         },
     };
     // The evidence authenticates, but a USDC-settled loop cannot reach the
@@ -346,28 +391,18 @@ fn native_funding_never_counts_toward_usdc_coverage() {
 }
 
 #[test]
-fn unstaked_subject_commits_a_zero_denominator() {
+fn unstaked_subject_is_rejected() {
     let mut cfg = LoopCfg::default();
     cfg.agent_id = 0;
     cfg.agent_volume = 0;
-    let journal = verify_closed_loop(&closed_loop_input(&cfg)).unwrap();
-    assert_eq!(journal.subjects[0].settled_volume, 0);
+    assert_rejects(&closed_loop_input(&cfg), "no agent id");
 }
 
 #[test]
 fn stats_witness_must_match_the_proven_agent_id() {
-    // Supplying a stats witness for an agent-less subject is rejected.
-    let mut cfg = LoopCfg::default();
-    cfg.agent_id = 0;
-    cfg.agent_volume = 0;
-    let mut input = closed_loop_input(&cfg);
-    input.seller_stats.stats_read = Some(input.seller_stats.agent_id_read.clone());
-    assert_rejects(&input, "stats witness supplied for an agent-less subject");
-
-    // Omitting it for a staked subject is rejected too.
     let mut input = closed_loop_input(&LoopCfg::default());
-    input.seller_stats.stats_read = None;
-    assert_rejects(&input, "settled-volume witness required");
+    input.seller_stats.end_volume_read = input.seller_stats.start_volume_read.clone();
+    assert_rejects(&input, "rule requires block");
 }
 
 #[test]

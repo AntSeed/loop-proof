@@ -5,7 +5,7 @@ import { basename } from "node:path";
 
 const USD_SCALE = 1_000_000n;
 
-export function buildCostQuote({ proofPlan, p0UnitUsd, provider, expiresAt, now = new Date() }) {
+export function buildCostQuote({ proofPlan, p0UnitUsd, aggregateUnitUsd, provider, expiresAt, now = new Date() }) {
   if (proofPlan?.version !== 2 || proofPlan.kind !== "antseed-wash-trading-proof-plan" || proofPlan.chainId !== 8_453
       || !Array.isArray(proofPlan.claims) || proofPlan.claims.length === 0 || proofPlan.claimCount !== proofPlan.claims.length) {
     throw new Error("proof plan must contain a nonempty approved Base claim set");
@@ -13,8 +13,9 @@ export function buildCostQuote({ proofPlan, p0UnitUsd, provider, expiresAt, now 
   if (typeof provider !== "string" || provider.length === 0) throw new Error("cost quote provider is required");
   const expiration = new Date(expiresAt);
   if (!Number.isFinite(expiration.getTime()) || expiration <= now) throw new Error("cost quote expiration must be in the future");
-  const counts = { p0Claims: proofPlan.claims.length };
+  const counts = { p0Claims: proofPlan.claims.length, aggregates: 1 };
   const p0ClaimUsd = parseUsd(p0UnitUsd, "P0 unit cost");
+  const aggregateUsd = parseUsd(aggregateUnitUsd, "aggregate unit cost");
   const body = {
     version: 4,
     kind: "antseed-sp1-proof-cost-quote",
@@ -24,8 +25,8 @@ export function buildCostQuote({ proofPlan, p0UnitUsd, provider, expiresAt, now 
     generatedAt: now.toISOString(),
     expiresAt: expiration.toISOString(),
     counts,
-    unitMaxCostUsd: { p0ClaimUsd: formatUsd(p0ClaimUsd) },
-    aggregateMaxCostUsd: formatUsd(p0ClaimUsd * BigInt(counts.p0Claims)),
+    unitMaxCostUsd: { p0ClaimUsd: formatUsd(p0ClaimUsd), aggregateUsd: formatUsd(aggregateUsd) },
+    aggregateMaxCostUsd: formatUsd(p0ClaimUsd * BigInt(counts.p0Claims) + aggregateUsd),
     sources: { proofPlanSha256: sha256(canonicalJson(proofPlan)) },
   };
   return { body, digest: quoteDigest(body) };
@@ -41,7 +42,8 @@ export function approveCostQuote(quote, approvedDigest, expectedCounts, now = ne
   for (const [key, count] of Object.entries(expectedCounts)) {
     if (quote.body.counts?.[key] !== count) throw new Error(`proving cost quote ${key} mismatch`);
   }
-  const expectedTotal = parseUsd(quote.body.unitMaxCostUsd.p0ClaimUsd, "P0 unit cost") * BigInt(quote.body.counts.p0Claims);
+  const expectedTotal = parseUsd(quote.body.unitMaxCostUsd.p0ClaimUsd, "P0 unit cost") * BigInt(quote.body.counts.p0Claims)
+    + parseUsd(quote.body.unitMaxCostUsd.aggregateUsd, "aggregate unit cost") * BigInt(quote.body.counts.aggregates);
   if (formatUsd(expectedTotal) !== quote.body.aggregateMaxCostUsd) throw new Error("proving cost quote aggregate is invalid");
   return quote;
 }
@@ -67,12 +69,13 @@ function canonicalJson(value) {
 async function main() {
   const args = process.argv.slice(2);
   const value = (flag) => { const index = args.indexOf(flag); return index < 0 ? null : args[index + 1]; };
-  const required = ["--proof-plan", "--p0-unit-usd", "--provider", "--expires-at", "--out"];
+  const required = ["--proof-plan", "--p0-unit-usd", "--aggregate-unit-usd", "--provider", "--expires-at", "--out"];
   for (const flag of required) if (!value(flag)) throw new Error(`missing ${flag}`);
   const proofPlan = JSON.parse(await readFile(value("--proof-plan"), "utf8"));
   const quote = buildCostQuote({
     proofPlan,
     p0UnitUsd: value("--p0-unit-usd"),
+    aggregateUnitUsd: value("--aggregate-unit-usd"),
     provider: value("--provider"),
     expiresAt: value("--expires-at"),
   });

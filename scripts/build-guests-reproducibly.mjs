@@ -21,7 +21,7 @@ for (const label of ["a", "b"]) {
   await exec("rsync", ["-a", "--delete", "--exclude", ".git", "--exclude", "target", "--exclude", "program/*/target", `${process.cwd()}/`, `${source}/`]);
   await run(join(source, "scripts/build-guests.sh"), [], source);
   const guests = {};
-  for (const guest of ["closed-loop", "reciprocal"]) {
+  for (const guest of ["closed-loop", "reciprocal", "aggregator"]) {
     const elf = join(source, `program/${guest}/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/${guest}-guest`);
     const bytes = await readFile(elf);
     const { stdout } = await exec("cargo", ["run", "-q", "-p", "loop-host", "--features", "sp1", "--", "vkey", "--elf", elf], { cwd: source });
@@ -31,7 +31,7 @@ for (const label of ["a", "b"]) {
   }
   builds.push({ buildId: label, source, guests });
 }
-for (const guest of ["closed-loop", "reciprocal"]) {
+for (const guest of ["closed-loop", "reciprocal", "aggregator"]) {
   if (JSON.stringify(builds[0].guests[guest]) !== JSON.stringify(builds[1].guests[guest])) throw new Error(`${guest} guest build is not reproducible`);
 }
 const attestation = {

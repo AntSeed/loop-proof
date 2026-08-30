@@ -13,9 +13,9 @@ use crate::{
     resolver::{ChainResolver, LogKey},
     stats::verify_subject_stats,
     validate_chain, BuyerLedger, EvidenceBlock, LogRef, SellerStatsWitness, SubjectRecord,
-    WashJournal, ALPHA_SELF_BPS, BASE_CHAIN_ID, BETA_RECIPROCAL_BPS,
-    BUYER_ACCOUNT_BALANCE_OFFSET, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT, PERIOD_END_BLOCK,
-    PERIOD_START_BLOCK, RECIPROCAL_PREDICATE_ID,
+    WashJournal, ALPHA_SELF_BPS, BASE_CHAIN_ID, BETA_RECIPROCAL_BPS, BUYER_ACCOUNT_BALANCE_OFFSET,
+    CHANNELS_SOURCE_ID, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT, EMISSIONS_GENESIS, EPOCH_DURATION,
+    RECIPROCAL_PREDICATE_ID,
 };
 use alloy_primitives::{Address, U256};
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,8 @@ pub struct PairDepositEvidence {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReciprocalInput {
     pub chain_id: u64,
+    pub period_start_block: u64,
+    pub period_end_block: u64,
     /// Normalized: `address_a < address_b`, both nonzero.
     pub address_a: Address,
     pub address_b: Address,
@@ -53,14 +55,23 @@ pub struct ReciprocalInput {
 
 pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String> {
     validate_chain(input.chain_id)?;
+    if input.period_start_block == 0 || input.period_start_block > input.period_end_block {
+        return Err("reciprocal: invalid period".into());
+    }
     if input.address_a == Address::ZERO
         || input.address_b == Address::ZERO
         || input.address_a >= input.address_b
     {
         return Err("reciprocal: pair must be nonzero and normalized".into());
     }
-    let block_refs = authenticate_blocks(&input.blocks)?;
-    let resolver = ChainResolver { blocks: &input.blocks };
+    let block_refs = authenticate_blocks(
+        &input.blocks,
+        input.period_start_block,
+        input.period_end_block,
+    )?;
+    let resolver = ChainResolver {
+        blocks: &input.blocks,
+    };
     let mut used_logs: BTreeSet<LogKey> = BTreeSet::new();
 
     // ── Measurement: settled volume in each direction ─────────────────────
@@ -74,7 +85,12 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String>
             return Err("reciprocal: duplicate settlement evidence".into());
         }
         let (_, buyer, seller, amount, block) = resolver.settlement(*reference)?;
-        ensure_event_in_period(block, "reciprocal settlement")?;
+        ensure_event_in_period(
+            block,
+            input.period_start_block,
+            input.period_end_block,
+            "reciprocal settlement",
+        )?;
         if amount == 0 {
             return Err("reciprocal: zero settlement".into());
         }
@@ -114,7 +130,12 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String>
             return Err("reciprocal: duplicate deposit evidence".into());
         }
         let (from, to, transferred, block) = resolver.usdc_transfer(evidence.transfer)?;
-        ensure_event_in_period(block, "pair deposit")?;
+        ensure_event_in_period(
+            block,
+            input.period_start_block,
+            input.period_end_block,
+            "pair deposit",
+        )?;
         let (deposit_buyer, deposited_amount, _) = resolver.protocol_deposit(evidence.deposited)?;
         if to != DEPOSITS_ADDRESS
             || deposit_buyer != evidence.member
@@ -127,8 +148,9 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String>
         // Attribution by signer recovery: the deposit transaction must be
         // sent by the wallet whose USDC financed it.
         resolver.require_signer(from, evidence.transfer)?;
-        internal_total =
-            internal_total.checked_add(deposited_amount).ok_or("reciprocal: overflow")?;
+        internal_total = internal_total
+            .checked_add(deposited_amount)
+            .ok_or("reciprocal: overflow")?;
     }
 
     // ── Self-financing (LEDGER): external inflow ≤ (1 − α_self) · total ───
@@ -143,7 +165,7 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String>
             loop_core::mapping_slot_address(member, DEPOSITS_BUYERS_SLOT),
             BUYER_ACCOUNT_BALANCE_OFFSET,
         );
-        resolver.storage_value(&ledger.end, PERIOD_END_BLOCK, DEPOSITS_ADDRESS, slot)
+        resolver.storage_value(&ledger.end, input.period_end_block, DEPOSITS_ADDRESS, slot)
     };
     let end_a = balance(&input.ledger_a, input.address_a)?;
     let end_b = balance(&input.ledger_b, input.address_b)?;
@@ -155,15 +177,39 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String>
     }
 
     // ── Denominators for both subjects ────────────────────────────────────
-    let settled_a = verify_subject_stats(&resolver, input.address_a, &input.stats_a)?;
-    let settled_b = verify_subject_stats(&resolver, input.address_b, &input.stats_b)?;
+    let (agent_a, total_a) = verify_subject_stats(
+        &resolver,
+        input.address_a,
+        &input.stats_a,
+        input.period_start_block,
+        input.period_end_block,
+    )?;
+    let (agent_b, total_b) = verify_subject_stats(
+        &resolver,
+        input.address_b,
+        &input.stats_b,
+        input.period_start_block,
+        input.period_end_block,
+    )?;
+    let end_timestamp = input
+        .blocks
+        .iter()
+        .find(|block| block.header.number == input.period_end_block)
+        .ok_or("reciprocal: missing period end block")?
+        .header
+        .timestamp;
+    let offense_epoch = end_timestamp.saturating_sub(EMISSIONS_GENESIS) / EPOCH_DURATION;
 
     Ok(WashJournal {
         predicate_id: RECIPROCAL_PREDICATE_ID,
+        source_id: CHANNELS_SOURCE_ID,
         chain_id: BASE_CHAIN_ID,
-        period_start_block: PERIOD_START_BLOCK,
-        period_end_block: PERIOD_END_BLOCK,
+        period_start_block: input.period_start_block,
+        period_end_block: input.period_end_block,
+        offense_epoch,
         claim_id: reciprocal_claim_id(
+            input.period_start_block,
+            input.period_end_block,
             input.address_a,
             input.address_b,
             canonical_evidence_hash(input)?,
@@ -171,13 +217,15 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String>
         subjects: vec![
             SubjectRecord {
                 subject: input.address_a,
+                agent_id: agent_a,
                 wash_volume: sells_a,
-                settled_volume: settled_a,
+                total_volume: total_a,
             },
             SubjectRecord {
                 subject: input.address_b,
+                agent_id: agent_b,
                 wash_volume: sells_b,
-                settled_volume: settled_b,
+                total_volume: total_b,
             },
         ],
         block_refs,

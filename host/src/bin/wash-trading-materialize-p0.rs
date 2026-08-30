@@ -11,11 +11,11 @@ use std::{
     path::PathBuf,
 };
 use wash_predicate::{
-    reciprocal::PairDepositEvidence, BuyerLedger, ClosedLoopInput, EvidenceBlock,
-    FundingEvidence, FundingKind, LogRef, ReceiptRef, ReciprocalInput, ReturnPath,
-    SellerStatsWitness, StateRead, TransactionRef, BASE_CHAIN_ID, BUYER_ACCOUNT_BALANCE_OFFSET,
-    CHANNELS_ADDRESS, CHANNELS_AGENT_STATS_SLOT, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT,
-    PERIOD_END_BLOCK, STAKING_ADDRESS, STAKING_SELLER_AGENT_ID_SLOT,
+    reciprocal::PairDepositEvidence, BuyerLedger, ClosedLoopInput, EvidenceBlock, FundingEvidence,
+    FundingKind, LogRef, ReceiptRef, ReciprocalInput, ReturnPath, SellerStatsWitness, StateRead,
+    TransactionRef, BASE_CHAIN_ID, BUYER_ACCOUNT_BALANCE_OFFSET, CHANNELS_ADDRESS,
+    CHANNELS_AGENT_STATS_SLOT, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT, STAKING_ADDRESS,
+    STAKING_SELLER_AGENT_ID_SLOT,
 };
 
 #[derive(Debug, Deserialize)]
@@ -24,6 +24,8 @@ struct ProofPlan {
     version: u64,
     kind: String,
     chain_id: u64,
+    start_block: u64,
+    end_block_exclusive: u64,
     claims: Vec<PlannedClaim>,
 }
 
@@ -97,20 +99,44 @@ fn main() -> Result<()> {
         .iter()
         .find(|claim| claim.claim_id.eq_ignore_ascii_case(&claim_id))
         .with_context(|| format!("claim {claim_id} not found"))?;
-    if !matches!(claim.claim_type.as_str(), "P0_CLOSED_LOOP" | "P0_RECIPROCAL") {
+    if !matches!(
+        claim.claim_type.as_str(),
+        "P0_CLOSED_LOOP" | "P0_RECIPROCAL"
+    ) {
         bail!("claim {} is not a supported P0 claim", claim.claim_id);
     }
 
     let client = Client::new(&rpc_endpoints()?);
-    let materialized = materialize_evidence(&client, &claim.selected_evidence)?;
+    if plan.start_block == 0 || plan.start_block >= plan.end_block_exclusive {
+        bail!("invalid proof period");
+    }
+    let period_end_block = plan.end_block_exclusive - 1;
+    let materialized = materialize_evidence(
+        &client,
+        &claim.selected_evidence,
+        plan.start_block,
+        period_end_block,
+    )?;
     let (input, journal) = match claim.claim_type.as_str() {
         "P0_CLOSED_LOOP" => {
-            let input = build_closed_loop(&client, claim, &materialized)?;
+            let input = build_closed_loop(
+                &client,
+                claim,
+                &materialized,
+                plan.start_block,
+                period_end_block,
+            )?;
             let journal = wash_predicate::verify_closed_loop(&input).map_err(anyhow::Error::msg)?;
             (serde_json::to_value(input)?, journal)
         }
         "P0_RECIPROCAL" => {
-            let input = build_reciprocal(&client, claim, &materialized)?;
+            let input = build_reciprocal(
+                &client,
+                claim,
+                &materialized,
+                plan.start_block,
+                period_end_block,
+            )?;
             let journal = wash_predicate::verify_reciprocal(&input).map_err(anyhow::Error::msg)?;
             (serde_json::to_value(input)?, journal)
         }
@@ -131,10 +157,16 @@ fn main() -> Result<()> {
 fn materialize_evidence(
     client: &Client,
     evidence: &[PlannedEvidence],
+    period_start_block: u64,
+    period_end_block: u64,
 ) -> Result<MaterializedEvidence> {
-    let atomic = evidence.iter().flat_map(atomic_evidence).collect::<Vec<_>>();
+    let atomic = evidence
+        .iter()
+        .flat_map(atomic_evidence)
+        .collect::<Vec<_>>();
     let mut targets = BTreeMap::<u64, BlockTargets>::new();
-    targets.entry(PERIOD_END_BLOCK).or_default();
+    targets.entry(period_start_block - 1).or_default();
+    targets.entry(period_end_block).or_default();
     for entry in &atomic {
         let block = required(entry.block_number, "block number", entry)?;
         let transaction = required(entry.transaction_index, "transaction index", entry)?;
@@ -150,11 +182,16 @@ fn materialize_evidence(
     let mut receipt_positions = BTreeMap::new();
     let mut transaction_positions = BTreeMap::new();
     let mut log_positions = BTreeMap::new();
-    let targets = targets.into_iter().map(|(block_number, block_targets)| (
-        block_number,
-        block_targets.receipts.into_iter().collect::<Vec<_>>(),
-        block_targets.transactions.into_iter().collect::<Vec<_>>(),
-    )).collect::<Vec<_>>();
+    let targets = targets
+        .into_iter()
+        .map(|(block_number, block_targets)| {
+            (
+                block_number,
+                block_targets.receipts.into_iter().collect::<Vec<_>>(),
+                block_targets.transactions.into_iter().collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
     let concurrency = env::var("LOOP_RPC_CONCURRENCY")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -187,6 +224,8 @@ fn build_closed_loop(
     client: &Client,
     claim: &PlannedClaim,
     materialized: &MaterializedEvidence,
+    period_start_block: u64,
+    period_end_block: u64,
 ) -> Result<ClosedLoopInput> {
     if claim.subjects.len() != 1 {
         bail!("closed-loop plan must have exactly one subject");
@@ -195,13 +234,21 @@ fn build_closed_loop(
     let funding_entries = claim
         .selected_evidence
         .iter()
-        .filter(|entry| matches!(entry.evidence_type.as_str(), "USDC_FUNDING" | "NATIVE_FUNDING"))
+        .filter(|entry| {
+            matches!(
+                entry.evidence_type.as_str(),
+                "USDC_FUNDING" | "NATIVE_FUNDING"
+            )
+        })
         .collect::<Vec<_>>();
     let funder = funding_entries
         .first()
         .and_then(|entry| entry.funder)
         .context("closed-loop plan has no attributed funding")?;
-    if funding_entries.iter().any(|entry| entry.funder != Some(funder)) {
+    if funding_entries
+        .iter()
+        .any(|entry| entry.funder != Some(funder))
+    {
         bail!("closed-loop plan mixes funders");
     }
 
@@ -221,17 +268,31 @@ fn build_closed_loop(
         .selected_evidence
         .iter()
         .filter(|entry| entry.evidence_type == "SETTLEMENT")
-        .map(|entry| log_ref(entry, required(entry.log_index, "settlement log index", entry)?, materialized))
+        .map(|entry| {
+            log_ref(
+                entry,
+                required(entry.log_index, "settlement log index", entry)?,
+                materialized,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     let returns = build_return_paths(claim, seller, funder, materialized)?;
     let ledgers = buyers
         .iter()
-        .map(|buyer| buyer_ledger(client, materialized, *buyer))
+        .map(|buyer| buyer_ledger(client, materialized, *buyer, period_end_block))
         .collect::<Result<Vec<_>>>()?;
-    let seller_stats = seller_stats(client, materialized, seller)?;
+    let seller_stats = seller_stats(
+        client,
+        materialized,
+        seller,
+        period_start_block,
+        period_end_block,
+    )?;
 
     Ok(ClosedLoopInput {
         chain_id: BASE_CHAIN_ID,
+        period_start_block,
+        period_end_block,
         seller,
         funder,
         buyers,
@@ -248,6 +309,8 @@ fn build_reciprocal(
     client: &Client,
     claim: &PlannedClaim,
     materialized: &MaterializedEvidence,
+    period_start_block: u64,
+    period_end_block: u64,
 ) -> Result<ReciprocalInput> {
     if claim.subjects.len() != 2 {
         bail!("reciprocal plan must have exactly two subjects");
@@ -261,7 +324,13 @@ fn build_reciprocal(
         .selected_evidence
         .iter()
         .filter(|entry| entry.evidence_type == "RECIPROCAL_SETTLEMENT")
-        .map(|entry| log_ref(entry, required(entry.log_index, "reciprocal log index", entry)?, materialized))
+        .map(|entry| {
+            log_ref(
+                entry,
+                required(entry.log_index, "reciprocal log index", entry)?,
+                materialized,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     let internal_deposits = claim
         .selected_evidence
@@ -286,15 +355,29 @@ fn build_reciprocal(
 
     Ok(ReciprocalInput {
         chain_id: BASE_CHAIN_ID,
+        period_start_block,
+        period_end_block,
         address_a: subjects[0],
         address_b: subjects[1],
         blocks: materialized.blocks.clone(),
         settlements,
         internal_deposits,
-        ledger_a: buyer_ledger(client, materialized, subjects[0])?,
-        ledger_b: buyer_ledger(client, materialized, subjects[1])?,
-        stats_a: seller_stats(client, materialized, subjects[0])?,
-        stats_b: seller_stats(client, materialized, subjects[1])?,
+        ledger_a: buyer_ledger(client, materialized, subjects[0], period_end_block)?,
+        ledger_b: buyer_ledger(client, materialized, subjects[1], period_end_block)?,
+        stats_a: seller_stats(
+            client,
+            materialized,
+            subjects[0],
+            period_start_block,
+            period_end_block,
+        )?,
+        stats_b: seller_stats(
+            client,
+            materialized,
+            subjects[1],
+            period_start_block,
+            period_end_block,
+        )?,
     })
 }
 
@@ -336,11 +419,12 @@ fn build_return_paths(
     materialized: &MaterializedEvidence,
 ) -> Result<Vec<ReturnPath>> {
     if seller == funder {
-        if claim
-            .selected_evidence
-            .iter()
-            .any(|entry| matches!(entry.evidence_type.as_str(), "DIRECT_SELLER_FUNDER" | "DIRECT_SELLER_BUYER" | "RELAY_PATH"))
-        {
+        if claim.selected_evidence.iter().any(|entry| {
+            matches!(
+                entry.evidence_type.as_str(),
+                "DIRECT_SELLER_FUNDER" | "DIRECT_SELLER_BUYER" | "RELAY_PATH"
+            )
+        }) {
             bail!("self-funded plan must not include return evidence");
         }
         return Ok(Vec::new());
@@ -387,6 +471,7 @@ fn buyer_ledger(
     client: &Client,
     materialized: &MaterializedEvidence,
     buyer: Address,
+    period_end_block: u64,
 ) -> Result<BuyerLedger> {
     let slot = loop_core::slot_offset(
         loop_core::mapping_slot_address(buyer, DEPOSITS_BUYERS_SLOT),
@@ -396,7 +481,7 @@ fn buyer_ledger(
         end: state_read(
             client,
             materialized,
-            PERIOD_END_BLOCK,
+            period_end_block,
             DEPOSITS_ADDRESS,
             slot,
         )?
@@ -408,34 +493,45 @@ fn seller_stats(
     client: &Client,
     materialized: &MaterializedEvidence,
     seller: Address,
+    period_start_block: u64,
+    period_end_block: u64,
 ) -> Result<SellerStatsWitness> {
     let agent_slot = loop_core::mapping_slot_address(seller, STAKING_SELLER_AGENT_ID_SLOT);
-    let (agent_id_read, agent_id) = state_read(
+    let (end_agent_id_read, agent_id) = state_read(
         client,
         materialized,
-        PERIOD_END_BLOCK,
+        period_end_block,
         STAKING_ADDRESS,
         agent_slot,
     )?;
-    let stats_read = if agent_id.is_zero() {
-        None
-    } else {
-        let volume_slot = loop_core::slot_offset(
-            loop_core::mapping_slot_u256(agent_id, CHANNELS_AGENT_STATS_SLOT),
-            wash_predicate::AGENT_STATS_TOTAL_VOLUME_OFFSET,
-        );
-        Some(
-            state_read(
-                client,
-                materialized,
-                PERIOD_END_BLOCK,
-                CHANNELS_ADDRESS,
-                volume_slot,
-            )?
-            .0,
-        )
-    };
-    Ok(SellerStatsWitness { agent_id_read, stats_read })
+    if agent_id.is_zero() {
+        bail!("seller has no agent id at period end");
+    }
+    let volume_slot = loop_core::slot_offset(
+        loop_core::mapping_slot_u256(agent_id, CHANNELS_AGENT_STATS_SLOT),
+        wash_predicate::AGENT_STATS_TOTAL_VOLUME_OFFSET,
+    );
+    let start_volume_read = state_read(
+        client,
+        materialized,
+        period_start_block - 1,
+        CHANNELS_ADDRESS,
+        volume_slot,
+    )?
+    .0;
+    let end_volume_read = state_read(
+        client,
+        materialized,
+        period_end_block,
+        CHANNELS_ADDRESS,
+        volume_slot,
+    )?
+    .0;
+    Ok(SellerStatsWitness {
+        end_agent_id_read,
+        start_volume_read,
+        end_volume_read,
+    })
 }
 
 fn state_read(
@@ -449,7 +545,8 @@ fn state_read(
         .block_positions
         .get(&block_number)
         .with_context(|| format!("state block {block_number} missing"))?;
-    let (proof, value) = client.storage_witness(&materialized.blocks[block].header, contract, slot)?;
+    let (proof, value) =
+        client.storage_witness(&materialized.blocks[block].header, contract, slot)?;
     Ok((StateRead { block, proof }, value))
 }
 
@@ -457,11 +554,16 @@ fn is_pair_deposit(entry: &PlannedEvidence, subjects: &[Address]) -> bool {
     entry.evidence_type == "USDC_FUNDING"
         && entry.deposit_log_index.is_some()
         && entry.buyer.is_some_and(|buyer| subjects.contains(&buyer))
-        && entry.funder.is_some_and(|funder| subjects.contains(&funder))
+        && entry
+            .funder
+            .is_some_and(|funder| subjects.contains(&funder))
 }
 
 fn requires_transaction_proof(entry: &PlannedEvidence) -> bool {
-    matches!(entry.evidence_type.as_str(), "USDC_FUNDING" | "NATIVE_FUNDING")
+    matches!(
+        entry.evidence_type.as_str(),
+        "USDC_FUNDING" | "NATIVE_FUNDING"
+    )
 }
 
 fn atomic_evidence(entry: &PlannedEvidence) -> Vec<&PlannedEvidence> {
@@ -549,7 +651,9 @@ fn rpc_endpoints() -> Result<Vec<String>> {
 }
 
 fn arg(args: &[String], flag: &str) -> Option<String> {
-    args.windows(2).find(|pair| pair[0] == flag).map(|pair| pair[1].clone())
+    args.windows(2)
+        .find(|pair| pair[0] == flag)
+        .map(|pair| pair[1].clone())
 }
 
 #[cfg(test)]
@@ -606,6 +710,12 @@ mod tests {
             funder_receipt: Some(Box::new(hop("third"))),
         };
         let expanded = atomic_evidence(&relay);
-        assert_eq!(expanded.iter().map(|entry| entry.evidence_type.as_str()).collect::<Vec<_>>(), vec!["first", "second", "third"]);
+        assert_eq!(
+            expanded
+                .iter()
+                .map(|entry| entry.evidence_type.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "second", "third"]
+        );
     }
 }

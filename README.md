@@ -9,10 +9,11 @@ program re-verifies raw Base evidence — receipts, transactions, and contract
 state, each authenticated by Merkle-Patricia proofs against block headers —
 and checks a fixed mechanical predicate. The guest's verification key **is**
 the rule: the on-chain `AntseedWashTradingRegistry` (AntSeed monorepo)
-verifies the SP1 proof, authenticates every journal block hash against the
+verifies one recursive SP1 aggregate, authenticates every journal block hash against the
 public [Chainlink BlockhashStore]
 (`0x78b69899C8cD252126cBB1A50171ec37286C3877` on Base), and permanently
-records the proven wash ratio. No committee, no multisig, no challenge
+records neutral proof facts. A separate epoch policy applies consequences.
+No committee, no multisig, no challenge
 window, no company API, no scheduled infrastructure.
 
 [Chainlink BlockhashStore]: https://docs.chain.link/vrf/v2-5/overview/subscription
@@ -50,11 +51,11 @@ tells an operator how finely to slice; ratios have no edge to sit under, and
 splitting fabricated volume across identities *raises* each identity's
 proven ratio.
 
-The journal additionally commits the subject's own settled volume — read
-inside the proof from `AntseedChannels.AgentStats.totalVolumeUsdc` at the
-period-end block via storage proof — so the enforcement ratio
-`washVolume / settledVolume` is fixed at proving time and cannot be diluted
-by volume accumulated afterwards.
+The journal commits the subject's ERC-8004 agent ID and exact period volume.
+It proves cumulative `AntseedChannels.AgentStats.totalVolumeUsdc` at
+`periodStartBlock - 1` and `periodEndBlock`, then commits the difference.
+Both total and suspected wash volume therefore remain available on-chain for
+future policies without letting later volume dilute the proven period.
 
 ### Storage-layout bindings (verified against deployed bytecode)
 
@@ -74,6 +75,7 @@ core/               MPT/receipt/transaction/state-proof primitives (zkVM-agnosti
 predicate/          P0_CLOSED_LOOP + P0_RECIPROCAL predicates, journal, native tests
 program/closed-loop SP1 guest (standalone crate, needs the SP1 toolchain)
 program/reciprocal  SP1 guest
+program/aggregator  recursive SP1 guest; emits the registry ABI
 host/               witness materializer, prover driver, live layout cross-check
 cases/              example case descriptions
 scripts/            reproducible guest builds
@@ -96,8 +98,12 @@ cargo run -p loop-host -- fetch --case cases/<case>.json --out fixture.json [--e
 # reproducible guest builds + vkey derivation (SP1 toolchain + Docker)
 scripts/build-guests.sh
 
-# execute / prove
-cargo run -p loop-host --features sp1 -- run fixture.json --prove --elf target/guests/closed-loop/<elf>
+# produce one Groth16 aggregate (one child is still aggregated)
+cargo run -p loop-host --features sp1 --bin wash-trading-aggregate -- \
+  --aggregator-elf program/aggregator/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/aggregator-guest \
+  --closed-loop-elf program/closed-loop/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/closed-loop-guest \
+  --reciprocal-elf program/reciprocal/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/reciprocal-guest \
+  --child closed-loop:fixture.json --output aggregate-proof.json
 ```
 
 Case files in `cases/` describe a claim's participants (seller, funder,
@@ -111,27 +117,6 @@ and progress reports separate cache hits from RPC fetches. Set
 `LOOP_EVIDENCE_CACHE_DIR` to place the checkpoint outside the repository; the
 cache key includes the block number and exact receipt/transaction targets, so
 evidence from a different selection is never reused.
-
-### P0 development artifacts
-
-Development mode executes the real SP1 guest and requires its public journal
-to match native verification, but skips Groth16 generation and writes
-`proofBytes: 0x01`. These artifacts are accepted only by the loopback Anvil
-harness; production submission continues to require `--prove --production`.
-
-```bash
-cargo run -p loop-host --features sp1 -- run fixture.json \
-  --elf program/closed-loop/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/closed-loop-guest \
-  --result proof-artifacts/flash.json
-
-cargo run -p loop-host -- batch-manifest \
-  --results-dir proof-artifacts \
-  --blockhash-store 0x0000000000000000000000000000000000000040 \
-  --closed-loop-vkey 0x... \
-  --reciprocal-vkey 0x... \
-  --out proof-results.json \
-  --development
-```
 
 `scripts/build-case.py` reads each buyer's Deposits balance at the period-end
 block and selects funding that satisfies the P0 ledger inequality per buyer
@@ -153,19 +138,18 @@ node scripts/plan-wash-trading-proofs.mjs \
   --out proof-plan.json \
   --rpc-url "$BASE_RPC_URL"
 
-# 2. Build both guests twice in isolated snapshots and compare ELFs/vkeys.
+# 2. Build all three guests twice in isolated snapshots and compare ELFs/vkeys.
 node scripts/build-guests-reproducibly.mjs --work-dir ../guest-repro-builds --out guest-build-attestation.json
 node scripts/verify-guest-build-attestation.mjs guest-build-attestation.json
 
-# 3. Quote and explicitly approve real SP1 proving cost, then materialize and
-# prove every claim. BASE_RPC_URLS must support eth_getProof at the period end.
+# 3. Quote and approve proving cost, then make compressed child proofs and one
+# Groth16 aggregate. RPCs need eth_getProof at both exact period boundaries.
 node scripts/prove-approved-batch.mjs \
   --plan proof-plan.json \
   --artifact-dir proof-artifacts \
   --closed-loop-elf target/guests/closed-loop/elf \
   --reciprocal-elf target/guests/reciprocal/elf \
-  --closed-loop-vkey 0x... \
-  --reciprocal-vkey 0x... \
+  --aggregator-elf target/guests/aggregator/elf \
   --cost-quote proof-cost.json \
   --approve-cost-digest 0x... \
   --confirm-production-proving
@@ -174,15 +158,14 @@ node scripts/prove-approved-batch.mjs \
 `wash-trading-materialize-p0` consumes each claim's exact `selectedEvidence`.
 It authenticates the selected receipt and transaction tries, adds mandatory
 period-end `Deposits.buyers[*].balance` proofs with no opening-balance credit,
-adds mandatory period-end seller-agent/stat proofs, and natively verifies the
+adds mandatory start/end seller-agent/stat proofs, and natively verifies the
 final witness before it is passed to SP1. Reciprocal claims also include
 pair-internal protocol deposits selected by the planner.
 
-The final `antseed-wash-trading-proof-results` v2 manifest contains subjects,
-journal volumes, program vkeys, journal bytes and SHA-256 digests, proof bytes,
-block references, instruction counts, ordered `(claimId, journalDigest)`
-commitments, and the exact `expectedBatchDigest` pinned by the Solidity
-registry constructor.
+The final `antseed-wash-trading-aggregate-proof` artifact contains exactly one
+registry-ready `publicValues` blob and one Groth16 `proofBytes` blob. Public
+values contain the complete sorted findings and sorted unique block refs; no
+Merkle-root-only result or per-child on-chain submission exists.
 
 Use `loop-host headers --start N --end M --out headers.json` to export
 self-checked RLP headers needed to populate missing Chainlink BlockhashStore
@@ -197,10 +180,11 @@ all agree exactly.
 
 ## Rule identity
 
-`PREDICATE_VERSION`, the enforcement period, every α/β/ρ/ε parameter, the
+`PREDICATE_VERSION`, every α/β/ρ/ε parameter, the
 contract addresses, and the storage-slot bindings are constants in
-`predicate/src/lib.rs`. Changing any of them changes both guest vkeys and
-therefore the rule; a new rule is a new registry deployment. Current
+`predicate/src/lib.rs`. Changing any of them changes the child vkey and
+therefore the rule. New child and aggregator vkeys are append-only versions in
+the same permanent registry; replacing the registry is unnecessary. Current
 parameter values are **calibration placeholders** — final values are fixed
 by the companion wash-trading detection AIP before a registry is bound to a
 live policy.

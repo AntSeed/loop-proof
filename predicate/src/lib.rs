@@ -5,7 +5,7 @@
 //! Merkle-Patricia proofs against block headers) and checks a fixed
 //! mechanical predicate over it. The guest binary's verification key IS the
 //! rule: changing any constant in this crate produces a different vkey and
-//! therefore a different rule requiring a new registry.
+//! therefore a new append-only child-program version in the registry.
 //!
 //! Both predicates prove the same thing — a conserved value loop. Fabricated
 //! volume is volume settled with capital that the same party put in and got
@@ -25,28 +25,40 @@ use alloy_primitives::{address, keccak256, Address, B256, U256};
 use alloy_sol_types::SolValue;
 use serde::{Deserialize, Serialize};
 
+pub mod aggregate;
 pub mod closed_loop;
 pub mod journal;
 pub mod reciprocal;
 pub mod resolver;
 pub mod stats;
 
+pub use aggregate::{AggregateJournal, ChildProofInput};
 pub use closed_loop::{verify_closed_loop, ClosedLoopInput};
 pub use journal::{SubjectRecord, WashJournal};
 pub use reciprocal::{verify_reciprocal, ReciprocalInput};
 
 // ─── Rule identity ────────────────────────────────────────────────────────
 
-pub const PREDICATE_VERSION: u32 = 2;
+pub const PREDICATE_VERSION: u32 = 3;
 pub const CLOSED_LOOP_PREDICATE_ID: u8 = 1;
 pub const RECIPROCAL_PREDICATE_ID: u8 = 2;
 pub const BASE_CHAIN_ID: u64 = 8_453;
+pub const EMISSIONS_GENESIS: u64 = 1_775_728_461;
+pub const EPOCH_DURATION: u64 = 7 * 24 * 60 * 60;
+pub const CHANNELS_SOURCE_ID: B256 =
+    alloy_primitives::b256!("4c8d4439455a826fc90fd39774c15979e9508c060c0bb1368c8560dbb9cfba29");
+pub const CLOSED_LOOP_PROGRAM_ID: B256 =
+    alloy_primitives::b256!("8d4ca7dfd71be3492a82a21293943ea86911396bd13abf3a0979ca676b307c15");
+pub const RECIPROCAL_PROGRAM_ID: B256 =
+    alloy_primitives::b256!("95663278b1f0af87d6f97269fa5259671b347e3a7f4290fe2f23a00dfe881ad3");
+pub const AGGREGATOR_PROGRAM_ID: B256 =
+    alloy_primitives::b256!("f10e3b26ded3ac26cbb512dd52c781ace3f3e0f53977fe4772e54838fa8b2e1f");
 
-// ─── Enforcement period (fixed per rule; a new period is a new registry) ──
+// ─── Historical defaults used by ad-hoc tooling ──────────────────────────
 
 pub const PERIOD_START_BLOCK: u64 = 44_471_575;
-/// Inclusive end block. The `LEDGER` witness and the `AgentStats` settled
-/// volume are read here, fixing every claim's ratio at proving time.
+/// Inclusive end block for legacy case files. Production plans carry their
+/// own exact dynamic range.
 pub const PERIOD_END_BLOCK: u64 = 49_936_172;
 
 // ─── Predicate parameters ─────────────────────────────────────────────────
@@ -175,7 +187,10 @@ pub enum FundingKind {
     /// Native transfer funder → buyer. Establishes funding order and shape
     /// only: native value is a different unit and never counts toward the
     /// USDC coverage or ledger sums.
-    Native { transaction: TransactionRef, receipt: ReceiptRef },
+    Native {
+        transaction: TransactionRef,
+        receipt: ReceiptRef,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -199,14 +214,12 @@ pub struct BuyerLedger {
     pub end: StateRead,
 }
 
-/// Denominator witness for one subject: `Staking.sellerAgentId[subject]` and,
-/// when the agent id is non-zero, `Channels._agentStats[id].totalVolumeUsdc`,
-/// both at `PERIOD_END_BLOCK`.
+/// Exact-period volume witness for one subject.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SellerStatsWitness {
-    pub agent_id_read: StateRead,
-    /// Required iff the proven agent id is non-zero.
-    pub stats_read: Option<StateRead>,
+    pub end_agent_id_read: StateRead,
+    pub start_volume_read: StateRead,
+    pub end_volume_read: StateRead,
 }
 
 // ─── Claim identifiers ────────────────────────────────────────────────────
@@ -246,6 +259,8 @@ pub fn canonical_evidence_hash<T: Serialize>(input: &T) -> Result<B256, String> 
 }
 
 pub fn closed_loop_claim_id(
+    period_start_block: u64,
+    period_end_block: u64,
     seller: Address,
     funder: Address,
     cohort: B256,
@@ -256,8 +271,8 @@ pub fn closed_loop_claim_id(
             chainId: U256::from(BASE_CHAIN_ID),
             predicateId: CLOSED_LOOP_PREDICATE_ID,
             predicateVersion: PREDICATE_VERSION,
-            periodStartBlock: PERIOD_START_BLOCK,
-            periodEndBlock: PERIOD_END_BLOCK,
+            periodStartBlock: period_start_block,
+            periodEndBlock: period_end_block,
             seller,
             funder,
             cohortHash: cohort,
@@ -267,14 +282,20 @@ pub fn closed_loop_claim_id(
     )
 }
 
-pub fn reciprocal_claim_id(address_a: Address, address_b: Address, evidence_hash: B256) -> B256 {
+pub fn reciprocal_claim_id(
+    period_start_block: u64,
+    period_end_block: u64,
+    address_a: Address,
+    address_b: Address,
+    evidence_hash: B256,
+) -> B256 {
     keccak256(
         SolReciprocalClaimId {
             chainId: U256::from(BASE_CHAIN_ID),
             predicateId: RECIPROCAL_PREDICATE_ID,
             predicateVersion: PREDICATE_VERSION,
-            periodStartBlock: PERIOD_START_BLOCK,
-            periodEndBlock: PERIOD_END_BLOCK,
+            periodStartBlock: period_start_block,
+            periodEndBlock: period_end_block,
             addressA: address_a,
             addressB: address_b,
             evidenceHash: evidence_hash,
@@ -304,7 +325,9 @@ pub(crate) fn validate_sorted_unique_addresses(
     let mut previous = None;
     for value in values {
         if *value == Address::ZERO || previous.is_some_and(|prior| prior >= *value) {
-            return Err(format!("{label}: values must be nonzero, sorted, and unique"));
+            return Err(format!(
+                "{label}: values must be nonzero, sorted, and unique"
+            ));
         }
         previous = Some(*value);
     }
@@ -314,7 +337,11 @@ pub(crate) fn validate_sorted_unique_addresses(
 /// Authenticate every evidence block: unique numbers within the witness
 /// window, receipt and transaction inclusion proofs, unique per-block proof
 /// indexes. Returns the sorted `(number, hash)` refs the journal commits.
-pub(crate) fn authenticate_blocks(blocks: &[EvidenceBlock]) -> Result<Vec<(u64, B256)>, String> {
+pub(crate) fn authenticate_blocks(
+    blocks: &[EvidenceBlock],
+    period_start_block: u64,
+    period_end_block: u64,
+) -> Result<Vec<(u64, B256)>, String> {
     use std::collections::BTreeSet;
     if blocks.is_empty() || blocks.len() > MAX_BLOCK_REFS {
         return Err("invalid block evidence count".into());
@@ -323,7 +350,7 @@ pub(crate) fn authenticate_blocks(blocks: &[EvidenceBlock]) -> Result<Vec<(u64, 
     let mut refs = Vec::with_capacity(blocks.len());
     for block in blocks {
         let number = block.header.number;
-        if !(PERIOD_START_BLOCK..=PERIOD_END_BLOCK).contains(&number) {
+        if !(period_start_block.saturating_sub(1)..=period_end_block).contains(&number) {
             return Err(format!("block {number} outside the witness window"));
         }
         if !numbers.insert(number) {
@@ -351,8 +378,13 @@ pub(crate) fn authenticate_blocks(blocks: &[EvidenceBlock]) -> Result<Vec<(u64, 
 
 /// Event evidence must sit inside the enforcement period proper (the
 /// pre-period ledger boundary block carries state only, never events).
-pub(crate) fn ensure_event_in_period(block: u64, label: &str) -> Result<(), String> {
-    if !(PERIOD_START_BLOCK..=PERIOD_END_BLOCK).contains(&block) {
+pub(crate) fn ensure_event_in_period(
+    block: u64,
+    period_start_block: u64,
+    period_end_block: u64,
+    label: &str,
+) -> Result<(), String> {
+    if !(period_start_block..=period_end_block).contains(&block) {
         return Err(format!("{label} is outside the fixed enforcement period"));
     }
     Ok(())

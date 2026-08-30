@@ -4,8 +4,6 @@ import { createHash } from "node:crypto";
 export const HISTORICAL_START_BLOCK = 44_469_557;
 export const MINIMUM_RECIPROCAL_VOLUME_BPS = 8_000n;
 
-const PERIOD_START_BLOCK = 44_471_575;
-const PERIOD_END_BLOCK_EXCLUSIVE = 49_936_173;
 const MAX_RELAY_SECONDS = 259_200;
 const MIN_RELAY_RETAINED_BPS = 2_800n;
 
@@ -200,8 +198,8 @@ export async function resolveDependency(dependency, bundle, callRpc) {
 
 function planCohort(claim, dependencies, bundle) {
   const strategyCandidates = [
-    ...buildCohortStrategies("USDC", claim, dependencies),
-    ...buildCohortStrategies("NATIVE", claim, dependencies),
+    ...buildCohortStrategies("USDC", claim, dependencies, bundle.period),
+    ...buildCohortStrategies("NATIVE", claim, dependencies, bundle.period),
   ];
   if (strategyCandidates.length === 0) throw new Error(`${claim.claimId}: no valid cohort funding strategy; ${cohortDiagnostics(claim, dependencies)}`);
   strategyCandidates.sort(compareCost);
@@ -229,13 +227,13 @@ function cohortDiagnostics(claim, dependencies) {
   }).join("; ");
 }
 
-function buildCohortStrategies(strategy, claim, dependencies) {
+function buildCohortStrategies(strategy, claim, dependencies, period) {
   const fundingType = strategy === "USDC" ? "USDC_FUNDING" : "NATIVE_FUNDING";
   const fundings = dependencies.filter((entry) => entry.evidenceType === fundingType && claim.approvedBuyers.includes(entry.buyer) && claim.approvedFunders.includes(entry.funder));
   const settlements = dependencies.filter((entry) => entry.evidenceType === "SETTLEMENT" && claim.approvedBuyers.includes(entry.buyer));
   const funderGroups = [...new Set(fundings.map((entry) => entry.funder))].sort();
   return funderGroups.flatMap((selectedFunder) => {
-    const closure = selectClosureForFunder(dependencies, selectedFunder, claim.approvedBuyers, claim.subjects[0]);
+    const closure = selectClosureForFunder(dependencies, selectedFunder, claim.approvedBuyers, claim.subjects[0], period);
     if (!closure) return [];
     const candidate = buildCohortStrategy(
       strategy,
@@ -317,7 +315,7 @@ function planReciprocal(claim, dependencies, bundle) {
   }, bundle);
 }
 
-function selectClosureForFunder(dependencies, funder, approvedBuyers, seller) {
+function selectClosureForFunder(dependencies, funder, approvedBuyers, seller, period) {
   if (normalize(funder) === normalize(seller)) return { evidence: [], evidenceClass: "SELF_FUNDED", rejected: [] };
   const classes = ["DIRECT_SELLER_FUNDER", "RELAY_PATH"];
   const rejected = [];
@@ -326,14 +324,14 @@ function selectClosureForFunder(dependencies, funder, approvedBuyers, seller) {
       && entry.funder === funder
       && atomicEvidence(entry).every(nonSelfTransfer)
       && (evidenceClass === "RELAY_PATH" || BigInt(entry.amountRaw) > 0n)
-      && atomicEvidence(entry).every((evidence) => evidence.blockNumber >= PERIOD_START_BLOCK && evidence.blockNumber < PERIOD_END_BLOCK_EXCLUSIVE));
+      && (!period || atomicEvidence(entry).every((evidence) => evidence.blockNumber >= period.startBlock && evidence.blockNumber < period.endBlockExclusive)));
     if (candidates.length === 0) continue;
     if (evidenceClass !== "RELAY_PATH") {
       candidates.sort(compareEvidence);
       const selected = candidates.at(-1);
       return { evidence: [selected], evidenceClass, rejected: [...rejected, ...candidates.slice(0, -1).map(summarizeEvidence)] };
     }
-    const valid = candidates.filter(validRelayPath).sort(compareRelayPath);
+    const valid = candidates.filter((candidate) => validRelayPath(candidate, period)).sort(compareRelayPath);
     if (valid.length > 0) return { evidence: valid, evidenceClass, rejected };
     rejected.push(...candidates.map(summarizeEvidence));
   }
@@ -346,7 +344,7 @@ function closureOccursAfterSettlements(settlements, closureEvidence) {
     && closureEvidence.flatMap(atomicEvidence).every((entry) => compareEvidence(entry, earliestSettlement) > 0);
 }
 
-export function validRelayPath(path) {
+export function validRelayPath(path, period = null) {
   const first = path.sellerPayment;
   const second = path.relayForward;
   const third = path.funderReceipt;
@@ -354,7 +352,7 @@ export function validRelayPath(path) {
   if (compareEvidence(first, second) >= 0 || compareEvidence(second, third) >= 0) return false;
   if (second.timestamp < first.timestamp || third.timestamp < second.timestamp) return false;
   if (third.timestamp - first.timestamp > MAX_RELAY_SECONDS) return false;
-  if (![first, second, third].every((entry) => entry.blockNumber >= PERIOD_START_BLOCK && entry.blockNumber < PERIOD_END_BLOCK_EXCLUSIVE)) return false;
+  if (period && ![first, second, third].every((entry) => entry.blockNumber >= period.startBlock && entry.blockNumber < period.endBlockExclusive)) return false;
   const firstAmount = BigInt(first.amountRaw);
   const secondAmount = BigInt(second.amountRaw);
   const thirdAmount = BigInt(third.amountRaw);

@@ -9,9 +9,9 @@ use crate::{
     validate_chain, validate_sorted_unique_addresses, BuyerLedger, EvidenceBlock, FundingEvidence,
     FundingKind, LogRef, ReturnPath, SellerStatsWitness, SubjectRecord, WashJournal,
     ALPHA_FUND_BPS, ALPHA_RETURN_BPS, BASE_CHAIN_ID, BUYER_ACCOUNT_BALANCE_OFFSET,
-    CLOSED_LOOP_PREDICATE_ID, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT, EPSILON_LEDGER_BPS,
-    H_MAX_INTERMEDIATE_HOPS, MAX_BUYERS, MAX_RETURN_PATHS, PERIOD_END_BLOCK,
-    PERIOD_START_BLOCK, RHO_HOP_BPS, T_PATH_SECONDS,
+    CHANNELS_SOURCE_ID, CLOSED_LOOP_PREDICATE_ID, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT,
+    EMISSIONS_GENESIS, EPOCH_DURATION, EPSILON_LEDGER_BPS, H_MAX_INTERMEDIATE_HOPS, MAX_BUYERS,
+    MAX_RETURN_PATHS, RHO_HOP_BPS, T_PATH_SECONDS,
 };
 use alloy_primitives::{Address, U256};
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,8 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClosedLoopInput {
     pub chain_id: u64,
+    pub period_start_block: u64,
+    pub period_end_block: u64,
     pub seller: Address,
     pub funder: Address,
     /// Sorted, unique, nonzero; must not contain the funder. May contain the
@@ -37,6 +39,9 @@ pub struct ClosedLoopInput {
 
 pub fn verify_closed_loop(input: &ClosedLoopInput) -> Result<WashJournal, String> {
     validate_chain(input.chain_id)?;
+    if input.period_start_block == 0 || input.period_start_block > input.period_end_block {
+        return Err("closed loop: invalid period".into());
+    }
     if input.seller == Address::ZERO || input.funder == Address::ZERO {
         return Err("closed loop: zero seller or funder".into());
     }
@@ -47,8 +52,14 @@ pub fn verify_closed_loop(input: &ClosedLoopInput) -> Result<WashJournal, String
         return Err("closed loop: funder cannot be its own buyer".into());
     }
 
-    let block_refs = authenticate_blocks(&input.blocks)?;
-    let resolver = ChainResolver { blocks: &input.blocks };
+    let block_refs = authenticate_blocks(
+        &input.blocks,
+        input.period_start_block,
+        input.period_end_block,
+    )?;
+    let resolver = ChainResolver {
+        blocks: &input.blocks,
+    };
     let mut used_logs: BTreeSet<LogKey> = BTreeSet::new();
     let mut used_transactions: BTreeSet<(u64, u64)> = BTreeSet::new();
 
@@ -69,15 +80,33 @@ pub fn verify_closed_loop(input: &ClosedLoopInput) -> Result<WashJournal, String
     // ── RETURN ────────────────────────────────────────────────────────────
     verify_returns(input, &resolver, &settle, &mut used_logs)?;
 
-    // ── Denominator: the subject's own settled volume at period end ───────
-    let settled_volume = verify_subject_stats(&resolver, input.seller, &input.seller_stats)?;
+    // ── Subject identity and exact-period total volume ────────────────────
+    let (agent_id, total_volume) = verify_subject_stats(
+        &resolver,
+        input.seller,
+        &input.seller_stats,
+        input.period_start_block,
+        input.period_end_block,
+    )?;
+    let end_timestamp = input
+        .blocks
+        .iter()
+        .find(|block| block.header.number == input.period_end_block)
+        .ok_or("closed loop: missing period end block")?
+        .header
+        .timestamp;
+    let offense_epoch = end_timestamp.saturating_sub(EMISSIONS_GENESIS) / EPOCH_DURATION;
 
     Ok(WashJournal {
         predicate_id: CLOSED_LOOP_PREDICATE_ID,
+        source_id: CHANNELS_SOURCE_ID,
         chain_id: BASE_CHAIN_ID,
-        period_start_block: PERIOD_START_BLOCK,
-        period_end_block: PERIOD_END_BLOCK,
+        period_start_block: input.period_start_block,
+        period_end_block: input.period_end_block,
+        offense_epoch,
         claim_id: closed_loop_claim_id(
+            input.period_start_block,
+            input.period_end_block,
             input.seller,
             input.funder,
             cohort_hash(&input.buyers),
@@ -85,8 +114,9 @@ pub fn verify_closed_loop(input: &ClosedLoopInput) -> Result<WashJournal, String
         ),
         subjects: vec![SubjectRecord {
             subject: input.seller,
+            agent_id,
             wash_volume: settle.total,
-            settled_volume,
+            total_volume,
         }],
         block_refs,
     })
@@ -123,14 +153,22 @@ fn verify_fundings(
                     return Err("funding: duplicate evidence".into());
                 }
                 let (from, to, amount, block) = resolver.usdc_transfer(transfer)?;
-                ensure_event_in_period(block, "funding transfer")?;
+                ensure_event_in_period(
+                    block,
+                    input.period_start_block,
+                    input.period_end_block,
+                    "funding transfer",
+                )?;
                 if from != input.funder || to != evidence.buyer || amount == 0 {
                     return Err("funding: invalid direct USDC funding".into());
                 }
                 resolver.require_signer(input.funder, transfer)?;
                 (amount, resolver.timestamp(transfer)?)
             }
-            FundingKind::ProtocolDeposit { transfer, deposited } => {
+            FundingKind::ProtocolDeposit {
+                transfer,
+                deposited,
+            } => {
                 if transfer.block != deposited.block || transfer.receipt != deposited.receipt {
                     return Err("funding: deposit logs must share one receipt".into());
                 }
@@ -143,7 +181,12 @@ fn verify_fundings(
                     return Err("funding: duplicate evidence".into());
                 }
                 let (from, to, transferred, block) = resolver.usdc_transfer(transfer)?;
-                ensure_event_in_period(block, "funding deposit")?;
+                ensure_event_in_period(
+                    block,
+                    input.period_start_block,
+                    input.period_end_block,
+                    "funding deposit",
+                )?;
                 let (deposit_buyer, deposited_amount, _) = resolver.protocol_deposit(deposited)?;
                 if from != input.funder
                     || to != DEPOSITS_ADDRESS
@@ -156,12 +199,16 @@ fn verify_fundings(
                 resolver.require_signer(input.funder, transfer)?;
                 (deposited_amount, resolver.timestamp(transfer)?)
             }
-            FundingKind::Native { transaction, receipt } => {
+            FundingKind::Native {
+                transaction,
+                receipt,
+            } => {
                 let (receipt_proof, receipt_block) = resolver.receipt(receipt)?;
                 if !loop_core::receipt_success(&receipt_proof.value)? {
                     return Err("funding: native funding receipt reverted".into());
                 }
-                let (envelope, signer, transaction_block) = resolver.decoded_transaction(transaction)?;
+                let (envelope, signer, transaction_block) =
+                    resolver.decoded_transaction(transaction)?;
                 let (transaction_proof, _) = resolver.transaction(transaction)?;
                 if receipt.block != transaction.block
                     || receipt_proof.tx_index != transaction_proof.tx_index
@@ -169,7 +216,12 @@ fn verify_fundings(
                 {
                     return Err("funding: native receipt/transaction mismatch".into());
                 }
-                ensure_event_in_period(transaction_block.header.number, "native funding")?;
+                ensure_event_in_period(
+                    transaction_block.header.number,
+                    input.period_start_block,
+                    input.period_end_block,
+                    "native funding",
+                )?;
                 if !used_transactions
                     .insert((transaction_block.header.number, transaction_proof.tx_index))
                 {
@@ -190,8 +242,10 @@ fn verify_fundings(
         if usdc_amount > 0 {
             let per = summary.usdc_per_buyer.entry(evidence.buyer).or_default();
             *per = per.checked_add(usdc_amount).ok_or("funding: overflow")?;
-            summary.total_usdc =
-                summary.total_usdc.checked_add(usdc_amount).ok_or("funding: overflow")?;
+            summary.total_usdc = summary
+                .total_usdc
+                .checked_add(usdc_amount)
+                .ok_or("funding: overflow")?;
         }
         summary
             .earliest_time
@@ -232,7 +286,12 @@ fn verify_settlements(
             return Err("settlements: duplicate evidence".into());
         }
         let (_, buyer, seller, amount, block) = resolver.settlement(*reference)?;
-        ensure_event_in_period(block, "settlement")?;
+        ensure_event_in_period(
+            block,
+            input.period_start_block,
+            input.period_end_block,
+            "settlement",
+        )?;
         if seller != input.seller || !cohort.contains(&buyer) || amount == 0 {
             return Err("settlements: subject or amount mismatch".into());
         }
@@ -245,7 +304,11 @@ fn verify_settlements(
         *per = per.checked_add(amount).ok_or("settlements: overflow")?;
         earliest_time = earliest_time.min(time);
     }
-    Ok(SettleSummary { total, per_buyer, earliest_time })
+    Ok(SettleSummary {
+        total,
+        per_buyer,
+        earliest_time,
+    })
 }
 
 /// Attribution: for each buyer, the capital it settled with must be the
@@ -273,7 +336,7 @@ fn verify_ledgers(
             BUYER_ACCOUNT_BALANCE_OFFSET,
         );
         let balance_end =
-            resolver.storage_value(&ledger.end, PERIOD_END_BLOCK, DEPOSITS_ADDRESS, slot)?;
+            resolver.storage_value(&ledger.end, input.period_end_block, DEPOSITS_ADDRESS, slot)?;
         let settled = settle.per_buyer.get(buyer).copied().unwrap_or(0);
         let funded = funding.usdc_per_buyer.get(buyer).copied().unwrap_or(0);
         let lhs = (balance_end + U256::from(settled)) * U256::from(10_000u64);
@@ -322,7 +385,12 @@ fn verify_returns(
                 return Err("return: duplicate evidence".into());
             }
             let (from, to, amount, block) = resolver.usdc_transfer(*reference)?;
-            ensure_event_in_period(block, "return transfer")?;
+            ensure_event_in_period(
+                block,
+                input.period_start_block,
+                input.period_end_block,
+                "return transfer",
+            )?;
             let time = resolver.timestamp(*reference)?;
             if from != expected_from || from == to || amount == 0 {
                 return Err("return: broken path".into());
@@ -356,7 +424,9 @@ fn verify_returns(
         if expected_from != input.funder {
             return Err("return: path does not terminate at the funder".into());
         }
-        returned = returned.checked_add(last_amount).ok_or("return: overflow")?;
+        returned = returned
+            .checked_add(last_amount)
+            .ok_or("return: overflow")?;
     }
     if !meets_ratio(returned, settle.total, ALPHA_RETURN_BPS) {
         return Err("return: value reaching the funder below the coverage fraction".into());

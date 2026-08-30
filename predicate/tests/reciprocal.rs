@@ -18,18 +18,27 @@ fn self_financed_pair_produces_the_journal() {
     assert_eq!(journal.predicate_id, RECIPROCAL_PREDICATE_ID);
     assert_eq!(
         journal.claim_id,
-        reciprocal_claim_id(PAIR_A, PAIR_B, canonical_evidence_hash(&input).unwrap())
+        reciprocal_claim_id(
+            input.period_start_block,
+            input.period_end_block,
+            PAIR_A,
+            PAIR_B,
+            canonical_evidence_hash(&input).unwrap()
+        )
     );
     assert_eq!(journal.subjects.len(), 2);
     assert_eq!(journal.subjects[0].subject, PAIR_A);
     assert_eq!(journal.subjects[0].wash_volume, 500_000_000);
-    assert_eq!(journal.subjects[0].settled_volume, 1_000_000_000);
+    assert_eq!(journal.subjects[0].total_volume, 1_000_000_000);
     assert_eq!(journal.subjects[1].subject, PAIR_B);
     assert_eq!(journal.subjects[1].wash_volume, 450_000_000);
-    assert_eq!(journal.subjects[1].settled_volume, 900_000_000);
+    assert_eq!(journal.subjects[1].total_volume, 900_000_000);
 
     let bytes = journal.abi_encode();
-    assert_eq!(wash_predicate::WashJournal::abi_decode(&bytes).unwrap(), journal);
+    assert_eq!(
+        wash_predicate::WashJournal::abi_decode(&bytes).unwrap(),
+        journal
+    );
 }
 
 #[test]
@@ -155,9 +164,8 @@ fn reverted_and_tampered_evidence_is_rejected() {
 }
 
 #[test]
-fn unstaked_member_commits_a_zero_denominator() {
+fn unstaked_member_is_rejected() {
     let mut cfg = PairCfg::default();
     cfg.agents = [(111, 1_000_000_000), (0, 0)];
-    let journal = verify_reciprocal(&reciprocal_input(&cfg)).unwrap();
-    assert_eq!(journal.subjects[1].settled_volume, 0);
+    assert_rejects(&reciprocal_input(&cfg), "no agent id");
 }

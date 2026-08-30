@@ -108,7 +108,9 @@ fn main() -> Result<()> {
 }
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
-    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1).cloned())
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1).cloned())
 }
 
 // ─────────────────────────────── fetch ───────────────────────────────
@@ -186,7 +188,9 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
     let earliest_funding_block: BTreeMap<Address, u64> = {
         let mut m = BTreeMap::<Address, u64>::new();
         for (buyer, _, loc, _) in &funding_locs {
-            m.entry(*buyer).and_modify(|b| *b = (*b).min(loc.0)).or_insert(loc.0);
+            m.entry(*buyer)
+                .and_modify(|b| *b = (*b).min(loc.0))
+                .or_insert(loc.0);
         }
         m
     };
@@ -204,7 +208,10 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
             PERIOD_END_BLOCK,
             case.max_settlements_per_buyer,
         )?;
-        println!("buyer {buyer}: {} settlements (from block {from})", found.len());
+        println!(
+            "buyer {buyer}: {} settlements (from block {from})",
+            found.len()
+        );
         for &(block, tx_index, _) in &found {
             targets.receipt(block, tx_index as u64);
         }
@@ -225,11 +232,17 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
                 None,
             )?;
             // Recover the hop's `to` for chaining: re-read the located log.
-            let receipt =
-                client.call("eth_getTransactionReceipt", serde_json::json!([format!("{tx}")]))?;
+            let receipt = client.call(
+                "eth_getTransactionReceipt",
+                serde_json::json!([format!("{tx}")]),
+            )?;
             let logs = receipt["logs"].as_array().context("logs")?;
             let topics = logs[loc.2]["topics"].as_array().context("topics")?;
-            let word: B256 = topics.get(2).and_then(|t| t.as_str()).context("hop to")?.parse()?;
+            let word: B256 = topics
+                .get(2)
+                .and_then(|t| t.as_str())
+                .context("hop to")?
+                .parse()?;
             let to = Address::from_slice(&word.as_slice()[12..]);
             targets.receipt(loc.0, loc.1 as u64);
             hops.push(loc);
@@ -244,11 +257,21 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
     let mut receipt_pos: BTreeMap<(u64, u64), usize> = BTreeMap::new();
     let mut tx_pos: BTreeMap<(u64, u64), usize> = BTreeMap::new();
     let mut log_maps: BTreeMap<u64, BTreeMap<u64, usize>> = BTreeMap::new();
-    let block_targets = targets.receipts.iter().map(|(number, receipt_targets)| (
-        *number,
-        receipt_targets.clone(),
-        targets.transactions.get(number).cloned().unwrap_or_default(),
-    )).collect::<Vec<_>>();
+    let block_targets = targets
+        .receipts
+        .iter()
+        .map(|(number, receipt_targets)| {
+            (
+                *number,
+                receipt_targets.clone(),
+                targets
+                    .transactions
+                    .get(number)
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
     let block_count = block_targets.len();
     let concurrency = std::env::var("LOOP_RPC_CONCURRENCY")
         .ok()
@@ -291,46 +314,72 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
         })
         .collect::<Result<_>>()?;
 
-    // 5. Period-end state witnesses.
+    // 5. Exact-period boundary state witnesses.
+    let start_header = client.header(wash_predicate::PERIOD_START_BLOCK - 1)?;
     let end_header = client.header(PERIOD_END_BLOCK)?;
-    let end_block =
-        EvidenceBlock { header: end_header.clone(), receipts: vec![], transactions: vec![] };
+    let start_index = blocks.len();
+    blocks.push(EvidenceBlock {
+        header: start_header.clone(),
+        receipts: vec![],
+        transactions: vec![],
+    });
+    let end_index = blocks.len();
+    let end_block = EvidenceBlock {
+        header: end_header.clone(),
+        receipts: vec![],
+        transactions: vec![],
+    };
 
     let mut ledgers = Vec::new();
-    let end_index = blocks.len();
     for buyer in &case.buyers {
         let slot = loop_core::slot_offset(
             loop_core::mapping_slot_address(*buyer, wash_predicate::DEPOSITS_BUYERS_SLOT),
             wash_predicate::BUYER_ACCOUNT_BALANCE_OFFSET,
         );
-        let (end_proof, end_value) =
-            client.storage_witness(&end_header, DEPOSITS_ADDRESS, slot)?;
+        let (end_proof, end_value) = client.storage_witness(&end_header, DEPOSITS_ADDRESS, slot)?;
         println!("buyer {buyer}: period-end balance {end_value}");
         ledgers.push(BuyerLedger {
-            end: StateRead { block: end_index, proof: end_proof },
+            end: StateRead {
+                block: end_index,
+                proof: end_proof,
+            },
         });
     }
 
-    let agent_slot = loop_core::mapping_slot_address(
-        case.seller,
-        wash_predicate::STAKING_SELLER_AGENT_ID_SLOT,
-    );
-    let (agent_proof, agent_id) = client.storage_witness(&end_header, STAKING_ADDRESS, agent_slot)?;
+    let agent_slot =
+        loop_core::mapping_slot_address(case.seller, wash_predicate::STAKING_SELLER_AGENT_ID_SLOT);
+    let (agent_proof, agent_id) =
+        client.storage_witness(&end_header, STAKING_ADDRESS, agent_slot)?;
     println!("seller {}: agent id {agent_id}", case.seller);
-    let stats_read = if agent_id.is_zero() {
-        None
-    } else {
-        let volume_slot = loop_core::slot_offset(
-            loop_core::mapping_slot_u256(agent_id, wash_predicate::CHANNELS_AGENT_STATS_SLOT),
-            wash_predicate::AGENT_STATS_TOTAL_VOLUME_OFFSET,
-        );
-        let (proof, volume) = client.storage_witness(&end_header, CHANNELS_ADDRESS, volume_slot)?;
-        println!("seller {}: period-end settled volume {volume}", case.seller);
-        Some(StateRead { block: end_index, proof })
-    };
+    if agent_id.is_zero() {
+        bail!("seller has no agent id at period end");
+    }
+    let volume_slot = loop_core::slot_offset(
+        loop_core::mapping_slot_u256(agent_id, wash_predicate::CHANNELS_AGENT_STATS_SLOT),
+        wash_predicate::AGENT_STATS_TOTAL_VOLUME_OFFSET,
+    );
+    let (start_volume_proof, start_volume) =
+        client.storage_witness(&start_header, CHANNELS_ADDRESS, volume_slot)?;
+    let (end_volume_proof, end_volume) =
+        client.storage_witness(&end_header, CHANNELS_ADDRESS, volume_slot)?;
+    println!(
+        "seller {}: exact-period volume {}",
+        case.seller,
+        end_volume.saturating_sub(start_volume)
+    );
     let seller_stats = SellerStatsWitness {
-        agent_id_read: StateRead { block: end_index, proof: agent_proof },
-        stats_read,
+        end_agent_id_read: StateRead {
+            block: end_index,
+            proof: agent_proof,
+        },
+        start_volume_read: StateRead {
+            block: start_index,
+            proof: start_volume_proof,
+        },
+        end_volume_read: StateRead {
+            block: end_index,
+            proof: end_volume_proof,
+        },
     };
     blocks.push(end_block);
 
@@ -342,6 +391,8 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
     };
     let input = ClosedLoopInput {
         chain_id: wash_predicate::BASE_CHAIN_ID,
+        period_start_block: wash_predicate::PERIOD_START_BLOCK,
+        period_end_block: PERIOD_END_BLOCK,
         seller: case.seller,
         funder: case.funder,
         buyers: case.buyers.clone(),
@@ -351,7 +402,9 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
             .map(|(buyer, kind, transfer, deposited)| FundingEvidence {
                 buyer: *buyer,
                 kind: match *kind {
-                    "usdc" => FundingKind::Usdc { transfer: to_ref(transfer) },
+                    "usdc" => FundingKind::Usdc {
+                        transfer: to_ref(transfer),
+                    },
                     _ => FundingKind::ProtocolDeposit {
                         transfer: to_ref(transfer),
                         deposited: to_ref(&deposited.unwrap()),
@@ -362,7 +415,9 @@ fn fetch(case_path: &str, out_path: &str, expect_reject: bool) -> Result<()> {
         settlements: settlement_locs.iter().map(to_ref).collect(),
         returns: return_locs
             .iter()
-            .map(|hops| ReturnPath { transfers: hops.iter().map(to_ref).collect() })
+            .map(|hops| ReturnPath {
+                transfers: hops.iter().map(to_ref).collect(),
+            })
             .collect(),
         ledgers,
         seller_stats,
@@ -526,16 +581,25 @@ fn write_proof_result(
 ) -> Result<()> {
     use sha2::Digest;
     let journal_bytes = journal.abi_encode();
-    let journal_digest = format!("0x{}", alloy_primitives::hex::encode(sha2::Sha256::digest(&journal_bytes)));
+    let journal_digest = format!(
+        "0x{}",
+        alloy_primitives::hex::encode(sha2::Sha256::digest(&journal_bytes))
+    );
     let block_references: Vec<_> = journal
         .block_refs
         .iter()
-        .map(|(number, block_hash)| serde_json::json!({
-            "number": number.to_string(),
-            "blockHash": format!("{block_hash}"),
-        }))
+        .map(|(number, block_hash)| {
+            serde_json::json!({
+                "number": number.to_string(),
+                "blockHash": format!("{block_hash}"),
+            })
+        })
         .collect();
-    let subjects: Vec<_> = journal.subjects.iter().map(|subject| format!("{}", subject.subject)).collect();
+    let subjects: Vec<_> = journal
+        .subjects
+        .iter()
+        .map(|subject| format!("{}", subject.subject))
+        .collect();
     let metrics = if reciprocal {
         serde_json::json!({
             "volumeAToBRaw": journal.subjects[1].wash_volume.to_string(),
@@ -589,10 +653,18 @@ fn batch_manifest(
     use alloy_primitives::{keccak256, Address, B256};
     use sha2::Digest;
 
-    let store: Address = blockhash_store.parse().context("invalid BlockhashStore address")?;
-    let closed_vkey: B256 = closed_loop_vkey.parse().context("invalid closed-loop vkey")?;
+    let store: Address = blockhash_store
+        .parse()
+        .context("invalid BlockhashStore address")?;
+    let closed_vkey: B256 = closed_loop_vkey
+        .parse()
+        .context("invalid closed-loop vkey")?;
     let reciprocal_vkey: B256 = reciprocal_vkey.parse().context("invalid reciprocal vkey")?;
-    let security_mode = if development { "development" } else { "production" };
+    let security_mode = if development {
+        "development"
+    } else {
+        "production"
+    };
     let mut entries = Vec::<serde_json::Value>::new();
     for item in std::fs::read_dir(results_dir)? {
         let path = item?.path();
@@ -600,7 +672,9 @@ fn batch_manifest(
             continue;
         }
         let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
-        if value.get("kind").and_then(|item| item.as_str()) != Some("antseed-wash-trading-proof-result") {
+        if value.get("kind").and_then(|item| item.as_str())
+            != Some("antseed-wash-trading-proof-result")
+        {
             continue;
         }
         if value.get("version").and_then(|item| item.as_u64()) != Some(2)
@@ -609,7 +683,12 @@ fn batch_manifest(
         {
             bail!("{}: invalid {security_mode} proof result", path.display());
         }
-        entries.push(value.get("entry").cloned().context("proof result entry missing")?);
+        entries.push(
+            value
+                .get("entry")
+                .cloned()
+                .context("proof result entry missing")?,
+        );
     }
     if entries.is_empty() {
         bail!("no {security_mode} proof result files found");
@@ -673,10 +752,12 @@ fn batch_manifest(
     let digest = compute_batch_digest(store, closed_vkey, reciprocal_vkey, &commitments);
     let commitment_values: Vec<_> = commitments
         .iter()
-        .map(|(claim, journal_digest)| serde_json::json!({
-            "claimId": format!("{claim}"),
-            "journalDigest": format!("{journal_digest}"),
-        }))
+        .map(|(claim, journal_digest)| {
+            serde_json::json!({
+                "claimId": format!("{claim}"),
+                "journalDigest": format!("{journal_digest}"),
+            })
+        })
         .collect();
     let manifest = serde_json::json!({
         "version": 2,
@@ -734,14 +815,15 @@ mod batch_tests {
 
     #[test]
     fn batch_digest_matches_solidity_and_ethers() {
-        let store: Address = "0x78b69899C8cD252126cBB1A50171ec37286C3877".parse().unwrap();
+        let store: Address = "0x78b69899C8cD252126cBB1A50171ec37286C3877"
+            .parse()
+            .unwrap();
         let closed: B256 = format!("0x{}", "55".repeat(32)).parse().unwrap();
         let reciprocal: B256 = format!("0x{}", "66".repeat(32)).parse().unwrap();
         let claim: B256 = format!("0x{}", "11".repeat(32)).parse().unwrap();
-        let journal: B256 =
-            "0xa5b524c49d791184e67724513c459f42e290127c33496dd59e933e329f3c815e"
-                .parse()
-                .unwrap();
+        let journal: B256 = "0xa5b524c49d791184e67724513c459f42e290127c33496dd59e933e329f3c815e"
+            .parse()
+            .unwrap();
         assert_eq!(
             compute_batch_digest(store, closed, reciprocal, &[(claim, journal)]),
             "0xbdbd8ffe503030c82e83e23a9496b7bd106dd934b19e1ec976ddf48c50ec3175"
@@ -858,7 +940,11 @@ fn verify_seller(
     let data = format!("0x68091633{:064x}", agent_id);
     let out = eth_call(client, CHANNELS_ADDRESS, &data, number)?;
     let expected_volume = U256::from_be_slice(&out[64..96]);
-    ensure_equal(&format!("{seller} totalVolumeUsdc"), proven_volume, expected_volume)?;
+    ensure_equal(
+        &format!("{seller} totalVolumeUsdc"),
+        proven_volume,
+        expected_volume,
+    )?;
     println!("{seller} agent {agent_id}: totalVolumeUsdc = {proven_volume} ✔");
     Ok(())
 }
@@ -872,7 +958,9 @@ fn eth_call(client: &rpc::Client, to: Address, data: &str, block: u64) -> Result
         "eth_call",
         serde_json::json!([{ "to": format!("{to}"), "data": data }, format!("0x{block:x}")]),
     )?;
-    Ok(alloy_primitives::hex::decode(out.as_str().context("call output")?)?)
+    Ok(alloy_primitives::hex::decode(
+        out.as_str().context("call output")?,
+    )?)
 }
 
 fn eth_call_u256(client: &rpc::Client, to: Address, data: &str, block: u64) -> Result<U256> {
@@ -891,19 +979,23 @@ fn ensure_equal(label: &str, proven: U256, expected: U256) -> Result<()> {
 
 fn print_journal(journal: &WashJournal) {
     println!("journal:");
-    println!("  predicate {} period [{}, {}]", journal.predicate_id, journal.period_start_block, journal.period_end_block);
+    println!(
+        "  predicate {} period [{}, {}]",
+        journal.predicate_id, journal.period_start_block, journal.period_end_block
+    );
     println!("  claim id  {}", journal.claim_id);
     for subject in &journal.subjects {
-        let ratio = if subject.settled_volume == 0 {
+        let ratio = if subject.total_volume == 0 {
             1.0
         } else {
-            (subject.wash_volume as f64 / subject.settled_volume as f64).min(1.0)
+            (subject.wash_volume as f64 / subject.total_volume as f64).min(1.0)
         };
         println!(
-            "  subject {}  wash ${:.2}  settled ${:.2}  ratio {:.4}",
+            "  agent {} subject {}  wash ${:.2}  total ${:.2}  ratio {:.4}",
+            subject.agent_id,
             subject.subject,
             subject.wash_volume as f64 / 1e6,
-            subject.settled_volume as f64 / 1e6,
+            subject.total_volume as f64 / 1e6,
             ratio
         );
     }
@@ -912,6 +1004,12 @@ fn print_journal(journal: &WashJournal) {
 
 fn report_journal_bytes(bytes: &[u8]) {
     use sha2::Digest;
-    println!("journal sha256: 0x{}", alloy_primitives::hex::encode(sha2::Sha256::digest(bytes)));
-    println!("journal abi hex: 0x{}", alloy_primitives::hex::encode(bytes));
+    println!(
+        "journal sha256: 0x{}",
+        alloy_primitives::hex::encode(sha2::Sha256::digest(bytes))
+    );
+    println!(
+        "journal abi hex: 0x{}",
+        alloy_primitives::hex::encode(bytes)
+    );
 }

@@ -2,10 +2,16 @@
 name = "loop-host"
 version = "0.2.0"
 edition = "2021"
+default-run = "loop-host"
 
 [[bin]]
 name = "loop-host"
 path = "src/main.rs"
+
+[[bin]]
+name = "wash-trading-aggregate"
+path = "src/bin/wash-trading-aggregate.rs"
+required-features = ["sp1"]
 
 [dependencies]
 loop-core = { workspace = true }

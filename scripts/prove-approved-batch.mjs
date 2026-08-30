@@ -5,11 +5,9 @@ import { mkdir, readFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { approveCostQuote } from "./proving-cost-quote.mjs";
 
-const BASE_BLOCKHASH_STORE = "0x78b69899C8cD252126cBB1A50171ec37286C3877";
-
 const args = process.argv.slice(2);
 const value = (flag) => { const index = args.indexOf(flag); return index < 0 ? null : args[index + 1]; };
-const required = ["--plan", "--artifact-dir", "--closed-loop-elf", "--reciprocal-elf", "--closed-loop-vkey", "--reciprocal-vkey", "--cost-quote", "--approve-cost-digest"];
+const required = ["--plan", "--artifact-dir", "--closed-loop-elf", "--reciprocal-elf", "--aggregator-elf", "--cost-quote", "--approve-cost-digest"];
 for (const flag of required) if (!value(flag)) throw new Error(`missing ${flag}`);
 if (!args.includes("--confirm-production-proving")) throw new Error("production proving requires --confirm-production-proving");
 if (!process.env.BASE_RPC_URLS && !process.env.BASE_RPC_URL) throw new Error("BASE_RPC_URLS or BASE_RPC_URL is required");
@@ -27,53 +25,42 @@ if (plannedIds.size !== plan.claims.length) throw new Error("proof plan contains
 approveCostQuote(
   JSON.parse(await readFile(value("--cost-quote"), "utf8")),
   value("--approve-cost-digest"),
-  { p0Claims: plan.claims.length },
+  { p0Claims: plan.claims.length, aggregates: 1 },
 );
 await mkdir(artifactDir, { recursive: true });
 
 for (const [index, claim] of plan.claims.entries()) {
   const stem = `${String(index).padStart(3, "0")}-${claim.claimId.slice(2, 18)}`;
   const witnessPath = join(artifactDir, `${stem}.witness.json`);
-  const resultPath = join(artifactDir, `${stem}.result.json`);
   const reciprocal = claim.type === "P0_RECIPROCAL";
-  const elf = resolve(reciprocal ? value("--reciprocal-elf") : value("--closed-loop-elf"));
   console.error(`[${index + 1}/${plan.claims.length}] materializing ${claim.claimId}`);
   await run("cargo", [
     "run", "--release", "-p", "loop-host", "--bin", "wash-trading-materialize-p0", "--",
     "--plan", planPath, "--claim-id", claim.claimId, "--output", witnessPath,
   ]);
-  console.error(`[${index + 1}/${plan.claims.length}] proving ${claim.claimId}`);
-  const runArgs = [
-    "run", "--release", "-p", "loop-host", "--features", "sp1", "--", "run", witnessPath,
-    "--prove", "--production", "--elf", elf, "--result", resultPath,
-    "--source-claim-id", claim.claimId,
-  ];
-  if (reciprocal) runArgs.push("--reciprocal");
-  await run("cargo", runArgs);
-  const result = JSON.parse(await readFile(resultPath, "utf8"));
-  if (result?.version !== 2 || result.kind !== "antseed-wash-trading-proof-result"
-      || result.securityMode !== "production" || result.entry?.sourceClaimId?.toLowerCase() !== claim.claimId.toLowerCase()
-      || result.entry.claimType !== claim.type || result.entry.proofBytes === "0x") {
-    throw new Error(`${claim.claimId}: production result identity mismatch`);
-  }
+  claim.witnessPath = witnessPath;
+  claim.aggregateKind = reciprocal ? "reciprocal" : "closed-loop";
 }
 
-const manifestPath = join(artifactDir, "proof-results.json");
-await run("cargo", [
-  "run", "--release", "-p", "loop-host", "--", "batch-manifest",
-  "--results-dir", artifactDir,
-  "--blockhash-store", BASE_BLOCKHASH_STORE,
-  "--closed-loop-vkey", value("--closed-loop-vkey"),
-  "--reciprocal-vkey", value("--reciprocal-vkey"),
-  "--out", manifestPath,
-]);
-const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-if (manifest.entries.length !== plan.claims.length) throw new Error("combined proof result count mismatch");
+const aggregatePath = join(artifactDir, "aggregate-proof.json");
+const aggregateArgs = [
+  "run", "--release", "-p", "loop-host", "--features", "sp1", "--bin", "wash-trading-aggregate", "--",
+  "--aggregator-elf", resolve(value("--aggregator-elf")),
+  "--closed-loop-elf", resolve(value("--closed-loop-elf")),
+  "--reciprocal-elf", resolve(value("--reciprocal-elf")),
+  "--output", aggregatePath,
+];
+for (const claim of plan.claims) aggregateArgs.push("--child", `${claim.aggregateKind}:${claim.witnessPath}`);
+await run("cargo", aggregateArgs);
+const aggregate = JSON.parse(await readFile(aggregatePath, "utf8"));
+if (aggregate?.kind !== "antseed-wash-trading-aggregate-proof" || aggregate.childCount !== plan.claims.length) {
+  throw new Error("aggregate proof identity mismatch");
+}
 console.log(JSON.stringify({
-  manifest: manifestPath,
-  expectedBatchCount: manifest.batch.expectedBatchCount,
-  expectedBatchDigest: manifest.batch.expectedBatchDigest,
-  manifestSha256: sha256(await readFile(manifestPath)),
+  aggregate: aggregatePath,
+  childCount: aggregate.childCount,
+  findingCount: aggregate.findingCount,
+  aggregateSha256: sha256(await readFile(aggregatePath)),
 }, null, 2));
 
 function run(command, commandArgs) {
