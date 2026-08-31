@@ -128,11 +128,11 @@ node scripts/generate-approved-development-proofs.mjs \
 ```
 
 The approved development runner also writes
-`submit-aggregate-calldata.json`. It records the aggregate program ID, vkey,
-public values, proof bytes, and calldata for the intended future
-`submitAggregate(bytes32,bytes,bytes)` registry entrypoint. The current
-wash-trading registry branch still exposes the legacy `submitBatch` interface,
-so this artifact is generated but never broadcast by this repository.
+`submit-historical-aggregate-calldata.json`. It records the aggregate program ID, vkey,
+public values, proof bytes, and calldata for the immutable historical
+registry's `submitHistoricalAggregate(bytes,bytes)` entrypoint. The registry
+pins the aggregate vkey at deployment, so the program ID remains artifact
+metadata and is not repeated in calldata.
 
 After proving, reconcile verified child artifacts back into discovery states
 and emit the final investigated-seller table:

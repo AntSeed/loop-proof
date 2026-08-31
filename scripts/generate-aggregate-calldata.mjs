@@ -2,8 +2,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-export const submitAggregateSignature = "submitAggregate(bytes32,bytes,bytes)";
-export const submitAggregateSelector = "34c84b3a";
+export const submitHistoricalAggregateSignature = "submitHistoricalAggregate(bytes,bytes)";
+export const submitHistoricalAggregateSelector = "2a64a7e6";
 
 export function buildAggregateCalldataArtifact(aggregate) {
   if (aggregate?.version !== 1 || aggregate.kind !== "antseed-wash-trading-aggregate-proof") {
@@ -13,13 +13,13 @@ export function buildAggregateCalldataArtifact(aggregate) {
   const aggregatorProgramVKey = fixedHex(aggregate.aggregatorProgramVKey, 32, "aggregator program vkey");
   const publicValues = dynamicHex(aggregate.publicValues, "public values");
   const proofBytes = dynamicHex(aggregate.proofBytes, "proof bytes");
-  const calldata = encodeSubmitAggregate(aggregatorProgramId, publicValues, proofBytes);
+  const calldata = encodeSubmitHistoricalAggregate(publicValues, proofBytes);
   return {
     version: 1,
-    kind: "antseed-wash-trading-submit-aggregate-calldata",
+    kind: "antseed-wash-trading-submit-historical-aggregate-calldata",
     securityMode: aggregate.securityMode,
     chainId: aggregate.chainId,
-    callSignature: submitAggregateSignature,
+    callSignature: submitHistoricalAggregateSignature,
     aggregatorProgramId,
     aggregatorProgramVKey,
     publicValues,
@@ -28,13 +28,12 @@ export function buildAggregateCalldataArtifact(aggregate) {
   };
 }
 
-export function encodeSubmitAggregate(aggregatorProgramId, publicValues, proofBytes) {
-  const programId = fixedHex(aggregatorProgramId, 32, "aggregator program ID").slice(2);
+export function encodeSubmitHistoricalAggregate(publicValues, proofBytes) {
   const publicValuesBody = encodeDynamicBytes(dynamicHex(publicValues, "public values"));
   const proofBody = encodeDynamicBytes(dynamicHex(proofBytes, "proof bytes"));
-  const headSize = 32 * 3;
+  const headSize = 32 * 2;
   const proofOffset = headSize + publicValuesBody.length / 2;
-  return `0x${submitAggregateSelector}${programId}${word(headSize)}${word(proofOffset)}${publicValuesBody}${proofBody}`;
+  return `0x${submitHistoricalAggregateSelector}${word(headSize)}${word(proofOffset)}${publicValuesBody}${proofBody}`;
 }
 
 function encodeDynamicBytes(value) {

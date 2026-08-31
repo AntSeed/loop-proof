@@ -172,7 +172,7 @@ async function main() {
       || aggregate.provenWashVolumeRaw !== approved.uniqueSuspectedVolumeRaw) {
     throw new Error("aggregate does not prove the complete approved report totals");
   }
-  const calldataPath = join(artifactDir, "submit-aggregate-calldata.json");
+  const calldataPath = join(artifactDir, "submit-historical-aggregate-calldata.json");
   await writeFile(
     calldataPath,
     `${JSON.stringify(buildAggregateCalldataArtifact(aggregate), null, 2)}\n`,
