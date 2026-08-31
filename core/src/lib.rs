@@ -1,22 +1,14 @@
-//! Loop predicate: prove that a seller funded a buyer (directly or through a
-//! chain of forwarding hops) and that the buyer subsequently settled volume
-//! with that same seller on AntSeed.
+//! Evidence-authentication primitives shared by the wash-trading predicates:
+//! receipt/transaction Merkle-Patricia inclusion proofs, receipt log parsing,
+//! and account/storage state proofs (the `LEDGER` witness of AIP-4).
 //!
 //! Everything in this crate runs identically natively (for tests) and inside
-//! the RISC Zero guest (for proofs). The zkVM boundary lives in methods/guest.
+//! the zkVM guest (for proofs). No predicate logic lives here.
 
 use alloy_consensus::Header;
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
+use alloy_trie::{proof::verify_proof, Nibbles};
 use serde::{Deserialize, Serialize};
-
-// ── Pinned rule parameters. Changing any of these changes the guest image ID. ──
-pub const PREDICATE_VERSION: u32 = 1;
-/// Each hop must forward at least this share (bps) of the previous hop amount.
-pub const MIN_FORWARD_BPS: u128 = 9_800;
-/// Consecutive hops must land within this many blocks (~1 day on Base).
-pub const MAX_HOP_GAP_BLOCKS: u64 = 43_200;
-/// Minimum funding amount considered material (1 USDC, 6 decimals).
-pub const MIN_FUNDING_RAW: u128 = 1_000_000;
 
 pub const TRANSFER_TOPIC: B256 =
     alloy_primitives::b256!("ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef");
@@ -25,13 +17,17 @@ pub const CHANNEL_SETTLED_TOPIC: B256 =
 pub const DEPOSITED_TOPIC: B256 =
     alloy_primitives::b256!("2da466a7b24304f47e87fa2e1e5a81b9831ce54fec19055ce277ca2f39ba42c4");
 
-// ─────────────────────────────── input types ───────────────────────────────
+/// keccak256(rlp("")) — the root of an empty Merkle-Patricia trie.
+pub const EMPTY_TRIE_ROOT: B256 =
+    alloy_primitives::b256!("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421");
+
+// ─────────────────────────────── proof types ───────────────────────────────
 
 /// One receipt plus its Merkle-Patricia inclusion proof against the block's
 /// receipts root. Only the receipts the claim references are carried — the
 /// proof path authenticates each one individually, so whole-block receipt
 /// sets are unnecessary.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReceiptProof {
     /// Transaction index within the block (the trie key is rlp(tx_index)).
     pub tx_index: u64,
@@ -41,161 +37,31 @@ pub struct ReceiptProof {
     pub proof: Vec<Bytes>,
 }
 
-/// One referenced block: consensus header + inclusion-proven receipts.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct BlockEvidence {
-    pub header: Header,
-    pub receipts: Vec<ReceiptProof>,
-}
-
-/// Reference to one log: block (by index into `LoopInput::blocks`), receipt
-/// (by position in that block's `receipts` list), log (index within receipt).
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub struct LogRef {
-    pub block: usize,
-    pub receipt: usize,
-    pub log: usize,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct HopClaim {
-    pub transfer: LogRef,
-    pub from: Address,
-    pub to: Address,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub enum FundingClaim {
-    /// Shape A: USDC Transfer(funder → buyer).
-    DirectTransfer { transfer: LogRef },
-    /// Shape B: USDC Transfer(funder → Deposits) paired with
-    /// Deposited(buyer, amount) in the same receipt.
-    DirectDeposit { transfer: LogRef, deposited: LogRef },
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct LoopInput {
-    pub chain_id: u64,
-    pub usdc: Address,
-    pub channels_contract: Address,
-    pub deposits_contract: Address,
-
-    pub seller: Address,
-    pub buyer: Address,
-    /// The wallet that funds the buyer. Equal to `seller` when hops is empty.
-    pub funder: Address,
-
-    pub blocks: Vec<BlockEvidence>,
-    /// Forwarding chain seller → … → funder. Empty for a direct loop.
-    pub hops: Vec<HopClaim>,
-    pub funding: FundingClaim,
-    /// ChannelSettled(buyer, seller) events, all strictly after the funding block.
-    pub settlements: Vec<LogRef>,
-}
-
-// ─────────────────────────────── journal ───────────────────────────────
-
-/// Public outputs. On-chain, the registry checks `block_refs` against
-/// canonical Base block hashes (checkpointer) and pins the image ID.
+/// One transaction plus its inclusion proof against the block's
+/// transactions root. Carried wherever an action must be attributed to an
+/// address: attribution comes from recovering the transaction signer, never
+/// from log topics alone.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LoopJournal {
-    pub predicate_version: u32,
-    pub chain_id: u64,
-    pub usdc: Address,
-    pub channels_contract: Address,
-    pub deposits_contract: Address,
-
-    pub seller: Address,
-    pub buyer: Address,
-    pub funder: Address,
-    pub hop_count: u32,
-    /// Amount the seller demonstrably routed toward the funder (raw USDC).
-    pub seller_outflow_raw: u128,
-    /// Amount the funder put into the buyer (raw USDC).
-    pub funded_raw: u128,
-    /// Buyer→seller settled volume proven AFTER the funding block (raw USDC).
-    pub settled_after_funding_raw: u128,
-    pub funding_block: u64,
-
-    /// Every block this proof relied on: (number, hash). All must be canonical.
-    pub block_refs: Vec<(u64, B256)>,
+pub struct TransactionProof {
+    pub tx_index: u64,
+    /// The transaction's trie-value encoding (EIP-2718 envelope).
+    pub value: Bytes,
+    pub proof: Vec<Bytes>,
 }
 
-// Solidity mirror of the journal. The guest commits `abi_encode()` of this,
-// so `sha256(journalData)` in AntseedWashTradingRegistry equals the receipt's
-// journal digest and `abi.decode(journalData, (LoopJournal))` recovers it.
-alloy_sol_types::sol! {
-    struct SolBlockRef {
-        uint64 number;
-        bytes32 blockHash;
-    }
-
-    struct SolLoopJournal {
-        uint32 predicateVersion;
-        uint64 chainId;
-        address usdc;
-        address channels;
-        address deposits;
-        address seller;
-        address buyer;
-        address funder;
-        uint32 hopCount;
-        uint128 sellerOutflowRaw;
-        uint128 fundedRaw;
-        uint128 settledAfterFundingRaw;
-        uint64 fundingBlock;
-        SolBlockRef[] blockRefs;
-    }
-}
-
-impl LoopJournal {
-    /// ABI encoding matching Solidity `abi.encode(LoopJournal)`.
-    pub fn abi_encode(&self) -> Vec<u8> {
-        use alloy_sol_types::SolValue;
-        SolLoopJournal {
-            predicateVersion: self.predicate_version,
-            chainId: self.chain_id,
-            usdc: self.usdc,
-            channels: self.channels_contract,
-            deposits: self.deposits_contract,
-            seller: self.seller,
-            buyer: self.buyer,
-            funder: self.funder,
-            hopCount: self.hop_count,
-            sellerOutflowRaw: self.seller_outflow_raw,
-            fundedRaw: self.funded_raw,
-            settledAfterFundingRaw: self.settled_after_funding_raw,
-            fundingBlock: self.funding_block,
-            blockRefs: self
-                .block_refs
-                .iter()
-                .map(|(number, hash)| SolBlockRef { number: *number, blockHash: *hash })
-                .collect(),
-        }
-        .abi_encode()
-    }
-
-    /// Decode the ABI journal bytes back into the native struct.
-    pub fn abi_decode(data: &[u8]) -> Result<Self, String> {
-        use alloy_sol_types::SolValue;
-        let j = SolLoopJournal::abi_decode(data).map_err(|e| format!("journal abi: {e}"))?;
-        Ok(LoopJournal {
-            predicate_version: j.predicateVersion,
-            chain_id: j.chainId,
-            usdc: j.usdc,
-            channels_contract: j.channels,
-            deposits_contract: j.deposits,
-            seller: j.seller,
-            buyer: j.buyer,
-            funder: j.funder,
-            hop_count: j.hopCount,
-            seller_outflow_raw: j.sellerOutflowRaw,
-            funded_raw: j.fundedRaw,
-            settled_after_funding_raw: j.settledAfterFundingRaw,
-            funding_block: j.fundingBlock,
-            block_refs: j.blockRefs.iter().map(|r| (r.number, r.blockHash)).collect(),
-        })
-    }
+/// Account + storage proof for one storage slot at one block, against that
+/// block's `stateRoot`. The *guest* derives the address and slot from pinned
+/// constants — they are deliberately not part of the witness, so a prover
+/// cannot point the proof at a different contract or slot.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StorageProof {
+    /// MPT nodes proving the account under keccak256(address) in the state
+    /// trie (or its absence).
+    pub account_proof: Vec<Bytes>,
+    /// MPT nodes proving the slot value under keccak256(slot) in the
+    /// account's storage trie (or its absence). Empty when the account does
+    /// not exist or has an empty storage trie.
+    pub storage_proof: Vec<Bytes>,
 }
 
 // ─────────────────────────── receipt log parsing ───────────────────────────
@@ -217,21 +83,35 @@ fn next_item<'a>(buf: &mut &'a [u8]) -> Result<(bool, &'a [u8]), String> {
     Ok((h.list, payload))
 }
 
+/// Strip an optional EIP-2718 type byte and return the receipt body fields.
+fn receipt_body<'a>(receipt: &'a [u8]) -> Result<&'a [u8], String> {
+    let mut buf = receipt;
+    if !buf.is_empty() && buf[0] < 0xc0 {
+        // typed receipt envelope: first byte is the tx type
+        buf = &buf[1..];
+    }
+    let (is_list, body) = next_item(&mut buf)?;
+    if !is_list {
+        return Err("receipt: not a list".into());
+    }
+    Ok(body)
+}
+
+/// Whether the receipt's status field is 1 (success). Evidence from reverted
+/// receipts is never accepted.
+pub fn receipt_success(receipt: &[u8]) -> Result<bool, String> {
+    let mut body = receipt_body(receipt)?;
+    let (_, status) = next_item(&mut body)?;
+    Ok(status == [1u8])
+}
+
 /// Extract log `log_index` from a receipt's trie-value encoding.
 ///
 /// Layout (legacy and every typed receipt, incl. OP-stack 0x7e deposits):
 /// `[type]? ++ rlp([status, cumulativeGas, logsBloom, logs, ...extra])`
 /// We only interpret the log list; extra trailing fields are ignored.
 pub fn receipt_log(receipt: &[u8], log_index: usize) -> Result<ParsedLog, String> {
-    let mut buf = receipt;
-    if !buf.is_empty() && buf[0] < 0xc0 {
-        // typed receipt envelope: first byte is the tx type
-        buf = &buf[1..];
-    }
-    let (is_list, mut body) = next_item(&mut buf)?;
-    if !is_list {
-        return Err("receipt: not a list".into());
-    }
+    let mut body = receipt_body(receipt)?;
     // skip status, cumulativeGasUsed, logsBloom
     for _ in 0..3 {
         next_item(&mut body)?;
@@ -275,9 +155,10 @@ pub fn receipt_log(receipt: &[u8], log_index: usize) -> Result<ParsedLog, String
     Err(format!("receipt: log index {log_index} out of range"))
 }
 
-// ─────────────────────────── block authentication ───────────────────────────
+// ─────────────────────────── inclusion proofs ───────────────────────────
 
-/// The receipts trie is keyed by rlp(tx_index) (NOT hashed keys).
+/// The receipts and transactions tries are keyed by rlp(tx_index) (NOT
+/// hashed keys).
 pub fn trie_index_key(i: u64) -> Vec<u8> {
     if i == 0 {
         return vec![0x80];
@@ -293,189 +174,411 @@ pub fn trie_index_key(i: u64) -> Vec<u8> {
     }
 }
 
-fn verify_receipt_inclusion(header: &Header, rp: &ReceiptProof) -> Result<(), String> {
-    let key = alloy_trie::Nibbles::unpack(trie_index_key(rp.tx_index));
-    alloy_trie::proof::verify_proof(
+pub fn verify_receipt_inclusion(header: &Header, rp: &ReceiptProof) -> Result<(), String> {
+    let key = Nibbles::unpack(trie_index_key(rp.tx_index));
+    verify_proof(
         header.receipts_root,
         key,
         Some(rp.value.to_vec()),
         rp.proof.iter(),
     )
-    .map_err(|e| format!("block {}: receipt {} inclusion: {e}", header.number, rp.tx_index))
+    .map_err(|e| {
+        format!(
+            "block {}: receipt {} inclusion: {e}",
+            header.number, rp.tx_index
+        )
+    })
 }
 
-// ─────────────────────────────── the predicate ───────────────────────────────
-
-fn topic_addr(t: &B256) -> Address {
-    Address::from_slice(&t.as_slice()[12..])
+pub fn verify_transaction_inclusion(header: &Header, tp: &TransactionProof) -> Result<(), String> {
+    let key = Nibbles::unpack(trie_index_key(tp.tx_index));
+    verify_proof(
+        header.transactions_root,
+        key,
+        Some(tp.value.to_vec()),
+        tp.proof.iter(),
+    )
+    .map_err(|e| {
+        format!(
+            "block {}: transaction {} inclusion: {e}",
+            header.number, tp.tx_index
+        )
+    })
 }
 
-fn word_u128(word: &[u8]) -> Result<u128, String> {
-    if word.len() != 32 || !word[..16].iter().all(|b| *b == 0) {
-        return Err("abi: u128 overflow".into());
-    }
-    Ok(u128::from_be_bytes(word[16..32].try_into().unwrap()))
-}
+// ─────────────────────────── state proofs ───────────────────────────
 
-struct Resolver<'a> {
-    input: &'a LoopInput,
-}
-
-impl<'a> Resolver<'a> {
-    fn log(&self, r: LogRef) -> Result<(ParsedLog, u64), String> {
-        let block = self
-            .input
-            .blocks
-            .get(r.block)
-            .ok_or_else(|| format!("block index {} out of range", r.block))?;
-        let receipt = block
-            .receipts
-            .get(r.receipt)
-            .ok_or_else(|| format!("receipt position {} out of range", r.receipt))?;
-        Ok((receipt_log(&receipt.value, r.log)?, block.header.number))
-    }
-
-    /// USDC Transfer log → (from, to, value, block_number)
-    fn usdc_transfer(&self, r: LogRef) -> Result<(Address, Address, u128, u64), String> {
-        let (log, block) = self.log(r)?;
-        if log.address != self.input.usdc {
-            return Err("transfer: not the USDC contract".into());
+/// Verify `proof` for `slot` of account `address` against `state_root` and
+/// return the slot's value. Zero-valued (absent) slots and absent accounts
+/// verify as exclusion proofs and return zero — a predicate must be able to
+/// prove that a counter *is* zero, not merely fail to prove it non-zero.
+pub fn verify_storage_value(
+    state_root: B256,
+    address: Address,
+    slot: B256,
+    proof: &StorageProof,
+) -> Result<U256, String> {
+    let account_key = Nibbles::unpack(keccak256(address));
+    let account_rlp = mpt_get(state_root, account_key, &proof.account_proof)
+        .map_err(|e| format!("account {address}: {e}"))?;
+    let storage_root = match account_rlp {
+        None => {
+            // Account does not exist — every slot is zero.
+            if !proof.storage_proof.is_empty() {
+                return Err(format!(
+                    "account {address}: storage proof for absent account"
+                ));
+            }
+            return Ok(U256::ZERO);
         }
-        if log.topics.len() != 3 || log.topics[0] != TRANSFER_TOPIC {
-            return Err("transfer: wrong event".into());
-        }
-        let value = U256::from_be_slice(&log.data);
-        let value = u128::try_from(value).map_err(|_| "transfer: value overflow")?;
-        Ok((topic_addr(&log.topics[1]), topic_addr(&log.topics[2]), value, block))
-    }
-}
-
-/// Verify the loop claim. Returns the journal on success; any inconsistency
-/// is an error (in the guest, an error aborts and no proof exists).
-pub fn verify(input: &LoopInput) -> Result<LoopJournal, String> {
-    // 1. Authenticate every block: header hash + per-receipt inclusion proofs.
-    let mut block_refs = Vec::with_capacity(input.blocks.len());
-    for b in &input.blocks {
-        for rp in &b.receipts {
-            verify_receipt_inclusion(&b.header, rp)?;
-        }
-        block_refs.push((b.header.number, b.header.hash_slow()));
-    }
-
-    let r = Resolver { input };
-
-    // 2. Forwarding chain: seller → hop₁ → … → funder.
-    let mut seller_outflow_raw: u128 = 0;
-    if input.hops.is_empty() {
-        if input.funder != input.seller {
-            return Err("no hops but funder != seller".into());
-        }
-    } else {
-        let mut expected_from = input.seller;
-        let mut prev_amount: Option<u128> = None;
-        let mut prev_block: Option<u64> = None;
-        for (i, hop) in input.hops.iter().enumerate() {
-            let (from, to, value, block) = r.usdc_transfer(hop.transfer)?;
-            if from != expected_from || from != hop.from || to != hop.to {
-                return Err(format!("hop {i}: address chain broken"));
-            }
-            if let Some(prev) = prev_amount {
-                // forwarded share ≥ MIN_FORWARD_BPS of what arrived
-                if (value as u128) * 10_000 < prev * MIN_FORWARD_BPS {
-                    return Err(format!("hop {i}: forwarded share below threshold"));
-                }
-            }
-            if let Some(pb) = prev_block {
-                if block < pb || block - pb > MAX_HOP_GAP_BLOCKS {
-                    return Err(format!("hop {i}: outside hop window"));
-                }
-            }
-            if i == 0 {
-                seller_outflow_raw = value;
-            }
-            prev_amount = Some(value);
-            prev_block = Some(block);
-            expected_from = to;
-        }
-        if expected_from != input.funder {
-            return Err("hop chain does not terminate at funder".into());
-        }
-    }
-
-    // 3. Funding: funder → buyer (directly, or via a deposit on their behalf).
-    let (funded_raw, funding_block) = match &input.funding {
-        FundingClaim::DirectTransfer { transfer } => {
-            let (from, to, value, block) = r.usdc_transfer(*transfer)?;
-            if from != input.funder || to != input.buyer {
-                return Err("funding: wrong transfer parties".into());
-            }
-            (value, block)
-        }
-        FundingClaim::DirectDeposit { transfer, deposited } => {
-            let (from, to, value, block) = r.usdc_transfer(*transfer)?;
-            if from != input.funder || to != input.deposits_contract {
-                return Err("funding: wrong deposit transfer parties".into());
-            }
-            if transfer.block != deposited.block || transfer.receipt != deposited.receipt {
-                return Err("funding: Deposited not in the same receipt".into());
-            }
-            let (dep, _) = r.log(*deposited)?;
-            if dep.address != input.deposits_contract
-                || dep.topics.len() != 2
-                || dep.topics[0] != DEPOSITED_TOPIC
-                || topic_addr(&dep.topics[1]) != input.buyer
-            {
-                return Err("funding: Deposited event mismatch".into());
-            }
-            if word_u128(&dep.data[..32.min(dep.data.len())])? != value {
-                return Err("funding: deposit amount != transfer amount".into());
-            }
-            (value, block)
+        Some(rlp) => {
+            decode_account_storage_root(&rlp).map_err(|e| format!("account {address}: {e}"))?
         }
     };
-    if funded_raw < MIN_FUNDING_RAW {
-        return Err("funding: below materiality threshold".into());
+    if storage_root == EMPTY_TRIE_ROOT {
+        if !proof.storage_proof.is_empty() {
+            return Err(format!("account {address}: storage proof for empty trie"));
+        }
+        return Ok(U256::ZERO);
+    }
+    let slot_key = Nibbles::unpack(keccak256(slot));
+    match mpt_get(storage_root, slot_key, &proof.storage_proof)
+        .map_err(|e| format!("account {address} slot {slot}: {e}"))?
+    {
+        None => Ok(U256::ZERO),
+        Some(value_rlp) => {
+            let mut buf = value_rlp.as_slice();
+            let (is_list, payload) = next_item(&mut buf)?;
+            if is_list || !buf.is_empty() || payload.len() > 32 {
+                return Err(format!("account {address} slot {slot}: bad value encoding"));
+            }
+            Ok(U256::from_be_slice(payload))
+        }
+    }
+}
+
+/// Inclusion-or-exclusion MPT lookup: `Ok(Some(value))` when the key is
+/// present, `Ok(None)` when the proof shows it absent, `Err` when the proof
+/// is inconsistent with the root.
+fn mpt_get(root: B256, key: Nibbles, proof: &[Bytes]) -> Result<Option<Vec<u8>>, String> {
+    // Try exclusion first: a valid exclusion proof means the key is absent.
+    if verify_proof(root, key.clone(), None, proof.iter()).is_ok() {
+        return Ok(None);
+    }
+    // Otherwise the proof must be a valid inclusion proof; recover the leaf
+    // value by walking the last node.
+    let value = leaf_value(proof)?;
+    verify_proof(root, key, Some(value.clone()), proof.iter())
+        .map_err(|e| format!("inclusion: {e}"))?;
+    Ok(Some(value))
+}
+
+/// Extract the value carried by the final (leaf) node of an MPT proof; the
+/// subsequent inclusion verification binds it to the key.
+fn leaf_value(proof: &[Bytes]) -> Result<Vec<u8>, String> {
+    let last = proof.last().ok_or("empty proof")?;
+    let mut buf = last.as_ref();
+    let (is_list, mut node) = next_item(&mut buf)?;
+    if !is_list {
+        return Err("proof node: not a list".into());
+    }
+    let mut items: Vec<&[u8]> = Vec::new();
+    while !node.is_empty() {
+        let (_, payload) = next_item(&mut node)?;
+        items.push(payload);
+    }
+    match items.len() {
+        2 => {
+            // leaf or extension; for an inclusion proof of this key the last
+            // node must be the leaf carrying the value.
+            let path = items[0];
+            if path.is_empty() {
+                return Err("proof node: empty path".into());
+            }
+            let flag = path[0] >> 4;
+            if flag != 2 && flag != 3 {
+                return Err("proof node: last node is not a leaf".into());
+            }
+            Ok(items[1].to_vec())
+        }
+        17 => {
+            // branch node: value sits in the 17th item only when the key
+            // terminates here (never the case for fixed-length keys we use).
+            Err("proof node: key terminates in a branch".into())
+        }
+        n => Err(format!("proof node: {n} items")),
+    }
+}
+
+/// Decode `rlp([nonce, balance, storageRoot, codeHash])` → storageRoot.
+fn decode_account_storage_root(account_rlp: &[u8]) -> Result<B256, String> {
+    let mut buf = account_rlp;
+    let (is_list, mut body) = next_item(&mut buf)?;
+    if !is_list {
+        return Err("account: not a list".into());
+    }
+    next_item(&mut body)?; // nonce
+    next_item(&mut body)?; // balance
+    let (_, storage_root) = next_item(&mut body)?;
+    if storage_root.len() != 32 {
+        return Err("account: bad storage root".into());
+    }
+    Ok(B256::from_slice(storage_root))
+}
+
+// ─────────────────────────── slot derivation ───────────────────────────
+
+/// Storage slot of `mapping(uint256 => V)` entry: keccak256(key ‖ base).
+pub fn mapping_slot_u256(key: U256, base: u64) -> B256 {
+    let mut buf = [0u8; 64];
+    buf[..32].copy_from_slice(&key.to_be_bytes::<32>());
+    buf[32..64].copy_from_slice(&U256::from(base).to_be_bytes::<32>());
+    keccak256(buf)
+}
+
+/// Storage slot of `mapping(address => V)` entry: keccak256(pad32(key) ‖ base).
+pub fn mapping_slot_address(key: Address, base: u64) -> B256 {
+    let mut buf = [0u8; 64];
+    buf[12..32].copy_from_slice(key.as_slice());
+    buf[32..64].copy_from_slice(&U256::from(base).to_be_bytes::<32>());
+    keccak256(buf)
+}
+
+/// `slot + offset` for struct fields behind a mapping value.
+pub fn slot_offset(slot: B256, offset: u64) -> B256 {
+    let v = U256::from_be_bytes(slot.0) + U256::from(offset);
+    B256::from(v.to_be_bytes::<32>())
+}
+
+// ─────────────────────────── tiny RLP encoder ───────────────────────────
+
+fn rlp_len_prefix(base: u8, len: usize) -> Vec<u8> {
+    if len <= 55 {
+        vec![base + len as u8]
+    } else {
+        let be = (len as u64).to_be_bytes();
+        let sig: Vec<u8> = be.iter().skip_while(|b| **b == 0).cloned().collect();
+        let mut out = vec![base + 55 + sig.len() as u8];
+        out.extend(sig);
+        out
+    }
+}
+
+pub fn rlp_bytes(payload: &[u8]) -> Vec<u8> {
+    if payload.len() == 1 && payload[0] < 0x80 {
+        payload.to_vec()
+    } else {
+        let mut out = rlp_len_prefix(0x80, payload.len());
+        out.extend_from_slice(payload);
+        out
+    }
+}
+
+pub fn rlp_uint(v: u128) -> Vec<u8> {
+    let be = v.to_be_bytes();
+    let sig: Vec<u8> = be.iter().skip_while(|b| **b == 0).cloned().collect();
+    rlp_bytes(&sig)
+}
+
+pub fn rlp_list(items: &[Vec<u8>]) -> Vec<u8> {
+    let payload: Vec<u8> = items.concat();
+    let mut out = rlp_len_prefix(0xc0, payload.len());
+    out.extend(payload);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_primitives::{address, b256, hex, U256};
+    use alloy_trie::{proof::ProofRetainer, HashBuilder};
+
+    #[test]
+    fn event_topics_match_signatures() {
+        assert_eq!(
+            keccak256("Transfer(address,address,uint256)"),
+            TRANSFER_TOPIC
+        );
+        assert_eq!(keccak256("Deposited(address,uint256)"), DEPOSITED_TOPIC);
+        assert_eq!(
+            keccak256(
+                "ChannelSettled(bytes32,address,address,uint128,uint128,uint128,uint256,bytes)"
+            ),
+            CHANNEL_SETTLED_TOPIC
+        );
     }
 
-    // 4. Settlements: ChannelSettled(buyer, seller), strictly after funding.
-    let mut settled_after_funding_raw: u128 = 0;
-    for (i, sref) in input.settlements.iter().enumerate() {
-        let (log, block) = r.log(*sref)?;
-        if log.address != input.channels_contract {
-            return Err(format!("settlement {i}: not the Channels contract"));
-        }
-        if log.topics.len() != 4 || log.topics[0] != CHANNEL_SETTLED_TOPIC {
-            return Err(format!("settlement {i}: wrong event"));
-        }
-        if topic_addr(&log.topics[2]) != input.buyer || topic_addr(&log.topics[3]) != input.seller {
-            return Err(format!("settlement {i}: wrong buyer/seller"));
-        }
-        if block <= funding_block {
-            return Err(format!("settlement {i}: not after funding"));
-        }
-        // data: (cumulativeAmount, delta, totalSettled, platformFee, bytes metadata)
-        if log.data.len() < 64 {
-            return Err(format!("settlement {i}: short data"));
-        }
-        settled_after_funding_raw = settled_after_funding_raw
-            .checked_add(word_u128(&log.data[32..64])?)
-            .ok_or("settlement: volume overflow")?;
+    #[test]
+    fn mapping_slots_match_solidity_layout() {
+        // cast keccak $(cast abi-encode "f(uint256,uint256)" 53008 11)
+        assert_eq!(
+            mapping_slot_u256(U256::from(53008u64), 11),
+            b256!("1244a5b59bdc1bb02e7545618c6786acbe94a376aac8fbeb8f429267f2df438b")
+        );
+        // cast keccak $(cast abi-encode "f(address,uint256)" 0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c 4)
+        let a = address!("0329c5d3920e301740f78d6e17b8d1a11cca9b2c");
+        assert_eq!(
+            mapping_slot_address(a, 4),
+            b256!("013add9faeed6aa4207ae7398064c1f23724f4a190e7ef6ff1f1f9c9d3edea72")
+        );
+        assert_ne!(mapping_slot_address(a, 4), mapping_slot_address(a, 9));
+        assert_eq!(
+            slot_offset(mapping_slot_u256(U256::from(7u64), 11), 0),
+            mapping_slot_u256(U256::from(7u64), 11)
+        );
+        assert_eq!(
+            U256::from_be_bytes(slot_offset(mapping_slot_u256(U256::from(7u64), 11), 1).0),
+            U256::from_be_bytes(mapping_slot_u256(U256::from(7u64), 11).0) + U256::from(1u64)
+        );
     }
 
-    Ok(LoopJournal {
-        predicate_version: PREDICATE_VERSION,
-        chain_id: input.chain_id,
-        usdc: input.usdc,
-        channels_contract: input.channels_contract,
-        deposits_contract: input.deposits_contract,
-        seller: input.seller,
-        buyer: input.buyer,
-        funder: input.funder,
-        hop_count: input.hops.len() as u32,
-        seller_outflow_raw,
-        funded_raw,
-        settled_after_funding_raw,
-        funding_block,
-        block_refs,
-    })
+    fn storage_trie(entries: &[(B256, U256)]) -> (B256, Vec<(B256, Vec<Bytes>)>) {
+        let mut leaves: Vec<(Nibbles, Vec<u8>)> = entries
+            .iter()
+            .map(|(slot, value)| {
+                let be = value.to_be_bytes::<32>();
+                let sig: Vec<u8> = be.iter().skip_while(|b| **b == 0).cloned().collect();
+                (Nibbles::unpack(keccak256(slot)), rlp_bytes(&sig))
+            })
+            .collect();
+        leaves.sort_by(|a, b| a.0.cmp(&b.0));
+        let keys: Vec<Nibbles> = leaves.iter().map(|(k, _)| k.clone()).collect();
+        let mut hb = HashBuilder::default().with_proof_retainer(ProofRetainer::new(keys));
+        for (k, v) in &leaves {
+            hb.add_leaf(k.clone(), v);
+        }
+        let root = hb.root();
+        let nodes = hb.take_proof_nodes();
+        let proofs = entries
+            .iter()
+            .map(|(slot, _)| {
+                let key = Nibbles::unpack(keccak256(slot));
+                (
+                    *slot,
+                    nodes
+                        .matching_nodes_sorted(&key)
+                        .into_iter()
+                        .map(|(_, n)| n)
+                        .collect::<Vec<Bytes>>(),
+                )
+            })
+            .collect();
+        (root, proofs)
+    }
+
+    #[test]
+    fn storage_value_roundtrip_through_account_and_storage_tries() {
+        let contract = address!("ba66d3b4fbcf472f6f11d6f9f96aace96516f09d");
+        let slot = mapping_slot_u256(U256::from(53008u64), 11);
+        let value = U256::from(47_390_485_481u64);
+        let (storage_root, mut storage_proofs) = storage_trie(&[(slot, value)]);
+
+        // account leaf: rlp([nonce, balance, storageRoot, codeHash])
+        let account_rlp = rlp_list(&[
+            rlp_uint(1),
+            rlp_uint(0),
+            rlp_bytes(storage_root.as_slice()),
+            rlp_bytes(&[0u8; 32]),
+        ]);
+
+        let account_key = Nibbles::unpack(keccak256(contract));
+        let mut hb = HashBuilder::default()
+            .with_proof_retainer(ProofRetainer::new(vec![account_key.clone()]));
+        hb.add_leaf(account_key.clone(), &account_rlp);
+        let state_root = hb.root();
+        let account_proof: Vec<Bytes> = hb
+            .take_proof_nodes()
+            .matching_nodes_sorted(&account_key)
+            .into_iter()
+            .map(|(_, n)| n)
+            .collect();
+
+        let proof = StorageProof {
+            account_proof: account_proof.clone(),
+            storage_proof: storage_proofs.remove(0).1,
+        };
+        assert_eq!(
+            verify_storage_value(state_root, contract, slot, &proof).unwrap(),
+            value
+        );
+
+        // Wrong slot → exclusion → zero.
+        let other = mapping_slot_u256(U256::from(1u64), 11);
+        let excl = StorageProof {
+            account_proof,
+            storage_proof: proof.storage_proof.clone(),
+        };
+        // The inclusion nodes for `slot` also prove `other`'s absence when the
+        // paths diverge at the root; if they do not, verification must fail —
+        // either way, the value can never be attributed to the wrong slot.
+        match verify_storage_value(state_root, contract, other, &excl) {
+            Ok(v) => assert_eq!(v, U256::ZERO),
+            Err(_) => {}
+        }
+
+        // Tampered state root → error, never zero.
+        assert!(verify_storage_value(B256::ZERO, contract, slot, &proof).is_err());
+    }
+
+    #[test]
+    fn absent_account_reads_zero_only_with_consistent_proof() {
+        // Single-account trie; a different address is provably absent.
+        let present = address!("0000000000000000000000000000000000000001");
+        let absent = address!("00000000000000000000000000000000000000aa");
+        let account_rlp = rlp_list(&[
+            rlp_uint(1),
+            rlp_uint(0),
+            rlp_bytes(EMPTY_TRIE_ROOT.as_slice()),
+            rlp_bytes(&[0u8; 32]),
+        ]);
+        let key = Nibbles::unpack(keccak256(present));
+        let mut hb =
+            HashBuilder::default().with_proof_retainer(ProofRetainer::new(vec![key.clone()]));
+        hb.add_leaf(key.clone(), &account_rlp);
+        let state_root = hb.root();
+        let nodes: Vec<Bytes> = hb
+            .take_proof_nodes()
+            .matching_nodes_sorted(&key)
+            .into_iter()
+            .map(|(_, n)| n)
+            .collect();
+
+        // Present account with empty storage: every slot is zero, no storage proof.
+        let proof = StorageProof {
+            account_proof: nodes.clone(),
+            storage_proof: vec![],
+        };
+        assert_eq!(
+            verify_storage_value(state_root, present, B256::ZERO, &proof).unwrap(),
+            U256::ZERO
+        );
+        // The same nodes prove the absent account excluded (single-leaf trie).
+        assert_eq!(
+            verify_storage_value(state_root, absent, B256::ZERO, &proof).unwrap(),
+            U256::ZERO
+        );
+        // Absent account may not carry a storage proof.
+        let bad = StorageProof {
+            account_proof: nodes,
+            storage_proof: vec![Bytes::from(hex!("c0"))],
+        };
+        assert!(verify_storage_value(state_root, absent, B256::ZERO, &bad).is_err());
+    }
+
+    fn typed_receipt(status: u128) -> Vec<u8> {
+        // 0x02 ++ rlp([status, cumulativeGas, bloom, []])
+        let body = rlp_list(&[
+            rlp_uint(status),
+            rlp_uint(1),
+            rlp_bytes(&[0u8; 256]),
+            rlp_list(&[]),
+        ]);
+        [vec![0x02], body].concat()
+    }
+
+    #[test]
+    fn receipt_success_reads_the_status_field() {
+        assert!(receipt_success(&typed_receipt(1)).unwrap());
+        assert!(!receipt_success(&typed_receipt(0)).unwrap());
+    }
 }

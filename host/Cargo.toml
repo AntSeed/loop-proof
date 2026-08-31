@@ -1,17 +1,36 @@
 [package]
 name = "loop-host"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+default-run = "loop-host"
+
+[[bin]]
+name = "loop-host"
+path = "src/main.rs"
+
+[[bin]]
+name = "wash-trading-aggregate"
+path = "src/bin/wash-trading-aggregate.rs"
+required-features = ["sp1"]
 
 [dependencies]
 loop-core = { workspace = true }
-methods = { workspace = true }
-risc0-zkvm = { version = "3.0" }
-alloy-primitives = { workspace = true }
+wash-predicate = { workspace = true }
+alloy-primitives = { workspace = true, features = ["std"] }
+alloy-sol-types = { workspace = true }
 alloy-consensus = { workspace = true }
+alloy-eips = { workspace = true }
+alloy-network = { version = "=1.5.2" }
 alloy-trie = { workspace = true }
+alloy-rlp = { workspace = true }
+op-alloy-consensus = { version = "=0.18.0", features = ["alloy-compat"] }
+anyhow = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 ureq = { version = "2", features = ["json"] }
-sha2 = "0.10"
-anyhow = "1"
+
+sp1-sdk = { workspace = true, optional = true, features = ["blocking", "native-gnark"] }
+
+[features]
+sp1 = ["dep:sp1-sdk"]

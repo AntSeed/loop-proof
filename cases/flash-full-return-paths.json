@@ -1,0 +1,1056 @@
+[
+  {
+    "index": 0,
+    "valid": true,
+    "bottleneckRaw": "164751826",
+    "duration": 9752,
+    "hops": [
+      {
+        "tx": "0xdffcef12b2ce22c2f64ef19e085cd3fe4696bf08fcb925e6d8e669504f697e7d",
+        "blockNumber": 46481488,
+        "transactionIndex": 6,
+        "logIndex": 37,
+        "timestamp": 1779752323,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "164771826"
+      },
+      {
+        "tx": "0x500efe8e11dada581c02ab56fc312c8ee4f937504dc427ac682dc9305329deb2",
+        "blockNumber": 46481622,
+        "transactionIndex": 150,
+        "logIndex": 756,
+        "timestamp": 1779752591,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "164771826"
+      },
+      {
+        "tx": "0x8978372952e5e98439133d51a86ad8be0d9a7f296100e2168c6b4300ac5842c2",
+        "blockNumber": 46486364,
+        "transactionIndex": 100,
+        "logIndex": 464,
+        "timestamp": 1779762075,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "164751826"
+      }
+    ]
+  },
+  {
+    "index": 1,
+    "valid": true,
+    "bottleneckRaw": "508709881",
+    "duration": 1414,
+    "hops": [
+      {
+        "tx": "0x727c526e6867492f8e39fcab2efcb0cdf394f54e1c6d79ea560c53a099524b93",
+        "blockNumber": 46574833,
+        "transactionIndex": 575,
+        "logIndex": 892,
+        "timestamp": 1779939013,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "508745881"
+      },
+      {
+        "tx": "0xd690c5148cbfdfbef91e8a1859180028b888747cb6a237c5bb740af20b678a4d",
+        "blockNumber": 46574892,
+        "transactionIndex": 206,
+        "logIndex": 510,
+        "timestamp": 1779939131,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "508745881"
+      },
+      {
+        "tx": "0xb31ff721b746be577ad32eb216ff744e6606aa60b252139c105cb8956ca02555",
+        "blockNumber": 46575540,
+        "transactionIndex": 570,
+        "logIndex": 281,
+        "timestamp": 1779940427,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "508709881"
+      }
+    ]
+  },
+  {
+    "index": 2,
+    "valid": true,
+    "bottleneckRaw": "1279742069",
+    "duration": 3238,
+    "hops": [
+      {
+        "tx": "0xf8a70b96aec05daab23b2ad48d4aa3ab9645a7e4541a518c9966313675bb46da",
+        "blockNumber": 46809086,
+        "transactionIndex": 9,
+        "logIndex": 21,
+        "timestamp": 1780407519,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1279962069"
+      },
+      {
+        "tx": "0x59d02973c707d7ef7ed71849bd9c99b2e026bc32884a97feb43d0a9fc3f10393",
+        "blockNumber": 46809162,
+        "transactionIndex": 1488,
+        "logIndex": 613,
+        "timestamp": 1780407671,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1279962069"
+      },
+      {
+        "tx": "0x224a4558d5bd9beb0c13a58509d953213e055f0fb21b73489b4c4da513a69b93",
+        "blockNumber": 46810705,
+        "transactionIndex": 146,
+        "logIndex": 193,
+        "timestamp": 1780410757,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "1279742069"
+      }
+    ]
+  },
+  {
+    "index": 3,
+    "valid": true,
+    "bottleneckRaw": "1269201518",
+    "duration": 2690,
+    "hops": [
+      {
+        "tx": "0x2f1f2512f3c9cb21e77506013f9cc6e9e27b86df1f6fea7c73dffb2e0d930cff",
+        "blockNumber": 46898682,
+        "transactionIndex": 206,
+        "logIndex": 543,
+        "timestamp": 1780586711,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1269223518"
+      },
+      {
+        "tx": "0x58eb37788d7d590f873f0a91770b05135eafe9f3c2cd85b51bd0dafbe4d99202",
+        "blockNumber": 46898697,
+        "transactionIndex": 184,
+        "logIndex": 683,
+        "timestamp": 1780586741,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1269223518"
+      },
+      {
+        "tx": "0x97744fdc54362a7449eef5999608500e02fef942776e40155659a0bc989b85bd",
+        "blockNumber": 46900027,
+        "transactionIndex": 317,
+        "logIndex": 1000,
+        "timestamp": 1780589401,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "1269201518"
+      }
+    ]
+  },
+  {
+    "index": 4,
+    "valid": true,
+    "bottleneckRaw": "1579851804",
+    "duration": 2228,
+    "hops": [
+      {
+        "tx": "0xaf92cd48dc33845b2ef3b4d5b1d680ae104a5dea04ff6bd4473faff8d2603d25",
+        "blockNumber": 47115061,
+        "transactionIndex": 313,
+        "logIndex": 1145,
+        "timestamp": 1781019469,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1579870804"
+      },
+      {
+        "tx": "0xeb802cbc23ff69ca13ef30ebd54bd3b520c21d98b5dfe063f5ea4fc04441bbaf",
+        "blockNumber": 47115072,
+        "transactionIndex": 691,
+        "logIndex": 1686,
+        "timestamp": 1781019491,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1579870804"
+      },
+      {
+        "tx": "0xf8a533d5792bd8a59d99d3ba0718c28b51bdbc29e5ce5508f31ad3e2fbf1f106",
+        "blockNumber": 47116175,
+        "transactionIndex": 115,
+        "logIndex": 203,
+        "timestamp": 1781021697,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "1579851804"
+      }
+    ]
+  },
+  {
+    "index": 5,
+    "valid": true,
+    "bottleneckRaw": "669136657",
+    "duration": 84024,
+    "hops": [
+      {
+        "tx": "0x7008125933f5defa3c3a5b8862cf47cbb28d12047092225c6e9834132e65c24e",
+        "blockNumber": 47186331,
+        "transactionIndex": 4,
+        "logIndex": 0,
+        "timestamp": 1781162009,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1169148037"
+      },
+      {
+        "tx": "0xffd86e62ee64d1eb52e56e0c7bc941596f98727e84bbc927dde7923b479c5ba7",
+        "blockNumber": 47186337,
+        "transactionIndex": 158,
+        "logIndex": 582,
+        "timestamp": 1781162021,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1169148037"
+      },
+      {
+        "tx": "0xc65d0a11252410dfbf9c5c797613a33bae4afc4d2664d969619d4b261215735e",
+        "blockNumber": 47189037,
+        "transactionIndex": 290,
+        "logIndex": 642,
+        "timestamp": 1781167421,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1169136037"
+      },
+      {
+        "tx": "0xc3f1e3b813d9da03596092337e8ad9e1a786a1829648346b3845c045cd794203",
+        "blockNumber": 47228343,
+        "transactionIndex": 77,
+        "logIndex": 85,
+        "timestamp": 1781246033,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "669136657"
+      }
+    ]
+  },
+  {
+    "index": 6,
+    "valid": true,
+    "bottleneckRaw": "500000000",
+    "duration": 11346,
+    "hops": [
+      {
+        "tx": "0xa6f23f01ded2b9925e0c11d3df262b52747f7610154644eb7166ee9040c05599",
+        "blockNumber": 47276204,
+        "transactionIndex": 9,
+        "logIndex": 15,
+        "timestamp": 1781341755,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1677457127"
+      },
+      {
+        "tx": "0xcd3d6e7749920312f8aa12f1352762078f91020c59f1f72cbf68ddb2de17caef",
+        "blockNumber": 47276217,
+        "transactionIndex": 145,
+        "logIndex": 307,
+        "timestamp": 1781341781,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1677457127"
+      },
+      {
+        "tx": "0x5936bb86e29623e9427d8993c766adbd6896de20397f71e7d505171d819d32f4",
+        "blockNumber": 47281770,
+        "transactionIndex": 55,
+        "logIndex": 133,
+        "timestamp": 1781352887,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1677446127"
+      },
+      {
+        "tx": "0x4e44a019503dcbd28636ecc783e1ae9c104b40e9b8af9266f9335f78d90cf048",
+        "blockNumber": 47281877,
+        "transactionIndex": 162,
+        "logIndex": 283,
+        "timestamp": 1781353101,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "500000000"
+      }
+    ]
+  },
+  {
+    "index": 7,
+    "valid": true,
+    "bottleneckRaw": "742729603",
+    "duration": 85586,
+    "hops": [
+      {
+        "tx": "0xd1591e1d6fd4e55cf90bdffa8794fd870f0df5c67d644de4cf33c9df32d34d9f",
+        "blockNumber": 47373588,
+        "transactionIndex": 107,
+        "logIndex": 452,
+        "timestamp": 1781536523,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1742747853"
+      },
+      {
+        "tx": "0x8e40c8f51220bc1fdb28ab891349e714971def249af96a0263cde28549a4af98",
+        "blockNumber": 47373597,
+        "transactionIndex": 358,
+        "logIndex": 1078,
+        "timestamp": 1781536541,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1742747853"
+      },
+      {
+        "tx": "0xdea110c48766ce582e460b69134fa4895f0042063716be645760d8293275cadc",
+        "blockNumber": 47374907,
+        "transactionIndex": 175,
+        "logIndex": 482,
+        "timestamp": 1781539161,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1742728853"
+      },
+      {
+        "tx": "0xcda381881680e13fdf20f7139e16a073add9a3fa9df8f2420204bc1797d5db58",
+        "blockNumber": 47416381,
+        "transactionIndex": 262,
+        "logIndex": 763,
+        "timestamp": 1781622109,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "742729603"
+      }
+    ]
+  },
+  {
+    "index": 8,
+    "valid": true,
+    "bottleneckRaw": "600000000",
+    "duration": 14394,
+    "hops": [
+      {
+        "tx": "0xd9f6ccbcafc23f74f289dab3a5392b770bfb2a7ff675a39532536020964c3009",
+        "blockNumber": 47448631,
+        "transactionIndex": 12,
+        "logIndex": 6,
+        "timestamp": 1781686609,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1692327726"
+      },
+      {
+        "tx": "0x4d684017fcddf6e55fabf516d12a24ee9003465c43e2b502d79aa3bccf322e0d",
+        "blockNumber": 47448642,
+        "transactionIndex": 195,
+        "logIndex": 461,
+        "timestamp": 1781686631,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1692327726"
+      },
+      {
+        "tx": "0xef11ad25586bc1a8f356c3a863a21939113b9250346fca53715a57c83da4ced1",
+        "blockNumber": 47455812,
+        "transactionIndex": 166,
+        "logIndex": 415,
+        "timestamp": 1781700971,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1692308726"
+      },
+      {
+        "tx": "0xa3d8555558ed90384c13543c553b9436b4cd48ebc98a640d29fc15097fb14b8e",
+        "blockNumber": 47455828,
+        "transactionIndex": 62,
+        "logIndex": 196,
+        "timestamp": 1781701003,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "600000000"
+      }
+    ]
+  },
+  {
+    "index": 9,
+    "valid": true,
+    "bottleneckRaw": "708788561",
+    "duration": 111220,
+    "hops": [
+      {
+        "tx": "0x5099f208d90d494ff6f5ea57cef88a807b55237e277be75ca40cc52d8f7d1a51",
+        "blockNumber": 47523245,
+        "transactionIndex": 88,
+        "logIndex": 321,
+        "timestamp": 1781835837,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1708802691"
+      },
+      {
+        "tx": "0x487c3680f2c147383799fb8c488c769ba7993e8782530d6b2eb367f3053fe849",
+        "blockNumber": 47523252,
+        "transactionIndex": 504,
+        "logIndex": 1309,
+        "timestamp": 1781835851,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1708802691"
+      },
+      {
+        "tx": "0xfa704f313ace91b5373d59020461eb652ca5f7005486749d9fe00f662d0b1ecf",
+        "blockNumber": 47523822,
+        "transactionIndex": 116,
+        "logIndex": 279,
+        "timestamp": 1781836991,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1708785691"
+      },
+      {
+        "tx": "0x614901616905b5b20784986356d964bd34e933aca421437c1a43129f99e453cb",
+        "blockNumber": 47578855,
+        "transactionIndex": 96,
+        "logIndex": 416,
+        "timestamp": 1781947057,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "708788561"
+      }
+    ]
+  },
+  {
+    "index": 10,
+    "valid": true,
+    "bottleneckRaw": "529255801",
+    "duration": 140916,
+    "hops": [
+      {
+        "tx": "0x4d86413ad8a277353b668dedfcc9915eeb97fd2c42376b218e87bf55ed82e172",
+        "blockNumber": 47630881,
+        "transactionIndex": 75,
+        "logIndex": 245,
+        "timestamp": 1782051109,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1529268951"
+      },
+      {
+        "tx": "0x6e38c18eabb87cb821f3b7b929bbd73cda8beb56338e74732345cf9d9390b75c",
+        "blockNumber": 47630922,
+        "transactionIndex": 146,
+        "logIndex": 705,
+        "timestamp": 1782051191,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1529268951"
+      },
+      {
+        "tx": "0xce6e52e51338e654ab3bc67048b52d509e90479b3a9a145f4df00b4a0d512c0b",
+        "blockNumber": 47631542,
+        "transactionIndex": 109,
+        "logIndex": 522,
+        "timestamp": 1782052431,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1529254951"
+      },
+      {
+        "tx": "0x616768e070c07b66e2d1bcc07749ef3138f75ecdff98285d0bd29d9f0afa9f27",
+        "blockNumber": 47701339,
+        "transactionIndex": 77,
+        "logIndex": 217,
+        "timestamp": 1782192025,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "529255801"
+      }
+    ]
+  },
+  {
+    "index": 11,
+    "valid": true,
+    "bottleneckRaw": "500000650",
+    "duration": 142930,
+    "hops": [
+      {
+        "tx": "0xd6c9e6be1cbd3958e34a6eb89dc466cc0fd61b70079a1d5746d74a36d2317b6b",
+        "blockNumber": 47761021,
+        "transactionIndex": 165,
+        "logIndex": 413,
+        "timestamp": 1782311389,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1514846278"
+      },
+      {
+        "tx": "0x8aa25a69c7ae29614f01b063a2c572546c09d78dba0b97c607f7c8e2f5e2e5b7",
+        "blockNumber": 47761032,
+        "transactionIndex": 201,
+        "logIndex": 574,
+        "timestamp": 1782311411,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1514846278"
+      },
+      {
+        "tx": "0x62105f122f5774856abec6567d4f5c9fb0552731f134097ae8e74ea288813ed9",
+        "blockNumber": 47761112,
+        "transactionIndex": 182,
+        "logIndex": 611,
+        "timestamp": 1782311571,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1500000000"
+      },
+      {
+        "tx": "0x43abe85c6dcc47581c93713ddbc3682a34010f003a320d3504df48b833465c9e",
+        "blockNumber": 47832486,
+        "transactionIndex": 7,
+        "logIndex": 40,
+        "timestamp": 1782454319,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "500000650"
+      }
+    ]
+  },
+  {
+    "index": 12,
+    "valid": true,
+    "bottleneckRaw": "500000901",
+    "duration": 100554,
+    "hops": [
+      {
+        "tx": "0xaaa8e03ab736bc32fe6901ce7b475c78329dcdbc1c76fd533639295828429ee0",
+        "blockNumber": 47887262,
+        "transactionIndex": 120,
+        "logIndex": 408,
+        "timestamp": 1782563871,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1566398362"
+      },
+      {
+        "tx": "0xf746a3e84e99ea3901e20006ca50d5a47e0ad4c750f6ef7feb825853ad0bd214",
+        "blockNumber": 47887272,
+        "transactionIndex": 102,
+        "logIndex": 569,
+        "timestamp": 1782563891,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1566398362"
+      },
+      {
+        "tx": "0xfd5dca0d6ba236e3c6724192c7f57513ef16c5fa083f8b64a4736a2deacdd187",
+        "blockNumber": 47888050,
+        "transactionIndex": 66,
+        "logIndex": 269,
+        "timestamp": 1782565447,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1500000000"
+      },
+      {
+        "tx": "0xcab1a4bfc7589b4555204c834b3c5bd51a8c76ad8037c5208b70faa5cba03588",
+        "blockNumber": 47937539,
+        "transactionIndex": 57,
+        "logIndex": 179,
+        "timestamp": 1782664425,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "500000901"
+      }
+    ]
+  },
+  {
+    "index": 13,
+    "valid": true,
+    "bottleneckRaw": "500000000",
+    "duration": 1124,
+    "hops": [
+      {
+        "tx": "0x7fcb6e0f196d4c2b157b8a29496fba7680744c876b21d507a153c4e8bf0837d3",
+        "blockNumber": 47980438,
+        "transactionIndex": 78,
+        "logIndex": 251,
+        "timestamp": 1782750223,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1304925209"
+      },
+      {
+        "tx": "0x3930a000c5c316d5ae3f063f8c443e53b1912a31cd4ee0f2a18398560b4052f3",
+        "blockNumber": 47980452,
+        "transactionIndex": 100,
+        "logIndex": 356,
+        "timestamp": 1782750251,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1304925209"
+      },
+      {
+        "tx": "0x39a3b807c67e0e1b1311a940686d927d5785d256ba9082dec7a0f10efc6a609b",
+        "blockNumber": 47980517,
+        "transactionIndex": 149,
+        "logIndex": 393,
+        "timestamp": 1782750381,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1500000000"
+      },
+      {
+        "tx": "0xf6522f904c5aeb096f7d6efb19587a7df3800764cca897bd2c9948fdc2c3e565",
+        "blockNumber": 47981000,
+        "transactionIndex": 128,
+        "logIndex": 601,
+        "timestamp": 1782751347,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "500000000"
+      }
+    ]
+  },
+  {
+    "index": 14,
+    "valid": true,
+    "bottleneckRaw": "500000400",
+    "duration": 173106,
+    "hops": [
+      {
+        "tx": "0xa9e233ad41dc49ee36d4bee7eafd603c26bc5f07c6750b37113c8a46a6b45f10",
+        "blockNumber": 48098417,
+        "transactionIndex": 118,
+        "logIndex": 449,
+        "timestamp": 1782986181,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1543510431"
+      },
+      {
+        "tx": "0x51f25a1eb014133b4c4dc926a2ea9e05c38726c13910a4ddf89f0d62819daa16",
+        "blockNumber": 48098427,
+        "transactionIndex": 137,
+        "logIndex": 375,
+        "timestamp": 1782986201,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1543510431"
+      },
+      {
+        "tx": "0x185a5921d7ef455449c3d8a96894edeb3d292360fb72d63ad9edd0d2b99ac3c5",
+        "blockNumber": 48108415,
+        "transactionIndex": 66,
+        "logIndex": 222,
+        "timestamp": 1783006177,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1500000000"
+      },
+      {
+        "tx": "0x89c299b35247ce9d2160ae3d6ca7b7a850675ad1c2ec45b75acc547d53deee4b",
+        "blockNumber": 48184970,
+        "transactionIndex": 53,
+        "logIndex": 312,
+        "timestamp": 1783159287,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "500000400"
+      }
+    ]
+  },
+  {
+    "index": 15,
+    "valid": true,
+    "bottleneckRaw": "700002000",
+    "duration": 87828,
+    "hops": [
+      {
+        "tx": "0xbb61607f6f07dae76d8defa7c16acb754e9b28d837a6693c30b7a6dde0902c05",
+        "blockNumber": 48195039,
+        "transactionIndex": 113,
+        "logIndex": 443,
+        "timestamp": 1783179425,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1187216311"
+      },
+      {
+        "tx": "0x09f0c6078dd64075159258db0eabd54d13fedcf5b3d56c16c281e8cfb69a25bc",
+        "blockNumber": 48195042,
+        "transactionIndex": 99,
+        "logIndex": 231,
+        "timestamp": 1783179431,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1187216311"
+      },
+      {
+        "tx": "0x572324a7005d90d82a82f9022f4f0ed1ccb0b4d5d4b88a452a2297cbbe93f46c",
+        "blockNumber": 48196475,
+        "transactionIndex": 47,
+        "logIndex": 183,
+        "timestamp": 1783182297,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1200000000"
+      },
+      {
+        "tx": "0x6bb1c27dc0d1550701f91c14734fbdd3e5c4717edfdb723a9a701e1267878979",
+        "blockNumber": 48238953,
+        "transactionIndex": 7,
+        "logIndex": 23,
+        "timestamp": 1783267253,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "700002000"
+      }
+    ]
+  },
+  {
+    "index": 16,
+    "valid": true,
+    "bottleneckRaw": "500001100",
+    "duration": 96854,
+    "hops": [
+      {
+        "tx": "0x84e1c9cef9bae5c3b30856b3481adf5eba44742963c5b6e90d688f2e5b5e27eb",
+        "blockNumber": 48278634,
+        "transactionIndex": 9,
+        "logIndex": 6,
+        "timestamp": 1783346615,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1364433557"
+      },
+      {
+        "tx": "0x8b76cbd739dc0e60235f53b8b24fa9bb0e663b23713b85d36d5035c3e08384f5",
+        "blockNumber": 48278637,
+        "transactionIndex": 220,
+        "logIndex": 713,
+        "timestamp": 1783346621,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1364433557"
+      },
+      {
+        "tx": "0xa16d09d68519fc35f1f0ec25a08892f172be75fe7e3c0954203044721077e3e7",
+        "blockNumber": 48279352,
+        "transactionIndex": 236,
+        "logIndex": 541,
+        "timestamp": 1783348051,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1500000000"
+      },
+      {
+        "tx": "0xcbcf5c99669a14b6e7932905bbc9cb65633421a88f78f547b16ccf36e3a2be4d",
+        "blockNumber": 48327061,
+        "transactionIndex": 96,
+        "logIndex": 251,
+        "timestamp": 1783443469,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "500001100"
+      }
+    ]
+  },
+  {
+    "index": 17,
+    "valid": true,
+    "bottleneckRaw": "500000400",
+    "duration": 185062,
+    "hops": [
+      {
+        "tx": "0xc050c7da61aa6180664f1e1a598e6802847f9861351a1ec7613a9b900e61c6d8",
+        "blockNumber": 48749488,
+        "transactionIndex": 7,
+        "logIndex": 3,
+        "timestamp": 1784288323,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1426537145"
+      },
+      {
+        "tx": "0xf04ac806abbfeb459acf2aeaa8adeec0882894a7cfd7e6a0162dcc9714760a30",
+        "blockNumber": 48749502,
+        "transactionIndex": 166,
+        "logIndex": 422,
+        "timestamp": 1784288351,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1426537145"
+      },
+      {
+        "tx": "0xfcfd9b61509928a8b39a630e1e2587789d2543dedc771e0e13201a7297182c62",
+        "blockNumber": 48752200,
+        "transactionIndex": 78,
+        "logIndex": 378,
+        "timestamp": 1784293747,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1500000000"
+      },
+      {
+        "tx": "0x047e26f7c57a15ee94dbbcfc796a1dc0a2d264dcd9994aff4b7c518c91d83eac",
+        "blockNumber": 48842019,
+        "transactionIndex": 52,
+        "logIndex": 155,
+        "timestamp": 1784473385,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "500000400"
+      }
+    ]
+  },
+  {
+    "index": 18,
+    "valid": true,
+    "bottleneckRaw": "500004515",
+    "duration": 57028,
+    "hops": [
+      {
+        "tx": "0x0e07eb0a08865402b7f0e6b3347ea8954fc18ee6fda59fb422e893086b6d715d",
+        "blockNumber": 48968289,
+        "transactionIndex": 56,
+        "logIndex": 189,
+        "timestamp": 1784725925,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "934297959"
+      },
+      {
+        "tx": "0x9e9125153958409982e389601c8ce8aa2f4d6b2e118285d1f9a76d8e074f20f0",
+        "blockNumber": 48968307,
+        "transactionIndex": 150,
+        "logIndex": 555,
+        "timestamp": 1784725961,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "934297959"
+      },
+      {
+        "tx": "0x4436b484da558c47a1512e01c2e030522d5e33f8cc2cc743bb5cb9911d78e8d6",
+        "blockNumber": 48968347,
+        "transactionIndex": 92,
+        "logIndex": 2259,
+        "timestamp": 1784726041,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1000000000"
+      },
+      {
+        "tx": "0xe892b0c75511edd0a089a3ec22b12594967aea437d1cbdd0bff50fa72501c451",
+        "blockNumber": 48996803,
+        "transactionIndex": 148,
+        "logIndex": 402,
+        "timestamp": 1784782953,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "500004515"
+      }
+    ]
+  },
+  {
+    "index": 19,
+    "valid": true,
+    "bottleneckRaw": "500005680",
+    "duration": 175852,
+    "hops": [
+      {
+        "tx": "0x8a0c9423c317120deb01daf6f48040c41c2b484c80045a8cf96bdaa6dd4dca53",
+        "blockNumber": 49051737,
+        "transactionIndex": 123,
+        "logIndex": 378,
+        "timestamp": 1784892821,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "832014444"
+      },
+      {
+        "tx": "0x597cadbdda0f6b13d2999f3044a7346266c5fe0d3bceac139d377666095a16f5",
+        "blockNumber": 49051752,
+        "transactionIndex": 64,
+        "logIndex": 178,
+        "timestamp": 1784892851,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "832014444"
+      },
+      {
+        "tx": "0x78000ed10ab73f1bd1c3549c6e8db15093b352bd88274c56a466fbf1ea51e7a8",
+        "blockNumber": 49053300,
+        "transactionIndex": 32,
+        "logIndex": 217,
+        "timestamp": 1784895947,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1500000000"
+      },
+      {
+        "tx": "0x5afa88f838d8a02418ec3747a75634916b6e980a84ef9244575dcbbdd84c9dff",
+        "blockNumber": 49139663,
+        "transactionIndex": 45,
+        "logIndex": 377,
+        "timestamp": 1785068673,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "500005680"
+      }
+    ]
+  },
+  {
+    "index": 20,
+    "valid": true,
+    "bottleneckRaw": "500000100",
+    "duration": 99474,
+    "hops": [
+      {
+        "tx": "0x48509d3a3de7251b461547673234d3a75a78f0070c78b2fe52ff8aebe9fd9512",
+        "blockNumber": 49524347,
+        "transactionIndex": 89,
+        "logIndex": 189,
+        "timestamp": 1785838041,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1044877034"
+      },
+      {
+        "tx": "0x835bd412be2b443fc9a7a62dcce42706976fba20b402f29688fc05b5d293a727",
+        "blockNumber": 49524357,
+        "transactionIndex": 90,
+        "logIndex": 341,
+        "timestamp": 1785838061,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1044877034"
+      },
+      {
+        "tx": "0x4b33deff9441ce3bb18e947cc09d6e62e05cbabb6d131313e0795af38abb5d26",
+        "blockNumber": 49525662,
+        "transactionIndex": 121,
+        "logIndex": 352,
+        "timestamp": 1785840671,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1000000000"
+      },
+      {
+        "tx": "0x1d31582a8ad7e763cab697da0d4f810e666f802a8fa0bc11db1d74d5c7ecaed3",
+        "blockNumber": 49574084,
+        "transactionIndex": 143,
+        "logIndex": 383,
+        "timestamp": 1785937515,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "500000100"
+      }
+    ]
+  },
+  {
+    "index": 21,
+    "valid": true,
+    "bottleneckRaw": "500000400",
+    "duration": 113546,
+    "hops": [
+      {
+        "tx": "0xfbd98716905cc9223b9f9b53d28cbf100ef24d74a148ce798cd91ebfe5554d49",
+        "blockNumber": 49646388,
+        "transactionIndex": 5,
+        "logIndex": 13,
+        "timestamp": 1786082123,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1025593367"
+      },
+      {
+        "tx": "0xd2e7cf35cf2a6028b8f3b922d8a166dbd2a50a2ad03542174401cdc9d8606637",
+        "blockNumber": 49646397,
+        "transactionIndex": 81,
+        "logIndex": 248,
+        "timestamp": 1786082141,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1025593367"
+      },
+      {
+        "tx": "0x4292fe3117f317a1d1b68aa67343e7f9adc6b865dcaffc6420975cc2791c9a64",
+        "blockNumber": 49647930,
+        "transactionIndex": 43,
+        "logIndex": 289,
+        "timestamp": 1786085207,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1000000000"
+      },
+      {
+        "tx": "0x0e23238fc36989ef174f784ef36b91eab2b68772bc80135e36789a149bf9ebf9",
+        "blockNumber": 49703161,
+        "transactionIndex": 98,
+        "logIndex": 371,
+        "timestamp": 1786195669,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "500000400"
+      }
+    ]
+  },
+  {
+    "index": 22,
+    "valid": true,
+    "bottleneckRaw": "500000750",
+    "duration": 166624,
+    "hops": [
+      {
+        "tx": "0x66f92ac2d8de8eeba1988894fda50e654192793104cd93d8258ccdfb14b77d2f",
+        "blockNumber": 49743173,
+        "transactionIndex": 70,
+        "logIndex": 208,
+        "timestamp": 1786275693,
+        "from": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+        "to": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "amountRaw": "1032447070"
+      },
+      {
+        "tx": "0xde5b90b989e7c9b8f5d4162fa009f7b7ef8179fff49253f32cbb48d1b7be66fa",
+        "blockNumber": 49743222,
+        "transactionIndex": 91,
+        "logIndex": 373,
+        "timestamp": 1786275791,
+        "from": "0x923adfd893cc7bbcd0edecb930b15e308b28b309",
+        "to": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "amountRaw": "1032447070"
+      },
+      {
+        "tx": "0xf101f650e156a396548db2c85a9bbc38ad2208a74a530b3fb89e1da9101ca161",
+        "blockNumber": 49750047,
+        "transactionIndex": 104,
+        "logIndex": 295,
+        "timestamp": 1786289441,
+        "from": "0x17fe9197970454875df742a74b74ed5f984b645a",
+        "to": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "amountRaw": "1000000000"
+      },
+      {
+        "tx": "0x2bf9259c17eede5540dacdb5072573385ea51514c51ba9b52624c6c2a29b46c6",
+        "blockNumber": 49826485,
+        "transactionIndex": 5,
+        "logIndex": 6,
+        "timestamp": 1786442317,
+        "from": "0xeb625fdf6639d9b9c4bbe0a6cfb32cfe45e4ffdb",
+        "to": "0xd0b2386859bad9106670bb779ae8ff6af2b30b76",
+        "amountRaw": "500000750"
+      }
+    ]
+  }
+]
