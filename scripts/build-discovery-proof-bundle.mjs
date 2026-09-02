@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { dedupeDependencies, finalizeBundle, finalizeClaim, locator, relayDependency, returnPathDependency } from "./proof-bundle.mjs";
+import { returnPathCreditRaw } from "./return-path-selection.mjs";
 
 const DEFAULT_SCAN = "/Users/alex/.antseed/forensics/wash-trading/scans/2026-08-13T22-54-53-096Z";
 
@@ -158,11 +159,7 @@ export async function buildDiscoveryProofBundle({ scanDirectory, baselineBundle,
 export function evaluateClosedLoopCandidate({ sellerVolumeRaw, settlements, fundings, paths }) {
   const selectedSettlementRaw = sumRaw(settlements);
   const retainedFundingRaw = sumRaw(fundings);
-  const bottleneckReturnRaw = paths.reduce((total, path) => total + minRaw([
-    path.sellerPayment.amountRaw,
-    path.relayForward.amountRaw,
-    path.funderReceipt.amountRaw,
-  ]), 0n);
+  const bottleneckReturnRaw = paths.reduce((total, path) => total + returnPathCreditRaw(path), 0n);
   const total = BigInt(sellerVolumeRaw);
   const deficits = {
     majorityRaw: selectedSettlementRaw * 2n > total ? "0" : ((total / 2n + 1n) - selectedSettlementRaw).toString(),
@@ -180,11 +177,7 @@ export function evaluateClosedLoopCandidate({ sellerVolumeRaw, settlements, fund
 
 export function supportedSettlementCapacity(fundings, paths) {
   const fundingRaw = sumRaw(fundings);
-  const returnRaw = paths.reduce((total, path) => total + minRaw([
-    path.sellerPayment.amountRaw,
-    path.relayForward.amountRaw,
-    path.funderReceipt.amountRaw,
-  ]), 0n);
+  const returnRaw = paths.reduce((total, path) => total + returnPathCreditRaw(path), 0n);
   const fundingCapacity = fundingRaw * 10_000n / 9_000n;
   const returnCapacity = returnRaw * 10_000n / 3_000n;
   return fundingCapacity < returnCapacity ? fundingCapacity : returnCapacity;

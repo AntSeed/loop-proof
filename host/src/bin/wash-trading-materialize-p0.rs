@@ -658,5 +658,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["first", "second", "third"]
         );
+
+        let direct_relay = PlannedEvidence {
+            funder_receipt: None,
+            ..relay
+        };
+        let expanded = atomic_evidence(&direct_relay);
+        assert_eq!(
+            expanded
+                .iter()
+                .map(|entry| entry.evidence_type.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
     }
 }

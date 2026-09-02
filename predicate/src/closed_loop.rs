@@ -160,7 +160,6 @@ fn verify_fundings(
                 if from != input.funder || to != evidence.buyer || amount == 0 {
                     return Err("funding: invalid direct USDC funding".into());
                 }
-                resolver.require_signer(input.funder, transfer)?;
                 (amount, resolver.timestamp(transfer)?)
             }
             FundingKind::ProtocolDeposit {

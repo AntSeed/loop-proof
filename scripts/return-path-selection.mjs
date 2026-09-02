@@ -5,7 +5,7 @@ const MAX_RETURN_PATHS = 512;
 
 export function atomicReturnEvidence(evidence) {
   if (evidence.evidenceType !== "RELAY_PATH") return [evidence];
-  return evidence.hops ?? [evidence.sellerPayment, evidence.relayForward, evidence.funderReceipt];
+  return (evidence.hops ?? [evidence.sellerPayment, evidence.relayForward, evidence.funderReceipt]).filter(Boolean);
 }
 
 export function returnPathCreditRaw(evidence) {

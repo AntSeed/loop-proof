@@ -131,8 +131,12 @@ async function prefetchDependencies(dependencies, url, cache, fetchJson, concurr
   const receipts = uniqueRpcRequests(atomic, "eth_getTransactionReceipt");
   const transactions = uniqueRpcRequests(atomic.filter((entry) => entry.evidenceType === "NATIVE_FUNDING"), "eth_getTransactionByHash");
   const requests = [...receipts, ...transactions].map((request, index) => ({ ...request, id: index + 1 }));
+  const batchSize = Number(process.env.LOOP_RPC_BATCH_SIZE ?? 100);
+  if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 100) {
+    throw new Error("LOOP_RPC_BATCH_SIZE must be an integer from 1 to 100");
+  }
   const chunks = [];
-  for (let index = 0; index < requests.length; index += 100) chunks.push(requests.slice(index, index + 100));
+  for (let index = 0; index < requests.length; index += batchSize) chunks.push(requests.slice(index, index + batchSize));
   let completed = 0;
   const batchConcurrency = Math.min(10, Math.max(1, Math.ceil(concurrency / 20)));
   await mapConcurrent(chunks, batchConcurrency, async (chunk) => {
@@ -227,7 +231,7 @@ export async function resolveDependency(dependency, bundle, callRpc) {
       ...dependency,
       sellerPayment: await resolveDependency(dependency.sellerPayment, bundle, callRpc),
       relayForward: await resolveDependency(dependency.relayForward, bundle, callRpc),
-      funderReceipt: await resolveDependency(dependency.funderReceipt, bundle, callRpc),
+      ...(dependency.funderReceipt == null ? {} : { funderReceipt: await resolveDependency(dependency.funderReceipt, bundle, callRpc) }),
     };
   }
   if (!dependency.transactionHash) throw new Error(`${dependency.dependencyId}: missing transaction hash`);
@@ -268,8 +272,10 @@ export async function resolveDependency(dependency, bundle, callRpc) {
   const resolvedLog = { ...resolved, logIndex: hexNumber(log.logIndex), receiptLogIndex: (receipt.logs ?? []).indexOf(log) };
   if (dependency.evidenceType === "USDC_FUNDING") {
     if (BigInt(dependency.amountRaw) <= 0n) throw new Error(`${dependency.dependencyId}: USDC funding must be positive`);
-    const transaction = await callRpc("eth_getTransactionByHash", [dependency.transactionHash]);
-    if (!transaction || normalize(transaction.from) !== dependency.funder) throw new Error(`${dependency.dependencyId}: funding transaction signer mismatch`);
+    if (dependency.depositLogIndex != null) {
+      const transaction = await callRpc("eth_getTransactionByHash", [dependency.transactionHash]);
+      if (!transaction || normalize(transaction.from) !== dependency.funder) throw new Error(`${dependency.dependencyId}: funding transaction signer mismatch`);
+    }
   }
   if (dependency.evidenceType === "USDC_FUNDING" && topicAddress(log.topics?.[2]?.toLowerCase()) === normalize(bundle.contracts.deposits)) {
     const deposited = (receipt.logs ?? []).filter((candidate) => normalize(candidate.address) === normalize(bundle.contracts.deposits)
@@ -944,7 +950,7 @@ function hexNumber(value) { const number = Number(BigInt(value)); if (!Number.is
 function numberAscending(left, right) { return left - right; }
 function groupBy(values, key) { const result = new Map(); for (const value of values) { const group = key(value); const rows = result.get(group) ?? []; rows.push(value); result.set(group, rows); } return result; }
 function dedupe(values) { const result = new Map(); for (const value of values) result.set(value.dependencyId ?? JSON.stringify(value), value); return [...result.values()]; }
-function atomicEvidence(value) { return value.evidenceType === "RELAY_PATH" ? (value.hops ?? [value.sellerPayment, value.relayForward, value.funderReceipt]) : [value]; }
+function atomicEvidence(value) { return value.evidenceType === "RELAY_PATH" ? (value.hops ?? [value.sellerPayment, value.relayForward, value.funderReceipt]).filter(Boolean) : [value]; }
 function canonicalJson(value) { if (value === null || typeof value !== "object") return JSON.stringify(value); if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`; return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`; }
 function sha256Hex(value) { return `0x${(awaitableSha256(value))}`; }
 function awaitableSha256(value) { return createHash("sha256").update(value).digest("hex"); }

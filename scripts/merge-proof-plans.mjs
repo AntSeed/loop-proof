@@ -44,7 +44,7 @@ function compactEvidence(evidence) {
     ...locator,
     sellerPayment: compactEvidence(locator.sellerPayment),
     relayForward: compactEvidence(locator.relayForward),
-    funderReceipt: compactEvidence(locator.funderReceipt),
+    ...(locator.funderReceipt == null ? {} : { funderReceipt: compactEvidence(locator.funderReceipt) }),
   };
 }
 

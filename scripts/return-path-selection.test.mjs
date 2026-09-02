@@ -66,6 +66,18 @@ test("required return rounds up to the smallest raw unit", () => {
   assert.equal(requiredReturnRaw(10_612_500_621n), 2_122_500_125n);
 });
 
+test("two-transfer relay evidence receives the smaller-hop credit", () => {
+  const evidence = {
+    evidenceType: "RELAY_PATH",
+    sellerPayment: transfer("first", "seller", "relay", 100n, 10),
+    relayForward: transfer("second", "relay", "funder", 99n, 11),
+  };
+  const result = selectReturnEvidence([evidence], { requiredRaw: 99n, earliestSettlementTimestamp: 0 });
+  assert.equal(result.complete, true);
+  assert.equal(result.returnedRaw, 99n);
+  assert.equal(result.evidence.length, 1);
+});
+
 function relayPath(id, amountRaw, timestamp) {
   return {
     evidenceType: "RELAY_PATH",

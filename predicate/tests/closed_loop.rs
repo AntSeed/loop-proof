@@ -319,20 +319,21 @@ fn evidence_outside_the_period_is_rejected() {
 }
 
 #[test]
-fn funding_attribution_requires_the_recovered_signer() {
-    // Strip the authenticated transaction from a funding block.
+fn direct_usdc_funding_uses_the_authenticated_transfer_sender() {
+    // Direct ERC-20 funding remains valid without a transaction proof because
+    // contract custodians may emit the transfer while an operator signs.
     let mut input = closed_loop_input(&LoopCfg::default());
     input.blocks[0].transactions.clear();
     input.blocks[0].header.transactions_root = B256::ZERO;
-    assert_rejects(&input, "authenticated transaction missing");
+    verify_closed_loop(&input).unwrap();
 
-    // A funder that is not the signer fails recovery-based attribution even
-    // though the Transfer log names it.
+    // The authenticated Transfer sender is the funder even when the bundled
+    // transaction was signed by a different operator.
     let other = address!("0000000000000000000000000000000000000099");
     let mut cfg = LoopCfg::default();
     cfg.funder = other;
     cfg.return_paths = vec![vec![(other, 960_000_000)]];
-    assert_rejects(&closed_loop_input(&cfg), "signer mismatch");
+    verify_closed_loop(&closed_loop_input(&cfg)).unwrap();
 }
 
 #[test]

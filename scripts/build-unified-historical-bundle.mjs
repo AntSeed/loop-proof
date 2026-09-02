@@ -315,28 +315,31 @@ console.error(JSON.stringify({ outputPath, claimCounts: bundle.claimCounts, repo
 function relayDependencies(paths, seller, funder) {
   return paths
     .filter((entry) => normalizeAddress(entry.seller) === seller && normalizeAddress(entry.funder) === funder)
-    .map((entry) => ({
-      evidenceType: "RELAY_PATH",
-      seller,
-      funder,
-      relay: normalizeAddress(entry.relay),
-      intermediary: normalizeAddress(entry.intermediary),
-      sellerPayment: locator("RELAY_SELLER_PAYMENT", {
-        txHash: entry.sellerPaymentTx,
-        timestamp: entry.sellerPaymentAt,
-        amountRaw: entry.sellerPaymentRaw,
-      }, { from: seller, to: normalizeAddress(entry.relay), amountRaw: String(entry.sellerPaymentRaw) }),
-      relayForward: locator("RELAY_FORWARD", {
-        txHash: entry.relayForwardTx,
-        timestamp: entry.relayForwardAt,
-        amountRaw: entry.relayForwardRaw,
-      }, { from: normalizeAddress(entry.relay), to: normalizeAddress(entry.intermediary), amountRaw: String(entry.relayForwardRaw) }),
-      funderReceipt: locator("RELAY_FUNDER_RECEIPT", {
+    .map((entry) => {
+      const dependency = {
+        evidenceType: "RELAY_PATH",
+        seller,
+        funder,
+        relay: normalizeAddress(entry.relay),
+        intermediary: normalizeAddress(entry.intermediary),
+        sellerPayment: locator("RELAY_SELLER_PAYMENT", {
+          txHash: entry.sellerPaymentTx,
+          timestamp: entry.sellerPaymentAt,
+          amountRaw: entry.sellerPaymentRaw,
+        }, { from: seller, to: normalizeAddress(entry.relay), amountRaw: String(entry.sellerPaymentRaw) }),
+        relayForward: locator("RELAY_FORWARD", {
+          txHash: entry.relayForwardTx,
+          timestamp: entry.relayForwardAt,
+          amountRaw: entry.relayForwardRaw,
+        }, { from: normalizeAddress(entry.relay), to: normalizeAddress(entry.intermediary), amountRaw: String(entry.relayForwardRaw) }),
+      };
+      if (entry.funderReceiptTx != null) dependency.funderReceipt = locator("RELAY_FUNDER_RECEIPT", {
         txHash: entry.funderReceiptTx,
         timestamp: entry.funderReceiptAt,
         amountRaw: entry.funderReceiptRaw,
-      }, { from: normalizeAddress(entry.intermediary), to: funder, amountRaw: String(entry.funderReceiptRaw) }),
-    }));
+      }, { from: normalizeAddress(entry.intermediary), to: funder, amountRaw: String(entry.funderReceiptRaw) });
+      return dependency;
+    });
 }
 
 function cachedRelayDependency(path) {

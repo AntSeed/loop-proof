@@ -335,6 +335,48 @@ test("dependency timing is refetched from the authenticated receipt block", asyn
   assert.equal(resolved.timestamp, 100);
 });
 
+test("two-transfer relay resolution never requests a missing third receipt", async () => {
+  const bundle = rpcBundle();
+  const seller = "0x0000000000000000000000000000000000000010";
+  const relay = "0x0000000000000000000000000000000000000020";
+  const funder = "0x0000000000000000000000000000000000000030";
+  const firstHash = `0x${"1".repeat(64)}`;
+  const secondHash = `0x${"2".repeat(64)}`;
+  const transferDependency = (evidenceType, transactionHash, from, to, blockNumber) => ({
+    dependencyId: `${evidenceType}-${blockNumber}`,
+    evidenceType,
+    transactionHash,
+    logIndex: 1,
+    from,
+    to,
+    amountRaw: "100",
+    timestamp: 1,
+  });
+  const dependency = {
+    evidenceType: "RELAY_PATH",
+    seller,
+    funder,
+    sellerPayment: transferDependency("RELAY_SELLER_PAYMENT", firstHash, seller, relay, 46_303_100),
+    relayForward: transferDependency("RELAY_FORWARD", secondHash, relay, funder, 46_303_101),
+  };
+  const receipts = new Map([
+    [firstHash, transferReceipt(bundle.contracts.usdc, seller, relay, 100n, 46_303_100)],
+    [secondHash, transferReceipt(bundle.contracts.usdc, relay, funder, 100n, 46_303_101)],
+  ]);
+  const requestedReceipts = [];
+  const resolved = await resolveDependency(dependency, bundle, async (method, [value]) => {
+    if (method === "eth_getTransactionReceipt") {
+      requestedReceipts.push(value);
+      return receipts.get(value);
+    }
+    if (method === "eth_getBlockByNumber") return { number: value, hash: `0x${"a".repeat(64)}`, timestamp: "0x64" };
+    throw new Error(`unexpected RPC method ${method}`);
+  });
+  assert.deepEqual(requestedReceipts, [firstHash, secondHash]);
+  assert.equal(resolved.relayForward.to, funder);
+  assert.equal("funderReceipt" in resolved, false);
+});
+
 test("protocol-deposit funding cannot be attributed to a different funder", async () => {
   const funder = "0x0000000000000000000000000000000000000010";
   const attacker = "0x0000000000000000000000000000000000000099";
@@ -427,4 +469,23 @@ function addressTopic(address) {
 
 function word(value) {
   return `0x${value.toString(16).padStart(64, "0")}`;
+}
+
+function transferReceipt(usdc, from, to, amountRaw, blockNumber) {
+  return {
+    status: "0x1",
+    blockNumber: `0x${blockNumber.toString(16)}`,
+    blockHash: `0x${"a".repeat(64)}`,
+    transactionIndex: "0x0",
+    logs: [{
+      address: usdc,
+      logIndex: "0x1",
+      topics: [
+        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+        addressTopic(from),
+        addressTopic(to),
+      ],
+      data: word(amountRaw),
+    }],
+  };
 }

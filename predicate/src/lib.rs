@@ -38,7 +38,7 @@ pub use reciprocal::{verify_reciprocal, ReciprocalInput};
 
 // ─── Rule identity ────────────────────────────────────────────────────────
 
-pub const PREDICATE_VERSION: u32 = 6;
+pub const PREDICATE_VERSION: u32 = 7;
 pub const CLOSED_LOOP_PREDICATE_ID: u8 = 1;
 pub const RECIPROCAL_PREDICATE_ID: u8 = 2;
 pub const BASE_CHAIN_ID: u64 = 8_453;
@@ -161,7 +161,8 @@ pub struct StateRead {
 /// alone never attribute.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FundingKind {
-    /// Direct USDC transfer funder → buyer.
+    /// Direct USDC transfer funder → buyer. Attribution comes from the
+    /// authenticated ERC-20 Transfer sender so contract custodians qualify.
     Usdc { transfer: LogRef },
     /// `Deposits.deposit(buyer, …)`: USDC transfer funder → Deposits paired
     /// with `Deposited(buyer, amount)` in the same receipt.
