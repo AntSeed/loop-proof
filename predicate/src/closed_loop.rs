@@ -5,11 +5,11 @@ use crate::{
     authenticate_blocks, canonical_evidence_hash, closed_loop_claim_id, cohort_hash,
     ensure_event_in_period, meets_ratio,
     resolver::{ChainResolver, LogKey},
-    validate_chain, validate_sorted_unique_addresses, BuyerLedger, EvidenceBlock, FundingEvidence,
-    FundingKind, LogRef, ReturnPath, SubjectRecord, WashJournal, ALPHA_FUND_BPS, ALPHA_RETURN_BPS,
-    BASE_CHAIN_ID, BUYER_ACCOUNT_BALANCE_OFFSET, CLOSED_LOOP_PREDICATE_ID, DEPOSITS_ADDRESS,
-    DEPOSITS_BUYERS_SLOT, EPSILON_LEDGER_BPS, H_MAX_INTERMEDIATE_HOPS, MAX_BUYERS,
-    MAX_RETURN_PATHS, RHO_HOP_BPS, T_PATH_SECONDS,
+    settlement_id, validate_chain, validate_sorted_unique_addresses, BuyerLedger, EvidenceBlock,
+    FundingEvidence, FundingKind, LogRef, ReturnPath, SettlementRecord, SubjectRecord, WashJournal,
+    ALPHA_FUND_BPS, ALPHA_RETURN_BPS, BASE_CHAIN_ID, BUYER_ACCOUNT_BALANCE_OFFSET,
+    CLOSED_LOOP_PREDICATE_ID, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT, EPSILON_LEDGER_BPS,
+    H_MAX_INTERMEDIATE_HOPS, MAX_BUYERS, MAX_RETURN_PATHS, RHO_HOP_BPS, T_PATH_SECONDS,
 };
 use alloy_primitives::{Address, B256, U256};
 use serde::{Deserialize, Serialize};
@@ -101,6 +101,7 @@ pub fn verify_closed_loop(input: &ClosedLoopInput) -> Result<WashJournal, String
         subjects: vec![SubjectRecord {
             subject: input.seller,
             wash_volume: settle.total,
+            settlements: settle.settlements,
         }],
         block_refs,
     })
@@ -262,6 +263,7 @@ struct SettleSummary {
     total: u128,
     per_buyer: BTreeMap<Address, u128>,
     earliest_time: u64,
+    settlements: Vec<SettlementRecord>,
 }
 
 fn verify_settlements(
@@ -277,6 +279,7 @@ fn verify_settlements(
     let mut total = 0u128;
     let mut per_buyer = BTreeMap::<Address, u128>::new();
     let mut earliest_time = u64::MAX;
+    let mut settlements = Vec::with_capacity(input.settlements.len());
     for reference in &input.settlements {
         let key = resolver.log_key(*reference)?;
         if !used_logs.insert(key) {
@@ -297,6 +300,10 @@ fn verify_settlements(
             return Err("settlements: settlement is not after its buyer's funding".into());
         }
         total = total.checked_add(amount).ok_or("settlements: overflow")?;
+        settlements.push(SettlementRecord {
+            settlement_id: settlement_id(BASE_CHAIN_ID, key.0, key.1, key.2),
+            amount,
+        });
         let per = per_buyer.entry(buyer).or_default();
         *per = per.checked_add(amount).ok_or("settlements: overflow")?;
         earliest_time = earliest_time.min(time);
@@ -305,6 +312,7 @@ fn verify_settlements(
         total,
         per_buyer,
         earliest_time,
+        settlements,
     })
 }
 

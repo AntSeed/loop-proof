@@ -16,6 +16,7 @@ fn main() {
         subjects: vec![SubjectRecord {
             subject: address!("00000000000000000000000000000000000000aa"),
             wash_volume: 1_200_000_000,
+            settlements: Vec::new(),
         }],
         block_refs: vec![
             (

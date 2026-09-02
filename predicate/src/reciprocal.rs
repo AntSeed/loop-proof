@@ -11,9 +11,9 @@ use crate::{
     authenticate_blocks, canonical_evidence_hash, ensure_event_in_period, meets_ratio,
     reciprocal_claim_id,
     resolver::{ChainResolver, LogKey},
-    validate_chain, BuyerLedger, EvidenceBlock, LogRef, SubjectRecord, WashJournal, ALPHA_SELF_BPS,
-    BASE_CHAIN_ID, BETA_RECIPROCAL_BPS, BUYER_ACCOUNT_BALANCE_OFFSET, DEPOSITS_ADDRESS,
-    DEPOSITS_BUYERS_SLOT, RECIPROCAL_PREDICATE_ID,
+    settlement_id, validate_chain, BuyerLedger, EvidenceBlock, LogRef, SettlementRecord,
+    SubjectRecord, WashJournal, ALPHA_SELF_BPS, BASE_CHAIN_ID, BETA_RECIPROCAL_BPS,
+    BUYER_ACCOUNT_BALANCE_OFFSET, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT, RECIPROCAL_PREDICATE_ID,
 };
 use alloy_primitives::{Address, B256, U256};
 use serde::{Deserialize, Serialize};
@@ -76,6 +76,7 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String>
         return Err("reciprocal: no settlements referenced".into());
     }
     let (mut sells_a, mut sells_b) = (0u128, 0u128);
+    let (mut settlements_a, mut settlements_b) = (Vec::new(), Vec::new());
     for reference in &input.settlements {
         let key = resolver.log_key(*reference)?;
         if !used_logs.insert(key) {
@@ -93,8 +94,16 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String>
         }
         if buyer == input.address_b && seller == input.address_a {
             sells_a = sells_a.checked_add(amount).ok_or("reciprocal: overflow")?;
+            settlements_a.push(SettlementRecord {
+                settlement_id: settlement_id(BASE_CHAIN_ID, key.0, key.1, key.2),
+                amount,
+            });
         } else if buyer == input.address_a && seller == input.address_b {
             sells_b = sells_b.checked_add(amount).ok_or("reciprocal: overflow")?;
+            settlements_b.push(SettlementRecord {
+                settlement_id: settlement_id(BASE_CHAIN_ID, key.0, key.1, key.2),
+                amount,
+            });
         } else {
             return Err("reciprocal: settlement outside the exact pair".into());
         }
@@ -190,10 +199,12 @@ pub fn verify_reciprocal(input: &ReciprocalInput) -> Result<WashJournal, String>
             SubjectRecord {
                 subject: input.address_a,
                 wash_volume: sells_a,
+                settlements: settlements_a,
             },
             SubjectRecord {
                 subject: input.address_b,
                 wash_volume: sells_b,
+                settlements: settlements_b,
             },
         ],
         block_refs,

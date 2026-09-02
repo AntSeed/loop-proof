@@ -31,14 +31,14 @@ pub mod journal;
 pub mod reciprocal;
 pub mod resolver;
 
-pub use aggregate::{AggregateJournal, ChildProofInput};
+pub use aggregate::{ChildProofInput, SellerAggregateInput, SellerJournal};
 pub use closed_loop::{verify_closed_loop, ClosedLoopInput};
-pub use journal::{SubjectRecord, WashJournal};
+pub use journal::{settlement_id, SettlementRecord, SubjectRecord, WashJournal};
 pub use reciprocal::{verify_reciprocal, ReciprocalInput};
 
 // ─── Rule identity ────────────────────────────────────────────────────────
 
-pub const PREDICATE_VERSION: u32 = 5;
+pub const PREDICATE_VERSION: u32 = 6;
 pub const CLOSED_LOOP_PREDICATE_ID: u8 = 1;
 pub const RECIPROCAL_PREDICATE_ID: u8 = 2;
 pub const BASE_CHAIN_ID: u64 = 8_453;
@@ -46,8 +46,8 @@ pub const CLOSED_LOOP_PROGRAM_ID: B256 =
     alloy_primitives::b256!("8d4ca7dfd71be3492a82a21293943ea86911396bd13abf3a0979ca676b307c15");
 pub const RECIPROCAL_PROGRAM_ID: B256 =
     alloy_primitives::b256!("95663278b1f0af87d6f97269fa5259671b347e3a7f4290fe2f23a00dfe881ad3");
-pub const AGGREGATOR_PROGRAM_ID: B256 =
-    alloy_primitives::b256!("f10e3b26ded3ac26cbb512dd52c781ace3f3e0f53977fe4772e54838fa8b2e1f");
+pub const SELLER_AGGREGATOR_PROGRAM_ID: B256 =
+    alloy_primitives::b256!("08af9241bba6293ee3fd66974ecdda5c5ea6826264a50f0f17e6caf4800720a7");
 
 // ─── Historical defaults used by ad-hoc tooling ──────────────────────────
 
@@ -96,7 +96,7 @@ pub const H_MAX_INTERMEDIATE_HOPS: usize = 8;
 
 // Witness-sizing limits (shape bounds, not thresholds).
 pub const MAX_BUYERS: usize = 256;
-pub const MAX_BLOCK_REFS: usize = 40_000;
+pub const MAX_BLOCK_REFS: usize = 65_536;
 pub const MAX_RETURN_PATHS: usize = 512;
 
 // ─── Deployed contracts the evidence binds to (Base mainnet) ──────────────
@@ -104,25 +104,12 @@ pub const MAX_RETURN_PATHS: usize = 512;
 pub const USDC_ADDRESS: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
 pub const CHANNELS_ADDRESS: Address = address!("BA66d3b4fbCf472F6F11D6F9F96aaCE96516F09d");
 pub const DEPOSITS_ADDRESS: Address = address!("0F7a3a8f4Da01637d1202bb5443fcF7F88F99fD2");
-pub const STAKING_ADDRESS: Address = address!("3652E6B22919bd322A25723B94BB207602E5c8e6");
 
 // ─── Storage layout bindings (verified against deployed bytecode) ─────────
 //
 // The guest derives every proven slot from these constants and the subject
 // addresses; slots are never part of the witness, so a prover cannot point a
-// proof at a different contract or field. Verified live against Base mainnet
-// (`loop-host verify-layout <seller>`): e.g. for any agent id N,
-// `_agentStats[N].totalVolumeUsdc` at keccak256(N ‖ 11) + 1 equals
-// `getAgentStats(N).totalVolumeUsdc`.
-
-/// `AntseedChannels.mapping(uint256 => AgentStats) private _agentStats`.
-pub const CHANNELS_AGENT_STATS_SLOT: u64 = 11;
-/// `AgentStats { uint64 channelCount; uint64 ghostCount; uint256
-/// totalVolumeUsdc; uint64 lastSettledAt }` — the two u64s pack into the
-/// first slot, so `totalVolumeUsdc` is at offset 1.
-pub const AGENT_STATS_TOTAL_VOLUME_OFFSET: u64 = 1;
-/// `AntseedStaking.mapping(address => uint256) public sellerAgentId`.
-pub const STAKING_SELLER_AGENT_ID_SLOT: u64 = 4;
+// proof at a different contract or field.
 /// `AntseedDeposits.mapping(address => BuyerAccount) public buyers`.
 pub const DEPOSITS_BUYERS_SLOT: u64 = 9;
 /// `BuyerAccount.balance` is the struct's first field.

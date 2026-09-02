@@ -10,20 +10,12 @@ cd "$(dirname "$0")/.."
 TAG="${SP1_DOCKER_TAG:-v6.1.0}"
 for guest in closed-loop reciprocal aggregator; do
   echo "── building $guest guest (dockerized, reproducible; tag $TAG)"
-  (cd "program/$guest" && cargo prove build --docker --tag "$TAG")
+  (cd "program/$guest" && cargo prove build --docker --tag "$TAG" --workspace-directory ../..)
 done
 
 echo
 echo "── elf digests"
 for guest in closed-loop reciprocal aggregator; do
-  elf="program/$guest/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/$guest-guest"
+  elf="program/$guest/target/elf-compilation/docker/riscv64im-succinct-zkvm-elf/release/$guest-guest"
   shasum -a 256 "$elf"
-done
-
-echo
-echo "── vkeys"
-for guest in closed-loop reciprocal aggregator; do
-  elf="program/$guest/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/$guest-guest"
-  echo -n "$guest: "
-  cargo run -q -p loop-host --features sp1 -- vkey --elf "$elf"
 done

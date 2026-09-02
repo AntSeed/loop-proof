@@ -19,10 +19,11 @@ test("historical manifest fixes every approved seller and volume", () => {
   assert.equal(manifest.period_end_block, 19);
 });
 
-test("historical manifest rejects sellers reused across claims", () => {
+test("historical manifest preserves sellers reused across claims", () => {
   const fixture = bundle();
   fixture.claims[1].walletA = fixture.claims[0].subjects[0];
-  assert.throws(() => historicalManifestFromBundle(fixture), /appears in more than one/);
+  const manifest = historicalManifestFromBundle(fixture);
+  assert.equal(manifest.claims[0].subjects[0].seller, manifest.claims[1].subjects[0].seller);
 });
 
 function bundle() {

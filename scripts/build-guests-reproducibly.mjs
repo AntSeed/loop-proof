@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -15,24 +15,32 @@ if (workDir === process.cwd() || workDir.startsWith(`${process.cwd()}/`)) throw 
 await mkdir(workDir, { recursive: true });
 await mkdir(dirname(resolve(out)), { recursive: true });
 const runDir = await mkdtemp(join(workDir, "conserved-loop-"));
+const artifactDir = join(dirname(resolve(out)), "guests");
+await mkdir(artifactDir, { recursive: true });
 const builds = [];
 for (const label of ["a", "b"]) {
   const source = join(runDir, `source-${label}`);
-  await exec("rsync", ["-a", "--delete", "--exclude", ".git", "--exclude", "target", "--exclude", "program/*/target", `${process.cwd()}/`, `${source}/`]);
+  await exec("rsync", ["-a", "--delete", "--exclude", ".git", "--exclude", "out", "--exclude", "target", "--exclude", "program/*/target", `${process.cwd()}/`, `${source}/`]);
   await run(join(source, "scripts/build-guests.sh"), [], source);
   const guests = {};
   for (const guest of ["closed-loop", "reciprocal", "aggregator"]) {
-    const elf = join(source, `program/${guest}/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/${guest}-guest`);
+    const elf = join(source, `program/${guest}/target/elf-compilation/docker/riscv64im-succinct-zkvm-elf/release/${guest}-guest`);
     const bytes = await readFile(elf);
-    const { stdout } = await exec("cargo", ["run", "-q", "-p", "loop-host", "--features", "sp1", "--", "vkey", "--elf", elf], { cwd: source });
-    const vkey = stdout.trim().split(/\s+/).at(-1);
-    if (!/^0x[0-9a-f]{64}$/i.test(vkey)) throw new Error(`${guest}: invalid vkey output`);
-    guests[guest] = { programVKey: vkey, elfSha256: sha256(bytes), elfBytes: (await stat(elf)).size };
+    guests[guest] = { elfSha256: sha256(bytes), elfBytes: (await stat(elf)).size };
   }
   builds.push({ buildId: label, source, guests });
 }
+const guests = {};
 for (const guest of ["closed-loop", "reciprocal", "aggregator"]) {
   if (JSON.stringify(builds[0].guests[guest]) !== JSON.stringify(builds[1].guests[guest])) throw new Error(`${guest} guest build is not reproducible`);
+  const sourceElf = join(builds[0].source, `program/${guest}/target/elf-compilation/docker/riscv64im-succinct-zkvm-elf/release/${guest}-guest`);
+  const artifactElf = join(artifactDir, `${guest}-guest`);
+  await copyFile(sourceElf, artifactElf);
+  console.error(`deriving ${guest} vkey from the verified reproducible ELF`);
+  const { stdout } = await exec("cargo", ["run", "-q", "-p", "loop-host", "--features", "sp1", "--", "vkey", "--elf", artifactElf], { cwd: process.cwd() });
+  const programVKey = stdout.trim().split(/\s+/).at(-1);
+  if (!/^0x[0-9a-f]{64}$/i.test(programVKey)) throw new Error(`${guest}: invalid vkey output`);
+  guests[guest] = { programVKey, ...builds[0].guests[guest] };
 }
 const attestation = {
   version: 3,
@@ -41,7 +49,7 @@ const attestation = {
   reproducible: true,
   sourceDigest: await sourceDigest(),
   builds: builds.map(({ buildId, source }) => ({ buildId, source })),
-  guests: builds[0].guests,
+  guests,
 };
 await writeFile(out, `${JSON.stringify(attestation, null, 2)}\n`);
 console.log(`wrote ${out}`);

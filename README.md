@@ -51,14 +51,16 @@ tells an operator how finely to slice; ratios have no edge to sit under, and
 splitting fabricated volume across identities *raises* each identity's
 proven ratio.
 
-The journal commits each seller address and the suspected wash volume derived
-from authenticated settlement evidence. It deliberately does not prove or
-publish a total-volume denominator or an ERC-8004 agent ID.
+Each child journal commits the seller address and suspected wash volume derived
+from authenticated settlement evidence. The seller aggregate unions settlement
+IDs across claims, deduplicates overlaps, and rejects conflicting amounts for
+the same settlement. A later proof can replace a seller result only when it
+proves a strictly greater wash-trading volume.
 
-### Storage-layout bindings (verified against deployed bytecode)
+### Storage-layout binding
 
-The guest derives every proven storage slot itself; slots are never part of
-the witness. Verified live on Base mainnet (`loop-host verify-layout`):
+The guest derives the buyer-ledger storage slot itself; slots are never part of
+the witness:
 
 | binding | contract | slot |
 |---|---|---|
@@ -83,10 +85,6 @@ scripts/            reproducible guest builds
 # native predicate + evidence-authentication tests (no zkVM toolchain needed)
 cargo test
 
-# live cross-check of pinned storage-layout constants against Base
-cargo run -p loop-host -- verify-layout <seller_address> [seller_address ...]
-cargo test -p loop-host -- --ignored     # same check as a test
-
 # materialize an ad-hoc closed-loop case (archive RPC required for the
 # period-end ledger proofs)
 cargo run -p loop-host -- fetch --case cases/<case>.json --out fixture.json [--expect-reject]
@@ -94,18 +92,18 @@ cargo run -p loop-host -- fetch --case cases/<case>.json --out fixture.json [--e
 # reproducible guest builds + vkey derivation (SP1 toolchain + Docker)
 scripts/build-guests.sh
 
-# produce one Groth16 aggregate (one child is still aggregated)
+# produce one seller-focused Groth16 aggregate (one child is still wrapped)
 cargo run -p loop-host --features sp1 --bin wash-trading-aggregate -- \
+  --seller 0x... \
   --aggregator-elf program/aggregator/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/aggregator-guest \
   --closed-loop-elf program/closed-loop/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/closed-loop-guest \
   --reciprocal-elf program/reciprocal/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/reciprocal-guest \
-  --manifest historical-manifest.json \
-  --child closed-loop:fixture.json --output aggregate-proof.json
+  --child closed-loop:fixture.json --output seller-proof.json
 
 # execute the checked-in synthetic closed-loop and reciprocal fixtures with
-# SP1's mock prover and emit one local-development aggregate artifact
+# SP1's mock prover and emit one local-development artifact per seller
 node scripts/generate-development-proofs.mjs \
-  --output out/development-aggregate-proof.json
+  --output-dir out/development-proof-artifacts/sellers
 ```
 
 The generator rebuilds all three guest ELFs by default. Pass
@@ -124,15 +122,26 @@ USDC volume only after every approved claim is represented in the aggregate:
 node scripts/generate-approved-development-proofs.mjs \
   --bundle /path/to/proof-bundle.json \
   --plan /path/to/proof-plan.json \
+  --snapshot-lock /path/to/snapshot-lock.json \
   --artifact-dir out/approved-development-proofs
 ```
 
 The approved development runner also writes
-`submit-historical-aggregate-calldata.json`. It records the aggregate program ID, vkey,
-public values, proof bytes, and calldata for the immutable historical
-registry's `submitHistoricalAggregate(bytes,bytes)` entrypoint. The registry
-pins the aggregate vkey at deployment, so the program ID remains artifact
-metadata and is not repeated in calldata.
+`submit-historical-aggregate-calldata.json` and
+`block-authentication-chunks.json`. The first records the aggregate program ID,
+vkey, public values, proof bytes, and calldata for
+`submitHistoricalAggregate(bytes,bytes)`. The second contains every canonical
+block reference grouped into fixed 100-reference chunks with Merkle proofs
+against the root committed by SP1. After the aggregate is staged, anyone can
+authenticate chunks in any order against Chainlink BlockhashStore and call
+`finalizeHistoricalResult` once all references are present. Seller records and
+ratios are unavailable before finalization.
+
+`summary.json` distinguishes complete source evidence from enforcement output:
+`uniqueSettlementVolumeRaw` totals deduplicated settlements represented by all
+approved claims, while `aggregate.provenWashVolumeRaw` is the authoritative
+on-chain total after greatest-ratio selection for sellers appearing in multiple
+claims.
 
 After proving, reconcile verified child artifacts back into discovery states
 and emit the final investigated-seller table:
@@ -187,24 +196,24 @@ node scripts/plan-wash-trading-proofs.mjs \
 node scripts/build-guests-reproducibly.mjs --work-dir ../guest-repro-builds --out guest-build-attestation.json
 node scripts/verify-guest-build-attestation.mjs guest-build-attestation.json
 
-# 3. Generate the immutable historical manifest.
-node scripts/generate-historical-manifest.mjs \
-  --bundle proof-bundle.json \
-  --output historical-manifest.json
+# 3. Run the smallest seller as a paid canary. The guarded runner checks the
+# deposited PROVE balance and all three vkeys, binds a marketplace max-price
+# cap into the approved quote, runs a no-spend preflight, and requires a second
+# explicit confirmation before sending any paid request.
+BASE_RPC_URL="$BASE_RPC_URL" scripts/run-production-proofs-safe.sh canary
 
-# 4. Quote and approve proving cost, then make compressed child proofs and one
-# Groth16 aggregate. RPCs need eth_getProof at the historical period end.
-node scripts/prove-approved-batch.mjs \
-  --plan proof-plan.json \
-  --manifest historical-manifest.json \
-  --artifact-dir proof-artifacts \
-  --closed-loop-elf target/guests/closed-loop/elf \
-  --reciprocal-elf target/guests/reciprocal/elf \
-  --aggregator-elf target/guests/aggregator/elf \
-  --cost-quote proof-cost.json \
-  --approve-cost-digest 0x... \
-  --confirm-production-proving
+# 4. After validating the canary artifact, resume the same checkpoint directory
+# and produce the remaining children and seller aggregates.
+BASE_RPC_URL="$BASE_RPC_URL" scripts/run-production-proofs-safe.sh full
 ```
+
+The default canary is the smallest current seller proof: one child and 202
+authenticated block references. Set `WASH_TRADING_CANARY_SELLER` to select a
+different approved seller. Completed production children and seller aggregates
+are validated and reused, so interruption or a later full run does not repay for
+finished proofs. `WASH_TRADING_CHILD_CONCURRENCY` and
+`WASH_TRADING_SELLER_CONCURRENCY` default to `1`; raise them only after the
+canary succeeds.
 
 `wash-trading-materialize-p0` consumes each claim's exact `selectedEvidence`.
 It authenticates the selected receipt and transaction tries, adds mandatory
@@ -213,11 +222,11 @@ and natively verifies the final witness before it is passed to SP1.
 Reciprocal claims also include
 pair-internal protocol deposits selected by the planner.
 
-The final `antseed-wash-trading-aggregate-proof` artifact contains exactly one
-registry-ready `publicValues` blob and one Groth16 `proofBytes` blob. Public
-values contain the report root, manifest digest, fixed period, exact claim and
-seller counts, sorted seller volumes, total proven wash volume, and the number
-of private manifest block references. No per-child on-chain submission exists.
+Each `antseed-wash-trading-seller-proof` artifact contains one registry-ready
+`publicValues` blob and one Groth16 `proofBytes` blob. Public values contain the
+fixed period, pinned child vkeys, seller identity, deduplicated wash volume,
+evidence digest, and block-authentication commitment.
+Child proofs and settlement IDs remain private to the recursive aggregate.
 
 Before production submission, run the coverage report and the AntSeed
 repository's volume verifier. The signed analysis baseline, current planner,
@@ -229,11 +238,60 @@ all agree exactly.
 `PREDICATE_VERSION`, every α/β/ρ/ε parameter, the
 contract addresses and storage-slot bindings are constants in
 `predicate/src/lib.rs`. Changing any of them changes the child vkey and
-therefore the rule. This historical registry pins one aggregator vkey and
-accepts one complete result. Any ongoing proof system is deployed separately. Current
+therefore the rule. The historical registry pins the seller aggregator and
+both child vkeys, and accepts only strictly stronger results for a seller. Current
 parameter values are **calibration placeholders** — final values are fixed
 by the companion wash-trading detection AIP before a registry is bound to a
 live policy.
 
 Guest builds are dockerized (`scripts/build-guests.sh`) so any party can
 independently re-derive the pinned vkeys from source.
+
+## Unified historical snapshot
+
+Do not merge claims from separate scans. Freeze one cutoff, run one exhaustive
+all-seller scan, and reuse earlier trace artifacts only as immutable prefixes:
+
+```bash
+cd /path/to/analyses/wash-trading
+pnpm run wash-trading:scan -- \
+  --discover-p0 \
+  --seed-scan /path/to/original-scan \
+  --seed-scan /path/to/noax-scan \
+  --to 2026-08-31T00:00:00Z \
+  --output /path/to/unified-scan \
+  --rpc-url "$BASE_RPC_URL"
+```
+
+The scanner refreshes Antscan's indexed seller universe, evaluates every seller,
+requires zero incomplete discovery entries, and writes `proof/proof-coverage.json`.
+Existing complete traces are reused; traces ending before the cutoff fetch only a
+one-second-overlapping suffix and canonically deduplicate transfers.
+
+Build one authenticated bundle and proof plan from that scan:
+
+```bash
+cd /path/to/loop-proof
+node scripts/build-unified-historical-snapshot.mjs \
+  --scan-dir /path/to/unified-scan \
+  --out-dir out/unified-historical \
+  --rpc-url "$BASE_RPC_URL"
+```
+
+This writes `proof-bundle.json`, `proof-plan.json`, and `snapshot-lock.json`.
+The lock commits the scan sources, complete seller universe, frozen timestamp and
+block cutoff, policy version, report root, proof plan, claim/seller counts, and
+full proven wash volume.
+
+Generate every development witness and the single development aggregate:
+
+```bash
+node scripts/generate-approved-development-proofs.mjs \
+  --bundle out/unified-historical/proof-bundle.json \
+  --plan out/unified-historical/proof-plan.json \
+  --snapshot-lock out/unified-historical/snapshot-lock.json \
+  --artifact-dir out/unified-historical/development
+```
+
+This is local development proving only. It does not submit paid production proofs
+or deploy the historical registry.

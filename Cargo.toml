@@ -24,3 +24,6 @@ sp1-sdk = { version = "=6.1.0", default-features = false }
 [profile.release]
 debug = 1
 lto = true
+
+[patch.crates-io]
+alloy-signer-aws = { path = "vendor/alloy-signer-aws" }

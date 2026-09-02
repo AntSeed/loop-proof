@@ -27,7 +27,6 @@ pub const BUYERS: [Address; 3] = [
     address!("0000000000000000000000000000000000000002"),
     address!("0000000000000000000000000000000000000003"),
 ];
-pub const AGENT_ID: u64 = 777;
 
 pub fn address_topic(value: Address) -> B256 {
     let mut topic = [0u8; 32];
@@ -525,7 +524,6 @@ pub fn closed_loop_input(cfg: &LoopCfg) -> wash_predicate::ClosedLoopInput {
             .zip(&cfg.end_balances)
             .map(|(b, v)| (*b, U256::from(*v)))
             .collect(),
-        ..Default::default()
     };
     let end_state = state_block(PERIOD_END_BLOCK, 9_000, &end_spec, &retain_end);
     let end_index = blocks.len();
@@ -538,7 +536,6 @@ pub fn closed_loop_input(cfg: &LoopCfg) -> wash_predicate::ClosedLoopInput {
             end: end_state.read(end_index, DEPOSITS_ADDRESS, balance_slot(*buyer)),
         })
         .collect();
-
     wash_predicate::ClosedLoopInput {
         chain_id: wash_predicate::BASE_CHAIN_ID,
         period_start_block: PERIOD_START_BLOCK,
@@ -646,7 +643,6 @@ pub fn reciprocal_input(cfg: &PairCfg) -> wash_predicate::ReciprocalInput {
             (PAIR_A, U256::from(cfg.end_balances.0)),
             (PAIR_B, U256::from(cfg.end_balances.1)),
         ],
-        ..Default::default()
     };
     let end_state = state_block(PERIOD_END_BLOCK, 9_000, &end_spec, &retain_end);
     let end_index = blocks.len();

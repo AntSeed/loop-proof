@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planClaim, resolveDependency, selectApprovedSettlements, validRelayPath } from "./proof-planner.mjs";
+import { planClaim, resolveDependency, selectApprovedSettlements, selectLedgerAwareSettlements, validRelayPath } from "./proof-planner.mjs";
 
 test("cohort selector accepts one buyer and a tiny approved volume", () => {
   const buyers = ["a"];
@@ -20,10 +20,51 @@ test("cohort selector reuses supported historical funding evidence", () => {
   assert.equal(result.volumeRaw, 1n);
 });
 
+test("ledger-aware selector excludes a settlement just above buyer capacity", () => {
+  const fundingByBuyer = new Map([["a", [evidence("fund", "a", 46_303_001, 100n)]]]);
+  const settlements = [
+    evidence("small", "a", 46_303_010, 5n),
+    evidence("boundary", "a", 46_303_011, 90n),
+    evidence("over", "a", 46_303_012, 1n),
+  ];
+  const selected = selectLedgerAwareSettlements(settlements, fundingByBuyer, new Map([["a", 10n]]));
+  assert.deepEqual(selected.settlements.map((entry) => entry.dependencyId), ["small", "boundary"]);
+  assert.equal(selected.volumeRaw, 95n);
+});
+
+test("ledger-aware selector is deterministic and uses later replenishment", () => {
+  const fundingByBuyer = new Map([["a", [
+    evidence("fund-one", "a", 46_303_001, 50n),
+    evidence("fund-two", "a", 46_303_020, 50n),
+  ]] ]);
+  const settlements = [
+    evidence("late-large", "a", 46_303_030, 70n),
+    evidence("early-small", "a", 46_303_010, 25n),
+    evidence("excluded", "a", 46_303_031, 1n),
+  ];
+  const balances = new Map([["a", 10n]]);
+  const forward = selectLedgerAwareSettlements(settlements, fundingByBuyer, balances);
+  const reverse = selectLedgerAwareSettlements([...settlements].reverse(), fundingByBuyer, balances);
+  assert.deepEqual(forward.settlements.map((entry) => entry.dependencyId), ["early-small", "late-large"]);
+  assert.deepEqual(reverse.settlements, forward.settlements);
+});
+
+test("ledger-aware selector obeys the aggregate return-volume capacity", () => {
+  const fundingByBuyer = new Map([["a", [evidence("fund", "a", 46_303_001, 200n)]]]);
+  const settlements = [
+    evidence("first", "a", 46_303_010, 60n),
+    evidence("second", "a", 46_303_011, 40n),
+    evidence("third", "a", 46_303_012, 1n),
+  ];
+  const selected = selectLedgerAwareSettlements(settlements, fundingByBuyer, new Map([["a", 0n]]), [], [], null, 100n);
+  assert.deepEqual(selected.settlements.map((entry) => entry.dependencyId), ["first", "second"]);
+  assert.equal(selected.volumeRaw, 100n);
+});
+
 test("closed-loop planner prioritizes direct seller-funder over relays", () => {
   const claim = { claimId: "claim", type: "P0_CLOSED_LOOP", subjects: ["seller"], approvedBuyers: ["a", "b", "c"], approvedFunders: ["funder"], dependencyRoot: "0x1" };
   const dependencies = [
-    { ...evidence("direct", null, 46_303_100, 1_000_000n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
+    { ...evidence("direct", null, 46_303_100, 200_000_000n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
     ...["a", "b", "c"].flatMap((buyer, index) => [
       { ...evidence(`f${buyer}`, buyer, 46_303_001 + index, 1_000_000n), evidenceType: "USDC_FUNDING", funder: "funder" },
       { ...evidence(`s${buyer}`, buyer, 46_303_031 + index, index === 0 ? 400_000_000n : 300_000_000n), evidenceType: "SETTLEMENT" },
@@ -34,10 +75,44 @@ test("closed-loop planner prioritizes direct seller-funder over relays", () => {
   assert.equal(plan.selectedEvidence.filter((entry) => entry.evidenceType.startsWith("RELAY")).length, 0);
 });
 
+test("closed-loop planner combines direct and relay returns when direct credit is insufficient", () => {
+  const claim = {
+    claimId: "claim",
+    type: "P0_CLOSED_LOOP",
+    subjects: ["seller"],
+    approvedBuyers: ["a"],
+    approvedFunders: ["funder"],
+    dependencyRoot: "0x1",
+    metrics: { qualifiedVolumeRaw: "100" },
+  };
+  const relay = {
+    evidenceType: "RELAY_PATH",
+    funder: "funder",
+    hops: [
+      { ...evidence("relay-one", null, 46_303_100, 10n), from: "seller", to: "relay", timestamp: 100 },
+      { ...evidence("relay-two", null, 46_303_101, 10n), from: "relay", to: "intermediary", timestamp: 101 },
+      { ...evidence("relay-three", null, 46_303_102, 10n), from: "intermediary", to: "funder", timestamp: 102 },
+    ],
+  };
+  const dependencies = [
+    { ...evidence("direct", null, 46_303_099, 10n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder", from: "seller", to: "funder", timestamp: 99 },
+    relay,
+    { dependencyId: "native", evidenceType: "NATIVE_FUNDING", buyer: "a", funder: "funder", blockNumber: 46_303_001, transactionIndex: 0, logIndex: 0, valueWei: "7" },
+    evidence("settlement", "a", 46_303_031, 100n),
+  ];
+  const plan = planClaim(claim, dependencies, { reportRoot: "0x2" });
+  assert.equal(plan.closureType, "DIRECT_AND_RELAY");
+  assert.deepEqual(
+    plan.selectedEvidence.filter((entry) => ["DIRECT_SELLER_FUNDER", "RELAY_PATH"].includes(entry.evidenceType)).map((entry) => entry.evidenceType).sort(),
+    ["DIRECT_SELLER_FUNDER", "RELAY_PATH"],
+  );
+  assert.equal(plan.provenVolumeRaw, "100");
+});
+
 test("closed-loop planner retains replenishments before the final settlement", () => {
   const claim = { claimId: "claim", type: "P0_CLOSED_LOOP", subjects: ["seller"], approvedBuyers: ["a"], approvedFunders: ["funder"], dependencyRoot: "0x1", metrics: { qualifiedVolumeRaw: "10" } };
   const dependencies = [
-    { ...evidence("direct", null, 46_303_100, 1n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
+    { ...evidence("direct", null, 46_303_100, 2n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
     { ...evidence("funding-early", "a", 46_303_001, 4n), evidenceType: "USDC_FUNDING", funder: "funder" },
     { ...evidence("funding-replenish", "a", 46_303_020, 6n), evidenceType: "USDC_FUNDING", funder: "funder" },
     { ...evidence("settlement-one", "a", 46_303_031, 5n), evidenceType: "SETTLEMENT" },
@@ -80,6 +155,31 @@ test("closed-loop planner reports native funding diagnostics in wei", () => {
   }]);
 });
 
+test("native funding selection is capped by authenticated return capacity", () => {
+  const claim = {
+    claimId: "claim",
+    type: "P0_CLOSED_LOOP",
+    subjects: ["seller"],
+    approvedBuyers: ["a"],
+    approvedFunders: ["funder"],
+    dependencyRoot: "0x1",
+    metrics: { qualifiedVolumeRaw: "101" },
+  };
+  const dependencies = [
+    { ...evidence("closure", null, 46_303_100, 20n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
+    { dependencyId: "native", evidenceType: "NATIVE_FUNDING", buyer: "a", funder: "funder", blockNumber: 46_303_001, transactionIndex: 0, logIndex: 0, valueWei: "7" },
+    evidence("first", "a", 46_303_031, 60n),
+    evidence("second", "a", 46_303_032, 40n),
+    evidence("excluded", "a", 46_303_033, 1n),
+  ];
+  const plan = planClaim(claim, dependencies, { reportRoot: "0x2" }, { allowLedgerSelection: true });
+  assert.equal(plan.provenVolumeRaw, "100");
+  assert.deepEqual(
+    plan.selectedEvidence.filter((entry) => entry.evidenceType === "SETTLEMENT").map((entry) => entry.dependencyId),
+    ["first", "second"],
+  );
+});
+
 test("closed-loop planner uses authenticated self-funded closure without self-transfer evidence", () => {
   const claim = { claimId: "claim", type: "P0_CLOSED_LOOP", subjects: ["SeLlEr"], approvedBuyers: ["a", "b", "c"], approvedFunders: ["seller"], dependencyRoot: "0x1" };
   const dependencies = [
@@ -100,7 +200,7 @@ test("closed-loop closure must match the selected cohort funder", () => {
     { ...evidence("closure", null, 46_303_100, 1_000_000n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "other" },
     ...["a", "b", "c"].flatMap((buyer, index) => [
       { ...evidence(`f${buyer}`, buyer, 46_303_001 + index, 1_000_000n), evidenceType: "USDC_FUNDING", funder: "good" },
-      evidence(`s${buyer}`, buyer, 46_303_031 + index, index === 0 ? 400_000_000n : 300_000_000n),
+      evidence(`s${buyer}`, buyer, 46_303_031 + index, 1_000_000n),
     ]),
   ];
   assert.throws(() => planClaim(claim, dependencies, { reportRoot: "0x2" }), /no valid cohort funding strategy/);
@@ -126,7 +226,7 @@ test("positive direct closure has no absolute amount floor", () => {
     { ...evidence("closure", null, 46_303_100, 999_999n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
     ...buyers.flatMap((buyer, index) => [
       { ...evidence(`f${buyer}`, buyer, 46_303_001 + index, 1_000_000n), evidenceType: "USDC_FUNDING", funder: "funder" },
-      evidence(`s${buyer}`, buyer, 46_303_031 + index, index === 0 ? 400_000_000n : 300_000_000n),
+      evidence(`s${buyer}`, buyer, 46_303_031 + index, 1_000_000n),
     ]),
   ];
   const plan = planClaim(claim, dependencies, { reportRoot: "0x2" });

@@ -2,9 +2,10 @@ use crate::{WashJournal, BASE_CHAIN_ID, CLOSED_LOOP_PREDICATE_ID, RECIPROCAL_PRE
 use alloy_primitives::{keccak256, Address, B256, U256};
 use alloy_sol_types::SolValue;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-pub const AGGREGATE_SCHEMA_VERSION: u32 = 1;
+pub const SELLER_AGGREGATE_SCHEMA_VERSION: u32 = 1;
+pub const BLOCK_AUTHENTICATION_CHUNK_SIZE: usize = 100;
 pub use crate::{CLOSED_LOOP_PROGRAM_ID, RECIPROCAL_PROGRAM_ID};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,14 +17,12 @@ pub struct ChildProofInput {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HistoricalManifest {
-    pub report_root: B256,
+pub struct SellerAggregateInput {
+    pub seller: Address,
     pub period_start_block: u64,
     pub period_end_block: u64,
     pub closed_loop_program_vkey: B256,
     pub reciprocal_program_vkey: B256,
-    pub claims: Vec<HistoricalManifestClaim>,
-    pub block_refs: Vec<HistoricalBlockRef>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,265 +32,317 @@ pub struct HistoricalBlockRef {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HistoricalManifestClaim {
-    pub source_claim_id: B256,
-    pub predicate_id: u8,
-    pub period_start_block: u64,
-    pub period_end_block: u64,
-    pub subjects: Vec<HistoricalManifestSubject>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HistoricalManifestSubject {
-    pub seller: Address,
-    #[serde(with = "decimal_u128")]
-    pub proven_wash_volume: u128,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SellerResult {
-    pub seller: Address,
-    pub proven_wash_volume: u128,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AggregateJournal {
+pub struct SellerJournal {
     pub schema_version: u32,
     pub chain_id: u64,
-    pub report_root: B256,
-    pub manifest_digest: B256,
     pub period_start_block: u64,
     pub period_end_block: u64,
-    pub source_claim_count: u32,
-    pub sellers: Vec<SellerResult>,
-    pub total_proven_wash_volume: u128,
+    pub closed_loop_program_vkey: B256,
+    pub reciprocal_program_vkey: B256,
+    pub seller: Address,
+    pub proven_wash_volume: u128,
+    pub evidence_digest: B256,
     pub block_reference_count: u32,
+    pub block_authentication_chunk_size: u32,
+    pub block_authentication_chunk_count: u32,
+    pub block_authentication_root: B256,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockAuthenticationChunk {
+    pub index: u32,
+    pub references: Vec<HistoricalBlockRef>,
+    pub proof: Vec<B256>,
 }
 
 alloy_sol_types::sol! {
-    struct SolSellerResult {
-        address seller;
-        uint128 provenWashVolume;
+    struct SolSellerSettlement {
+        bytes32 settlementId;
+        uint128 amount;
     }
 
-    struct SolAggregateJournal {
+    struct SolSellerJournal {
         uint32 schemaVersion;
         uint64 chainId;
-        bytes32 reportRoot;
-        bytes32 manifestDigest;
         uint64 periodStartBlock;
         uint64 periodEndBlock;
-        uint32 sourceClaimCount;
-        SolSellerResult[] sellers;
-        uint128 totalProvenWashVolume;
+        bytes32 closedLoopProgramVKey;
+        bytes32 reciprocalProgramVKey;
+        address seller;
+        uint128 provenWashVolume;
+        bytes32 evidenceDigest;
         uint32 blockReferenceCount;
+        uint32 blockAuthenticationChunkSize;
+        uint32 blockAuthenticationChunkCount;
+        bytes32 blockAuthenticationRoot;
+    }
+
+    struct SolAuthenticationBlockRef {
+        uint64 number;
+        bytes32 blockHash;
     }
 }
 
-impl HistoricalManifest {
-    pub fn digest(&self) -> Result<B256, String> {
-        serde_json::to_vec(self)
-            .map(keccak256)
-            .map_err(|error| format!("aggregate: encode manifest: {error}"))
-    }
-}
-
-impl AggregateJournal {
+impl SellerJournal {
     pub fn from_children(
         children: &[ChildProofInput],
-        manifest: &HistoricalManifest,
+        input: &SellerAggregateInput,
     ) -> Result<Self, String> {
-        if children.is_empty() || children.len() != manifest.claims.len() {
-            return Err("aggregate: incomplete historical claim set".into());
-        }
-        validate_manifest(manifest)?;
-        let expected_claims = manifest
-            .claims
-            .iter()
-            .map(|claim| (claim.source_claim_id, claim))
-            .collect::<BTreeMap<_, _>>();
-        let mut observed_claims = BTreeSet::new();
-        let mut sellers = BTreeMap::new();
-        let mut block_refs = BTreeMap::new();
-        let mut total_proven_wash_volume = 0u128;
+        validate_input(children, input)?;
+        let mut settlements = BTreeMap::<B256, u128>::new();
+        let mut block_refs = BTreeMap::<u64, B256>::new();
 
         for child in children {
             let journal = WashJournal::abi_decode(&child.public_values)?;
-            let expected_vkey = match journal.predicate_id {
-                CLOSED_LOOP_PREDICATE_ID if child.program_id == CLOSED_LOOP_PROGRAM_ID => {
-                    manifest.closed_loop_program_vkey
-                }
-                RECIPROCAL_PREDICATE_ID if child.program_id == RECIPROCAL_PROGRAM_ID => {
-                    manifest.reciprocal_program_vkey
-                }
-                _ => return Err("aggregate: wrong child program".into()),
-            };
-            if child.program_vkey != expected_vkey
-                || vkey_bytes32(child.vkey_digest) != child.program_vkey
-            {
-                return Err("aggregate: wrong child program vkey".into());
-            }
-            if journal.chain_id != BASE_CHAIN_ID {
-                return Err("aggregate: wrong child chain".into());
-            }
-            if !observed_claims.insert(journal.source_claim_id) {
-                return Err("aggregate: duplicate source claim".into());
-            }
-            let expected = expected_claims
-                .get(&journal.source_claim_id)
-                .ok_or("aggregate: unexpected source claim")?;
-            if expected.predicate_id != journal.predicate_id
-                || expected.period_start_block != journal.period_start_block
-                || expected.period_end_block != journal.period_end_block
-                || expected.subjects.len() != journal.subjects.len()
-            {
-                return Err("aggregate: source claim shape mismatch".into());
-            }
-            let expected_subjects = expected
+            validate_child(child, &journal, input)?;
+            let mut subjects = journal
                 .subjects
                 .iter()
-                .map(|subject| (subject.seller, subject.proven_wash_volume))
-                .collect::<BTreeMap<_, _>>();
-            let mut observed_subjects = BTreeSet::new();
-            for subject in &journal.subjects {
-                if subject.subject == Address::ZERO
-                    || subject.wash_volume == 0
-                    || expected_subjects.get(&subject.subject) != Some(&subject.wash_volume)
-                    || !observed_subjects.insert(subject.subject)
-                    || sellers
-                        .insert(subject.subject, subject.wash_volume)
-                        .is_some()
-                {
-                    return Err("aggregate: source claim results mismatch".into());
-                }
-                total_proven_wash_volume = total_proven_wash_volume
-                    .checked_add(subject.wash_volume)
-                    .ok_or("aggregate: volume overflow")?;
+                .filter(|subject| subject.subject == input.seller);
+            let subject = subjects
+                .next()
+                .ok_or("seller aggregate: child does not prove target seller")?;
+            if subjects.next().is_some() {
+                return Err("seller aggregate: duplicate target seller in child".into());
             }
-            for (number, hash) in &journal.block_refs {
-                if let Some(existing) = block_refs.insert(*number, *hash) {
-                    if existing != *hash {
-                        return Err("aggregate: conflicting block hash".into());
+
+            let mut child_volume = 0u128;
+            for settlement in &subject.settlements {
+                if settlement.settlement_id == B256::ZERO || settlement.amount == 0 {
+                    return Err("seller aggregate: invalid settlement record".into());
+                }
+                child_volume = child_volume
+                    .checked_add(settlement.amount)
+                    .ok_or("seller aggregate: volume overflow")?;
+                match settlements.insert(settlement.settlement_id, settlement.amount) {
+                    Some(amount) if amount != settlement.amount => {
+                        return Err("seller aggregate: conflicting settlement amount".into())
                     }
+                    _ => {}
                 }
             }
-        }
-        if observed_claims.len() != expected_claims.len() {
-            return Err("aggregate: incomplete historical claim set".into());
-        }
-        let observed_refs = block_refs
-            .iter()
-            .map(|(number, block_hash)| HistoricalBlockRef {
-                number: *number,
-                block_hash: *block_hash,
-            })
-            .collect::<Vec<_>>();
-        if observed_refs != manifest.block_refs {
-            return Err("aggregate: canonical block references mismatch".into());
+            if child_volume == 0 || child_volume != subject.wash_volume {
+                return Err("seller aggregate: child settlement total mismatch".into());
+            }
+
+            for (number, block_hash) in journal.block_refs {
+                if block_hash == B256::ZERO {
+                    return Err("seller aggregate: zero child block hash".into());
+                }
+                match block_refs.insert(number, block_hash) {
+                    Some(existing) if existing != block_hash => {
+                        return Err("seller aggregate: conflicting child block hash".into())
+                    }
+                    _ => {}
+                }
+            }
         }
 
+        let proven_wash_volume = settlements.values().try_fold(0u128, |total, amount| {
+            total
+                .checked_add(*amount)
+                .ok_or("seller aggregate: volume overflow")
+        })?;
+        let block_refs = block_refs
+            .into_iter()
+            .map(|(number, block_hash)| HistoricalBlockRef { number, block_hash })
+            .collect::<Vec<_>>();
+        let authentication_chunks = block_authentication_chunks(&block_refs)?;
+        let block_authentication_root = block_authentication_root(&block_refs)
+            .ok_or("seller aggregate: no block references")?;
+        let settlement_values = settlements
+            .iter()
+            .map(|(settlement_id, amount)| SolSellerSettlement {
+                settlementId: *settlement_id,
+                amount: *amount,
+            })
+            .collect::<Vec<_>>();
+        // Preimage is the Solidity-reproducible
+        // `abi.encode(seller, periodStartBlock, periodEndBlock, settlements)`
+        // (no outer tuple offset word), where `settlements` is a
+        // `(bytes32 settlementId, uint128 amount)[]` sorted by id.
+        let evidence_digest = evidence_digest(
+            input.seller,
+            input.period_start_block,
+            input.period_end_block,
+            &settlement_values,
+        );
+
         Ok(Self {
-            schema_version: AGGREGATE_SCHEMA_VERSION,
+            schema_version: SELLER_AGGREGATE_SCHEMA_VERSION,
             chain_id: BASE_CHAIN_ID,
-            report_root: manifest.report_root,
-            manifest_digest: manifest.digest()?,
-            period_start_block: manifest.period_start_block,
-            period_end_block: manifest.period_end_block,
-            source_claim_count: children
-                .len()
-                .try_into()
-                .map_err(|_| "aggregate: too many source claims")?,
-            sellers: sellers
-                .into_iter()
-                .map(|(seller, proven_wash_volume)| SellerResult {
-                    seller,
-                    proven_wash_volume,
-                })
-                .collect(),
-            total_proven_wash_volume,
+            period_start_block: input.period_start_block,
+            period_end_block: input.period_end_block,
+            closed_loop_program_vkey: input.closed_loop_program_vkey,
+            reciprocal_program_vkey: input.reciprocal_program_vkey,
+            seller: input.seller,
+            proven_wash_volume,
+            evidence_digest,
             block_reference_count: block_refs
                 .len()
                 .try_into()
-                .map_err(|_| "aggregate: too many block references")?,
+                .map_err(|_| "seller aggregate: too many block references")?,
+            block_authentication_chunk_size: BLOCK_AUTHENTICATION_CHUNK_SIZE as u32,
+            block_authentication_chunk_count: authentication_chunks
+                .len()
+                .try_into()
+                .map_err(|_| "seller aggregate: too many block chunks")?,
+            block_authentication_root,
         })
     }
 
     pub fn abi_encode(&self) -> Vec<u8> {
-        SolAggregateJournal {
+        SolSellerJournal {
             schemaVersion: self.schema_version,
             chainId: self.chain_id,
-            reportRoot: self.report_root,
-            manifestDigest: self.manifest_digest,
             periodStartBlock: self.period_start_block,
             periodEndBlock: self.period_end_block,
-            sourceClaimCount: self.source_claim_count,
-            sellers: self
-                .sellers
-                .iter()
-                .map(|result| SolSellerResult {
-                    seller: result.seller,
-                    provenWashVolume: result.proven_wash_volume,
-                })
-                .collect(),
-            totalProvenWashVolume: self.total_proven_wash_volume,
+            closedLoopProgramVKey: self.closed_loop_program_vkey,
+            reciprocalProgramVKey: self.reciprocal_program_vkey,
+            seller: self.seller,
+            provenWashVolume: self.proven_wash_volume,
+            evidenceDigest: self.evidence_digest,
             blockReferenceCount: self.block_reference_count,
+            blockAuthenticationChunkSize: self.block_authentication_chunk_size,
+            blockAuthenticationChunkCount: self.block_authentication_chunk_count,
+            blockAuthenticationRoot: self.block_authentication_root,
         }
         .abi_encode()
     }
-
-    pub fn committed_public_values(
-        &self,
-        _manifest: &HistoricalManifest,
-    ) -> Result<Vec<u8>, String> {
-        Ok(self.abi_encode())
-    }
 }
 
-fn validate_manifest(manifest: &HistoricalManifest) -> Result<(), String> {
-    if manifest.report_root == B256::ZERO
-        || manifest.period_start_block == 0
-        || manifest.period_start_block > manifest.period_end_block
-        || manifest.closed_loop_program_vkey == B256::ZERO
-        || manifest.reciprocal_program_vkey == B256::ZERO
-        || manifest.claims.is_empty()
-        || manifest.block_refs.is_empty()
-        || manifest
-            .block_refs
-            .iter()
-            .any(|reference| reference.block_hash == B256::ZERO)
-        || manifest
-            .block_refs
-            .windows(2)
-            .any(|pair| pair[0].number >= pair[1].number)
+fn validate_input(
+    children: &[ChildProofInput],
+    input: &SellerAggregateInput,
+) -> Result<(), String> {
+    if children.is_empty()
+        || input.seller == Address::ZERO
+        || input.period_start_block == 0
+        || input.period_start_block > input.period_end_block
+        || input.closed_loop_program_vkey == B256::ZERO
+        || input.reciprocal_program_vkey == B256::ZERO
     {
-        return Err("aggregate: invalid historical manifest".into());
-    }
-    let mut claims = BTreeSet::new();
-    let mut sellers = BTreeSet::new();
-    for claim in &manifest.claims {
-        if claim.source_claim_id == B256::ZERO
-            || !matches!(
-                claim.predicate_id,
-                CLOSED_LOOP_PREDICATE_ID | RECIPROCAL_PREDICATE_ID
-            )
-            || claim.period_start_block < manifest.period_start_block
-            || claim.period_end_block > manifest.period_end_block
-            || claim.period_start_block > claim.period_end_block
-            || claim.subjects.is_empty()
-            || !claims.insert(claim.source_claim_id)
-        {
-            return Err("aggregate: invalid manifest claim".into());
-        }
-        for subject in &claim.subjects {
-            if subject.seller == Address::ZERO
-                || subject.proven_wash_volume == 0
-                || !sellers.insert(subject.seller)
-            {
-                return Err("aggregate: invalid manifest subject".into());
-            }
-        }
+        return Err("seller aggregate: invalid input".into());
     }
     Ok(())
+}
+
+fn validate_child(
+    child: &ChildProofInput,
+    journal: &WashJournal,
+    input: &SellerAggregateInput,
+) -> Result<(), String> {
+    let expected_vkey = match (child.program_id, journal.predicate_id) {
+        (CLOSED_LOOP_PROGRAM_ID, CLOSED_LOOP_PREDICATE_ID) => input.closed_loop_program_vkey,
+        (RECIPROCAL_PROGRAM_ID, RECIPROCAL_PREDICATE_ID) => input.reciprocal_program_vkey,
+        _ => return Err("seller aggregate: wrong child program".into()),
+    };
+    if child.program_vkey != expected_vkey || vkey_bytes32(child.vkey_digest) != expected_vkey {
+        return Err("seller aggregate: wrong child vkey".into());
+    }
+    if journal.chain_id != BASE_CHAIN_ID
+        || journal.period_start_block != input.period_start_block
+        || journal.period_end_block != input.period_end_block
+        || journal.source_claim_id == B256::ZERO
+        || journal.claim_id == B256::ZERO
+    {
+        return Err("seller aggregate: child identity mismatch".into());
+    }
+    Ok(())
+}
+
+/// `keccak256(abi.encode(seller, periodStartBlock, periodEndBlock, settlements))`
+/// exactly as Solidity's `abi.encode` would produce it for the same arguments.
+pub fn evidence_digest(
+    seller: Address,
+    period_start_block: u64,
+    period_end_block: u64,
+    settlements: &[SolSellerSettlement],
+) -> B256 {
+    keccak256((seller, period_start_block, period_end_block, settlements).abi_encode_params())
+}
+
+pub fn block_authentication_chunks(
+    refs: &[HistoricalBlockRef],
+) -> Result<Vec<BlockAuthenticationChunk>, String> {
+    if refs.is_empty() {
+        return Err("seller aggregate: no block references".into());
+    }
+    if refs
+        .iter()
+        .any(|reference| reference.block_hash == B256::ZERO)
+        || refs.windows(2).any(|pair| pair[0].number >= pair[1].number)
+    {
+        return Err("seller aggregate: invalid block references".into());
+    }
+    let leaves = refs
+        .chunks(BLOCK_AUTHENTICATION_CHUNK_SIZE)
+        .enumerate()
+        .map(|(index, chunk)| block_authentication_leaf(index as u32, chunk))
+        .collect::<Vec<_>>();
+    Ok(refs
+        .chunks(BLOCK_AUTHENTICATION_CHUNK_SIZE)
+        .enumerate()
+        .map(|(index, chunk)| BlockAuthenticationChunk {
+            index: index as u32,
+            references: chunk.to_vec(),
+            proof: merkle_proof(&leaves, index),
+        })
+        .collect())
+}
+
+pub fn block_authentication_root(refs: &[HistoricalBlockRef]) -> Option<B256> {
+    let leaves = refs
+        .chunks(BLOCK_AUTHENTICATION_CHUNK_SIZE)
+        .enumerate()
+        .map(|(index, chunk)| block_authentication_leaf(index as u32, chunk))
+        .collect::<Vec<_>>();
+    merkle_root(&leaves)
+}
+
+fn block_authentication_leaf(index: u32, refs: &[HistoricalBlockRef]) -> B256 {
+    let references = refs
+        .iter()
+        .map(|reference| SolAuthenticationBlockRef {
+            number: reference.number,
+            blockHash: reference.block_hash,
+        })
+        .collect::<Vec<_>>();
+    keccak256((index, references).abi_encode_params())
+}
+
+fn merkle_root(leaves: &[B256]) -> Option<B256> {
+    let mut level = leaves.to_vec();
+    if level.is_empty() {
+        return None;
+    }
+    while level.len() > 1 {
+        level = level
+            .chunks(2)
+            .map(|pair| keccak256((pair[0], *pair.get(1).unwrap_or(&pair[0])).abi_encode()))
+            .collect();
+    }
+    level.first().copied()
+}
+
+fn merkle_proof(leaves: &[B256], leaf_index: usize) -> Vec<B256> {
+    let mut level = leaves.to_vec();
+    let mut index = leaf_index;
+    let mut proof = Vec::new();
+    while level.len() > 1 {
+        let sibling = if index % 2 == 0 {
+            *level.get(index + 1).unwrap_or(&level[index])
+        } else {
+            level[index - 1]
+        };
+        proof.push(sibling);
+        level = level
+            .chunks(2)
+            .map(|pair| keccak256((pair[0], *pair.get(1).unwrap_or(&pair[0])).abi_encode()))
+            .collect();
+        index /= 2;
+    }
+    proof
 }
 
 pub fn vkey_bytes32(words: [u32; 8]) -> B256 {
@@ -299,24 +350,4 @@ pub fn vkey_bytes32(words: [u32; 8]) -> B256 {
         .into_iter()
         .fold(U256::ZERO, |packed, word| (packed << 31) + U256::from(word));
     B256::from(value.to_be_bytes::<32>())
-}
-
-mod decimal_u128 {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&value.to_string())
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<u128, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(serde::de::Error::custom)
-    }
 }

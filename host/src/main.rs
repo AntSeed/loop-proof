@@ -5,22 +5,16 @@
 //!   loop-host fetch --case case.json --out fixture.json [--expect-reject]
 //!   loop-host run fixture.json [--prove --elf path/to/elf]
 //!   loop-host vkey --elf path/to/elf
-//!   loop-host verify-layout
-//!
-//! `verify-layout` is the live cross-check demanded by AIP-4: it proves a
-//! known agent's `AgentStats.totalVolumeUsdc` storage slot at a recent block
-//! and compares the proven value against `getAgentStats` via `eth_call`.
 
 mod rpc;
 
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use wash_predicate::{
     BuyerLedger, ClosedLoopInput, EvidenceBlock, FundingEvidence, FundingKind, LogRef, ReturnPath,
-    StateRead, WashJournal, CHANNELS_ADDRESS, DEPOSITS_ADDRESS, PERIOD_END_BLOCK, STAKING_ADDRESS,
-    USDC_ADDRESS,
+    StateRead, WashJournal, CHANNELS_ADDRESS, DEPOSITS_ADDRESS, PERIOD_END_BLOCK, USDC_ADDRESS,
 };
 
 const DEFAULT_RPCS: &[&str] = &[
@@ -97,12 +91,8 @@ fn main() -> Result<()> {
             &arg_value(&args, "--out").context("--out required")?,
             args.iter().any(|a| a == "--development"),
         ),
-        Some("verify-layout") => {
-            let addresses: Vec<String> = args[2..].to_vec();
-            verify_layout(&addresses)
-        }
         _ => bail!(
-            "usage: loop-host fetch --case case.json --out fixture.json [--expect-reject]\n       loop-host run fixture.json [--elf path --result result.json --source-claim-id 0x...] [--prove --production]\n       loop-host vkey --elf path\n       loop-host headers --start N --end M --out headers.json\n       loop-host batch-manifest --results-dir DIR --blockhash-store 0x... --closed-loop-vkey 0x... --reciprocal-vkey 0x... --out proof-results.json [--development]\n       loop-host verify-layout [seller_address ...]"
+            "usage: loop-host fetch --case case.json --out fixture.json [--expect-reject]\n       loop-host run fixture.json [--elf path --result result.json --source-claim-id 0x...] [--prove --production]\n       loop-host vkey --elf path\n       loop-host headers --start N --end M --out headers.json\n       loop-host batch-manifest --results-dir DIR --blockhash-store 0x... --closed-loop-vkey 0x... --reciprocal-vkey 0x... --out proof-results.json [--development]"
         ),
     }
 }
@@ -838,99 +828,6 @@ fn headers(start: u64, end: u64, out_path: &str) -> Result<()> {
     }
     std::fs::write(out_path, serde_json::to_vec_pretty(&out)?)?;
     println!("{} headers written to {out_path}", end - start + 1);
-    Ok(())
-}
-
-// ─────────────────────────────── layout cross-check ───────────────────────
-
-/// Live verification of storage-layout constants the guest pins, against
-/// Base mainnet. Pass one or more seller addresses to check.
-///
-///   loop-host verify-layout 0x0329…9b2c 0xb629…dab4
-pub fn verify_layout(addresses: &[String]) -> Result<()> {
-    if addresses.is_empty() {
-        bail!("usage: loop-host verify-layout <seller_address> [seller_address ...]");
-    }
-    let sellers: Vec<Address> = addresses
-        .iter()
-        .map(|a| a.parse().with_context(|| format!("invalid address: {a}")))
-        .collect::<Result<_>>()?;
-
-    let client = rpc::Client::new(&endpoints());
-    let latest = rpc::hex_u64(&client.call("eth_blockNumber", serde_json::json!([]))?)?;
-    let number = latest.saturating_sub(8);
-    let header = client.header(number)?;
-    println!("checking layouts at block {number}");
-
-    for seller in &sellers {
-        verify_seller(&client, &header, number, seller)?;
-    }
-
-    println!("all storage-layout bindings verified");
-    Ok(())
-}
-
-fn verify_seller(
-    client: &rpc::Client,
-    header: &alloy_consensus::Header,
-    number: u64,
-    seller: &Address,
-) -> Result<()> {
-    let agent_slot =
-        loop_core::mapping_slot_address(*seller, wash_predicate::STAKING_SELLER_AGENT_ID_SLOT);
-    let (_, agent_id) = client.storage_witness(header, STAKING_ADDRESS, agent_slot)?;
-    let expected_id = eth_call_u256(
-        client,
-        STAKING_ADDRESS,
-        &format!("0x042324b6{}", pad_address(*seller)),
-        number,
-    )?;
-    ensure_equal(&format!("{seller} sellerAgentId"), agent_id, expected_id)?;
-
-    if agent_id.is_zero() {
-        println!("{seller}: no staked agent ✔");
-        return Ok(());
-    }
-    let volume_slot = loop_core::slot_offset(
-        loop_core::mapping_slot_u256(agent_id, wash_predicate::CHANNELS_AGENT_STATS_SLOT),
-        wash_predicate::AGENT_STATS_TOTAL_VOLUME_OFFSET,
-    );
-    let (_, proven_volume) = client.storage_witness(header, CHANNELS_ADDRESS, volume_slot)?;
-    let data = format!("0x68091633{:064x}", agent_id);
-    let out = eth_call(client, CHANNELS_ADDRESS, &data, number)?;
-    let expected_volume = U256::from_be_slice(&out[64..96]);
-    ensure_equal(
-        &format!("{seller} totalVolumeUsdc"),
-        proven_volume,
-        expected_volume,
-    )?;
-    println!("{seller} agent {agent_id}: totalVolumeUsdc = {proven_volume} ✔");
-    Ok(())
-}
-
-fn pad_address(a: Address) -> String {
-    format!("{:0>64}", alloy_primitives::hex::encode(a.as_slice()))
-}
-
-fn eth_call(client: &rpc::Client, to: Address, data: &str, block: u64) -> Result<Vec<u8>> {
-    let out = client.call(
-        "eth_call",
-        serde_json::json!([{ "to": format!("{to}"), "data": data }, format!("0x{block:x}")]),
-    )?;
-    Ok(alloy_primitives::hex::decode(
-        out.as_str().context("call output")?,
-    )?)
-}
-
-fn eth_call_u256(client: &rpc::Client, to: Address, data: &str, block: u64) -> Result<U256> {
-    let out = eth_call(client, to, data, block)?;
-    Ok(U256::from_be_slice(&out[0..32]))
-}
-
-fn ensure_equal(label: &str, proven: U256, expected: U256) -> Result<()> {
-    if proven != expected {
-        bail!("{label}: proven storage value {proven} != contract view {expected} — layout drift");
-    }
     Ok(())
 }
 
