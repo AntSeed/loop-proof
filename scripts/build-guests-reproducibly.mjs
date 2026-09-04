@@ -23,7 +23,7 @@ for (const label of ["a", "b"]) {
   await exec("rsync", ["-a", "--delete", "--exclude", ".git", "--exclude", "out", "--exclude", "target", "--exclude", "program/*/target", `${process.cwd()}/`, `${source}/`]);
   await run(join(source, "scripts/build-guests.sh"), [], source);
   const guests = {};
-  for (const guest of ["closed-loop", "reciprocal", "aggregator"]) {
+  for (const guest of ["seller"]) {
     const elf = join(source, `program/${guest}/target/elf-compilation/docker/riscv64im-succinct-zkvm-elf/release/${guest}-guest`);
     const bytes = await readFile(elf);
     guests[guest] = { elfSha256: sha256(bytes), elfBytes: (await stat(elf)).size };
@@ -31,7 +31,7 @@ for (const label of ["a", "b"]) {
   builds.push({ buildId: label, source, guests });
 }
 const guests = {};
-for (const guest of ["closed-loop", "reciprocal", "aggregator"]) {
+for (const guest of ["seller"]) {
   if (JSON.stringify(builds[0].guests[guest]) !== JSON.stringify(builds[1].guests[guest])) throw new Error(`${guest} guest build is not reproducible`);
   const sourceElf = join(builds[0].source, `program/${guest}/target/elf-compilation/docker/riscv64im-succinct-zkvm-elf/release/${guest}-guest`);
   const artifactElf = join(artifactDir, `${guest}-guest`);
@@ -43,7 +43,7 @@ for (const guest of ["closed-loop", "reciprocal", "aggregator"]) {
   guests[guest] = { programVKey, ...builds[0].guests[guest] };
 }
 const attestation = {
-  version: 3,
+  version: 4,
   kind: "antseed-sp1-program-build-attestation",
   sp1Version: "6.1.0",
   reproducible: true,

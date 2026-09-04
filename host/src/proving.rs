@@ -58,28 +58,6 @@ impl ProofClient {
         }
     }
 
-    pub fn prove_compressed(
-        &self,
-        key: &SP1ProvingKey,
-        stdin: SP1Stdin,
-    ) -> Result<SP1ProofWithPublicValues> {
-        match self {
-            Self::Development(client) => client
-                .prove(key, stdin)
-                .compressed()
-                .run()
-                .map_err(Into::into),
-            Self::Network { client, options } => client
-                .prove(key, stdin)
-                .compressed()
-                .max_price_per_pgu(options.max_price_per_pgu)
-                .timeout(options.proof_timeout)
-                .auction_timeout(options.auction_timeout)
-                .run(),
-        }
-    }
-
-    #[allow(dead_code)]
     pub fn prove_groth16(
         &self,
         key: &SP1ProvingKey,
@@ -95,7 +73,7 @@ impl ProofClient {
             Self::Network { client, options } => client
                 .prove(key, stdin)
                 .groth16()
-                .deferred_proof_verification(true)
+                .deferred_proof_verification(false)
                 .max_price_per_pgu(options.max_price_per_pgu)
                 .timeout(options.proof_timeout)
                 .auction_timeout(options.auction_timeout)
@@ -103,21 +81,19 @@ impl ProofClient {
         }
     }
 
-    #[allow(dead_code)]
     pub fn request_groth16(&self, key: &SP1ProvingKey, stdin: SP1Stdin) -> Result<B256> {
         match self {
             Self::Development(_) => bail!("development proving does not create network requests"),
             Self::Network { client, options } => client
                 .prove(key, stdin)
                 .groth16()
-                .deferred_proof_verification(true)
+                .deferred_proof_verification(false)
                 .max_price_per_pgu(options.max_price_per_pgu)
                 .timeout(options.proof_timeout)
                 .request(),
         }
     }
 
-    #[allow(dead_code)]
     pub fn wait_proof(&self, request_id: B256) -> Result<SP1ProofWithPublicValues> {
         match self {
             Self::Development(_) => bail!("development proving has no network request to resume"),
@@ -143,13 +119,6 @@ impl ProofClient {
             Self::Network { client, .. } => client
                 .verify(proof, key.verifying_key(), None)
                 .map_err(Into::into),
-        }
-    }
-
-    pub fn security_mode(&self) -> &'static str {
-        match self {
-            Self::Development(_) => "development",
-            Self::Network { .. } => "production",
         }
     }
 }

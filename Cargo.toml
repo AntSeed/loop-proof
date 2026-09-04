@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["core", "predicate", "host"]
-exclude = ["program/closed-loop", "program/reciprocal"]
+exclude = ["program/seller"]
 
 [workspace.dependencies]
 loop-core = { path = "core" }

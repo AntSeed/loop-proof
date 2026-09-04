@@ -17,8 +17,7 @@ test("production quote binds exact digest and network price cap", () => {
   const quote = buildCostQuote({
     proofBundle,
     proofPlanSha256: `0x${"1".repeat(64)}`,
-    p0UnitUsd: "1.25",
-    aggregateUnitUsd: "4.00",
+    sellerProofUnitUsd: "4.00",
     maxPricePerPguWei: "1000000000000000000",
     proofTimeoutSeconds: "14400",
     auctionTimeoutSeconds: "120",
@@ -26,13 +25,13 @@ test("production quote binds exact digest and network price cap", () => {
     expiresAt: "2026-09-01T00:00:00.000Z",
     now,
   });
-  assert.equal(quote.body.aggregateMaxCostUsd, "55.750000");
+  assert.equal(quote.body.aggregateMaxCostUsd, "12.000000");
   assert.equal(quote.body.networkLimits.maxPricePerPguWei, "1000000000000000000");
   assert.throws(() => approveCostQuote(quote, `0x${"0".repeat(64)}`, {
-    counts: { p0Claims: 35, aggregates: 3 }, seller: null,
+    counts: { sellerProofs: 3 }, seller: null,
   }, now), /explicit approval/);
   assert.equal(approveCostQuote(quote, quote.digest, {
-    counts: { p0Claims: 35, aggregates: 3 }, seller: null,
+    counts: { sellerProofs: 3 }, seller: null,
   }, now), quote);
 });
 
@@ -42,8 +41,7 @@ test("canary quote contains only the selected seller claims", () => {
   const quote = buildCostQuote({
     proofBundle,
     proofPlanSha256: `0x${"2".repeat(64)}`,
-    p0UnitUsd: "2",
-    aggregateUnitUsd: "5",
+    sellerProofUnitUsd: "5",
     maxPricePerPguWei: "10",
     proofTimeoutSeconds: 60,
     auctionTimeoutSeconds: 30,
@@ -53,9 +51,8 @@ test("canary quote contains only the selected seller claims", () => {
     now,
   });
   assert.equal(quote.body.scope.seller, seller);
-  assert.equal(quote.body.counts.p0Claims, 12);
-  assert.equal(quote.body.counts.aggregates, 1);
-  assert.equal(quote.body.aggregateMaxCostUsd, "29.000000");
+  assert.equal(quote.body.counts.sellerProofs, 1);
+  assert.equal(quote.body.aggregateMaxCostUsd, "5.000000");
 });
 
 test("network-price-cap-only quote records no fictional USD limit", () => {
@@ -64,8 +61,7 @@ test("network-price-cap-only quote records no fictional USD limit", () => {
   const quote = buildCostQuote({
     proofBundle,
     proofPlanSha256: `0x${"3".repeat(64)}`,
-    p0UnitUsd: null,
-    aggregateUnitUsd: null,
+    sellerProofUnitUsd: null,
     maxPricePerPguWei: "660000000",
     proofTimeoutSeconds: 14_400,
     auctionTimeoutSeconds: 120,
@@ -79,6 +75,6 @@ test("network-price-cap-only quote records no fictional USD limit", () => {
   assert.equal(quote.body.unitMaxCostUsd, null);
   assert.equal(quote.body.aggregateMaxCostUsd, null);
   assert.equal(approveCostQuote(quote, quote.digest, {
-    counts: { p0Claims: 12, aggregates: 1 }, seller,
+    counts: { sellerProofs: 1 }, seller,
   }, now), quote);
 });

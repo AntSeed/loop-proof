@@ -10,8 +10,7 @@ const MAX_U64 = 18_446_744_073_709_551_615n;
 export function buildCostQuote({
   proofBundle,
   proofPlanSha256,
-  p0UnitUsd,
-  aggregateUnitUsd,
+  sellerProofUnitUsd,
   maxPricePerPguWei,
   proofTimeoutSeconds,
   auctionTimeoutSeconds,
@@ -29,23 +28,15 @@ export function buildCostQuote({
   const allSellers = new Set(proofBundle.claims.flatMap((claim) => claim.subjects ?? []).map(normalizeSeller));
   if (allSellers.size === 0) throw new Error("proof bundle has no sellers");
   if (normalizedSeller != null && !allSellers.has(normalizedSeller)) throw new Error(`${normalizedSeller}: seller is not approved`);
-  const claims = normalizedSeller == null
-    ? proofBundle.claims
-    : proofBundle.claims.filter((claim) => claim.subjects.map(normalizeSeller).includes(normalizedSeller));
-  if (claims.length === 0) throw new Error("proof quote scope has no claims");
-  const counts = { p0Claims: claims.length, aggregates: normalizedSeller == null ? allSellers.size : 1 };
-  const hasP0UsdLimit = p0UnitUsd != null;
-  const hasAggregateUsdLimit = aggregateUnitUsd != null;
-  if (hasP0UsdLimit !== hasAggregateUsdLimit) throw new Error("both USD unit limits must be provided together");
-  const hasUsdLimits = hasP0UsdLimit && hasAggregateUsdLimit;
-  const p0ClaimUsd = hasUsdLimits ? parseUsd(p0UnitUsd, "P0 unit cost") : null;
-  const aggregateUsd = hasUsdLimits ? parseUsd(aggregateUnitUsd, "aggregate unit cost") : null;
+  const counts = { sellerProofs: normalizedSeller == null ? allSellers.size : 1 };
+  const hasUsdLimits = sellerProofUnitUsd != null;
+  const sellerProofUsd = hasUsdLimits ? parseUsd(sellerProofUnitUsd, "seller proof unit cost") : null;
   const maxPrice = parseU64(maxPricePerPguWei, "max price per PGU");
   if (maxPrice === 0n) throw new Error("max price per PGU must be nonzero");
   const proofTimeout = positiveInteger(proofTimeoutSeconds, "proof timeout");
   const auctionTimeout = positiveInteger(auctionTimeoutSeconds, "auction timeout");
   const body = {
-    version: 5,
+    version: 6,
     kind: "antseed-sp1-proof-cost-quote",
     chainId: 8_453,
     approvalMode: hasUsdLimits ? "usd-and-network-limits" : "network-price-cap-only",
@@ -56,10 +47,10 @@ export function buildCostQuote({
     scope: { seller: normalizedSeller },
     counts,
     unitMaxCostUsd: hasUsdLimits
-      ? { p0ClaimUsd: formatUsd(p0ClaimUsd), aggregateUsd: formatUsd(aggregateUsd) }
+      ? { sellerProofUsd: formatUsd(sellerProofUsd) }
       : null,
     aggregateMaxCostUsd: hasUsdLimits
-      ? formatUsd(p0ClaimUsd * BigInt(counts.p0Claims) + aggregateUsd * BigInt(counts.aggregates))
+      ? formatUsd(sellerProofUsd * BigInt(counts.sellerProofs))
       : null,
     networkLimits: {
       maxPricePerPguWei: maxPrice.toString(),
@@ -75,7 +66,7 @@ export function buildCostQuote({
 }
 
 export function approveCostQuote(quote, approvedDigest, expected, now = new Date()) {
-  if (quote?.body?.version !== 5 || quote.body.kind !== "antseed-sp1-proof-cost-quote"
+  if (quote?.body?.version !== 6 || quote.body.kind !== "antseed-sp1-proof-cost-quote"
       || quote.body.chainId !== 8_453) throw new Error("unsupported proving cost quote");
   const digest = quoteDigest(quote.body);
   if (quote.digest?.toLowerCase() !== digest.toLowerCase()) throw new Error("proving cost quote digest mismatch");
@@ -89,8 +80,8 @@ export function approveCostQuote(quote, approvedDigest, expected, now = new Date
   const approvalMode = quote.body.approvalMode ?? "usd-and-network-limits";
   if (approvalMode === "usd-and-network-limits") {
     if (quote.body.currency !== "USD") throw new Error("USD proving cost quote has invalid currency");
-    const expectedTotal = parseUsd(quote.body.unitMaxCostUsd?.p0ClaimUsd, "P0 unit cost") * BigInt(quote.body.counts.p0Claims)
-      + parseUsd(quote.body.unitMaxCostUsd?.aggregateUsd, "aggregate unit cost") * BigInt(quote.body.counts.aggregates);
+    const expectedTotal = parseUsd(quote.body.unitMaxCostUsd?.sellerProofUsd, "seller proof unit cost")
+      * BigInt(quote.body.counts.sellerProofs);
     if (formatUsd(expectedTotal) !== quote.body.aggregateMaxCostUsd) throw new Error("proving cost quote aggregate is invalid");
   } else if (approvalMode === "network-price-cap-only") {
     if (quote.body.currency !== null || quote.body.unitMaxCostUsd !== null || quote.body.aggregateMaxCostUsd !== null) {
@@ -158,14 +149,13 @@ async function main() {
   for (const flag of required) if (!value(flag)) throw new Error(`missing ${flag}`);
   const networkPriceCapOnly = args.includes("--network-price-cap-only");
   if (!networkPriceCapOnly) {
-    for (const flag of ["--p0-unit-usd", "--aggregate-unit-usd"]) if (!value(flag)) throw new Error(`missing ${flag}`);
+    for (const flag of ["--seller-proof-unit-usd"]) if (!value(flag)) throw new Error(`missing ${flag}`);
   }
   const proofBundle = JSON.parse(await readFile(value("--bundle"), "utf8"));
   const quote = buildCostQuote({
     proofBundle,
     proofPlanSha256: await sha256File(value("--proof-plan")),
-    p0UnitUsd: networkPriceCapOnly ? null : value("--p0-unit-usd"),
-    aggregateUnitUsd: networkPriceCapOnly ? null : value("--aggregate-unit-usd"),
+    sellerProofUnitUsd: networkPriceCapOnly ? null : value("--seller-proof-unit-usd"),
     maxPricePerPguWei: value("--max-price-per-pgu-wei"),
     proofTimeoutSeconds: value("--proof-timeout-seconds"),
     auctionTimeoutSeconds: value("--auction-timeout-seconds"),

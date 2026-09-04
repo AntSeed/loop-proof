@@ -25,9 +25,7 @@ fn main() -> Result<()> {
             "Succinct prover-network balance is zero for requester {requester}; fund this requester through https://explorer.succinct.xyz/account"
         );
     }
-    let closed_loop = required_vkey(&args, "--expected-closed-loop-vkey")?;
-    let reciprocal = required_vkey(&args, "--expected-reciprocal-vkey")?;
-    let aggregator = required_vkey(&args, "--expected-aggregator-vkey")?;
+    let seller = required_vkey(&args, "--expected-seller-vkey")?;
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
@@ -35,9 +33,7 @@ fn main() -> Result<()> {
             "requester": requester,
             "circuitVersion": SP1_CIRCUIT_VERSION.trim(),
             "balanceWei": balance.to_string(),
-            "closedLoopProgramVKey": closed_loop,
-            "reciprocalProgramVKey": reciprocal,
-            "aggregatorProgramVKey": aggregator,
+            "sellerProgramVKey": seller,
         }))?
     );
     Ok(())

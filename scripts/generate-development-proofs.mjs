@@ -15,7 +15,6 @@ const value = (flag) => {
 const artifactDir = resolve(value("--artifact-dir") ?? "out/development-proof-artifacts");
 const outputDir = resolve(value("--output-dir") ?? resolve(artifactDir, "sellers"));
 const toolchain = process.env.RUSTUP_TOOLCHAIN ?? "1.94";
-const guests = ["closed-loop", "reciprocal", "aggregator"];
 const skipGuestBuild = args.includes("--skip-guest-build");
 
 await mkdir(artifactDir, { recursive: true });
@@ -26,16 +25,16 @@ const reciprocalFixturePath = resolve(artifactDir, "reciprocal.json");
 const closedFixture = JSON.parse(await readFile(closedFixturePath, "utf8"));
 const reciprocalFixture = JSON.parse(await readFile(reciprocalFixturePath, "utf8"));
 
-for (const guest of guests) {
-  const elf = guestElf(guest);
-  if (!skipGuestBuild) {
-    await run("cargo", ["prove", "build"], resolve(root, "program", guest), { RUSTUP_TOOLCHAIN: "succinct" });
-    continue;
-  }
+const elf = guestElf();
+if (!skipGuestBuild) {
+  await run("cargo", ["prove", "build", "--workspace-directory", "../.."], resolve(root, "program/seller"), {
+    RUSTUP_TOOLCHAIN: "succinct",
+  });
+} else {
   try {
     await readFile(elf);
   } catch (error) {
-    if (error.code === "ENOENT") throw new Error(`${guest} guest ELF is missing; omit --skip-guest-build`);
+    if (error.code === "ENOENT") throw new Error("seller guest ELF is missing; omit --skip-guest-build");
     throw error;
   }
 }
@@ -48,30 +47,35 @@ const sellers = [...new Set([
 const outputs = [];
 for (const seller of sellers) {
   const output = resolve(outputDir, `${seller}.json`);
-  await run("cargo", [
-    "run", "-q", "-p", "loop-host", "--features", "sp1", "--bin", "wash-trading-aggregate", "--",
+  const claims = [];
+  if (closedFixture.seller.toLowerCase() === seller) claims.push(`closed-loop:${closedFixturePath}`);
+  if ([reciprocalFixture.address_a, reciprocalFixture.address_b].map((value) => value.toLowerCase()).includes(seller)) {
+    claims.push(`reciprocal:${reciprocalFixturePath}`);
+  }
+  const command = [
+    "run", "-q", "-p", "loop-host", "--features", "sp1", "--bin", "wash-trading-prove-seller", "--",
     "--development",
     "--seller", seller,
-    "--aggregator-elf", guestElf("aggregator"),
-    "--closed-loop-elf", guestElf("closed-loop"),
-    "--reciprocal-elf", guestElf("reciprocal"),
-    "--child-artifact-dir", resolve(artifactDir, "children"),
-    "--reuse-child-proofs",
-    "--child", `closed-loop:${closedFixturePath}`,
-    "--child", `reciprocal:${reciprocalFixturePath}`,
+    "--seller-elf", elf,
+    "--seller-witness", resolve(artifactDir, "seller-witnesses", `${seller}.json`),
     "--output", output,
+  ];
+  for (const claim of claims) command.push("--claim", claim);
+  await run("cargo", [
+    ...command,
   ]);
   const artifact = JSON.parse(await readFile(output, "utf8"));
-  if (artifact?.version !== 2 || artifact.kind !== "antseed-wash-trading-seller-proof"
-      || artifact.securityMode !== "development" || artifact.seller.toLowerCase() !== seller) {
+  if (artifact?.version !== 3 || artifact.kind !== "antseed-wash-trading-seller-proof"
+      || artifact.proofArchitecture !== "direct-seller-v1" || artifact.securityMode !== "development"
+      || artifact.seller.toLowerCase() !== seller || artifact.claimCount !== claims.length) {
     throw new Error(`${seller}: development seller artifact has unexpected identity`);
   }
   outputs.push(output);
 }
 console.log(`development seller proofs: ${outputs.join(", ")}`);
 
-function guestElf(guest) {
-  return resolve(root, `program/${guest}/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/${guest}-guest`);
+function guestElf() {
+  return resolve(root, "program/seller/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/seller-guest");
 }
 
 async function run(command, commandArgs, cwd = root, extraEnv = {}) {

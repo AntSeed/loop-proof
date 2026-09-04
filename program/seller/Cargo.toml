@@ -1,10 +1,8 @@
 [package]
-name = "reciprocal-guest"
+name = "seller-guest"
 version = "0.1.0"
 edition = "2021"
 
-# Standalone workspace: built only with the SP1 toolchain
-# (`cargo prove build`), never as part of the host workspace.
 [workspace]
 
 [dependencies]

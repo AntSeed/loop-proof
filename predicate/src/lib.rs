@@ -4,8 +4,8 @@
 //! evidence (receipts, transactions, and state, authenticated by
 //! Merkle-Patricia proofs against block headers) and checks a fixed
 //! mechanical predicate over it. The guest binary's verification key IS the
-//! rule: changing any constant in this crate produces a different vkey and
-//! therefore a new append-only child-program version in the registry.
+//! rule: changing any constant in this crate produces a different direct
+//! seller-program vkey and therefore a new registry version.
 //!
 //! Both predicates prove the same thing — a conserved value loop. Fabricated
 //! volume is volume settled with capital that the same party put in and got
@@ -25,16 +25,19 @@ use alloy_primitives::{address, keccak256, Address, B256, U256};
 use alloy_sol_types::SolValue;
 use serde::{Deserialize, Serialize};
 
-pub mod aggregate;
 pub mod closed_loop;
 pub mod journal;
 pub mod reciprocal;
 pub mod resolver;
+pub mod seller;
 
-pub use aggregate::{ChildProofInput, SellerAggregateInput, SellerJournal};
 pub use closed_loop::{verify_closed_loop, ClosedLoopInput};
 pub use journal::{settlement_id, SettlementRecord, SubjectRecord, WashJournal};
 pub use reciprocal::{verify_reciprocal, ReciprocalInput};
+pub use seller::{
+    verify_block_authentication_chunk, verify_seller, BlockAuthenticationChunk, HistoricalBlockRef,
+    SellerClaimInput, SellerJournal, SellerProofInput, SolSellerSettlement, VerifiedSeller,
+};
 
 // ─── Rule identity ────────────────────────────────────────────────────────
 
@@ -42,13 +45,6 @@ pub const PREDICATE_VERSION: u32 = 8;
 pub const CLOSED_LOOP_PREDICATE_ID: u8 = 1;
 pub const RECIPROCAL_PREDICATE_ID: u8 = 2;
 pub const BASE_CHAIN_ID: u64 = 8_453;
-pub const CLOSED_LOOP_PROGRAM_ID: B256 =
-    alloy_primitives::b256!("8d4ca7dfd71be3492a82a21293943ea86911396bd13abf3a0979ca676b307c15");
-pub const RECIPROCAL_PROGRAM_ID: B256 =
-    alloy_primitives::b256!("95663278b1f0af87d6f97269fa5259671b347e3a7f4290fe2f23a00dfe881ad3");
-pub const SELLER_AGGREGATOR_PROGRAM_ID: B256 =
-    alloy_primitives::b256!("08af9241bba6293ee3fd66974ecdda5c5ea6826264a50f0f17e6caf4800720a7");
-
 // ─── Historical defaults used by ad-hoc tooling ──────────────────────────
 
 pub const PERIOD_START_BLOCK: u64 = 44_471_575;

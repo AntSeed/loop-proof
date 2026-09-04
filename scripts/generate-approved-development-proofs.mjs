@@ -303,87 +303,98 @@ async function main() {
     });
   }
 
-  const children = [];
+  const claimWitnesses = [];
   for (const { claim, witnessPath } of witnessEntries) {
     if (!await isCurrentWitness(witnessPath, indexedPlan.period, claim, materializerSha256)) {
       throw new Error(`${claim.claimId}: canonical witness is missing or stale after materialization`);
     }
-    children.push(`${claim.type === "P0_RECIPROCAL" ? "reciprocal" : "closed-loop"}:${witnessPath}`);
+    claimWitnesses.push(`${claim.type === "P0_RECIPROCAL" ? "reciprocal" : "closed-loop"}:${witnessPath}`);
   }
-  if (children.length !== approved.approvedClaimCount) throw new Error("not every approved claim has a witness");
+  if (claimWitnesses.length !== approved.approvedClaimCount) throw new Error("not every approved claim has a witness");
 
-  if (witnessOnly) {
-    const witnesses = await Promise.all(witnessEntries.map(async ({ claim, witnessPath }) => ({
-      claimId: claim.claimId,
-      claimType: claim.type,
-      path: witnessPath,
-      sha256: await sha256File(witnessPath),
-    })));
-    const summary = buildWitnessOnlySummary(approved, witnesses, {
-      path: copiedSnapshotLockPath,
-      sha256: sha256(await readFile(copiedSnapshotLockPath)),
-    });
-    await mkdir(dirname(summaryPath), { recursive: true });
-    await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
-    console.log(`WASH_TRADING_APPROVED_DEVELOPMENT_WITNESS_SUMMARY=${JSON.stringify(summary)}`);
-    return;
-  }
-
-  for (const guest of ["closed-loop", "reciprocal", "aggregator"]) {
+  if (!witnessOnly) {
     if (!skipGuestBuild) {
-      await run("cargo", ["prove", "build"], resolve(root, "program", guest), { RUSTUP_TOOLCHAIN: "succinct" });
+      await run("cargo", ["prove", "build", "--workspace-directory", "../.."], resolve(root, "program", "seller"), {
+        RUSTUP_TOOLCHAIN: "succinct",
+      });
     } else {
-      await stat(guestElf(guest));
+      await stat(guestElf("seller"));
     }
   }
-  const sellers = [...new Set(bundle.claims.flatMap((claim) => claim.subjects.map((seller) => seller.toLowerCase())))].sort();
-  if (sellers.length !== approved.approvedSellerCount) throw new Error("approved seller count mismatch");
-  const sellerProofDirectory = join(artifactDir, "sellers");
-  const childArtifactDirectory = join(artifactDir, "children");
-  await mkdir(sellerProofDirectory, { recursive: true });
-  const sellerProofs = [];
-  for (const [sellerIndex, seller] of sellers.entries()) {
-    const sellerProofPath = join(sellerProofDirectory, `${seller}.json`);
-    const aggregateArgs = [
-      "run", "--release", "-p", "loop-host", "--features", "sp1", "--bin", "wash-trading-aggregate", "--",
-      "--development",
-      "--seller", seller,
-      "--aggregator-elf", guestElf("aggregator"),
-      "--closed-loop-elf", guestElf("closed-loop"),
-      "--reciprocal-elf", guestElf("reciprocal"),
-      "--child-artifact-dir", childArtifactDirectory,
-      "--reuse-child-proofs",
-      "--output", sellerProofPath,
-    ];
-    for (const child of children) aggregateArgs.push("--child", child);
-    console.error(`[${sellerIndex + 1}/${sellers.length}] aggregating seller ${seller}`);
-    await run("cargo", aggregateArgs, root, { RUSTUP_TOOLCHAIN: toolchain });
-    const sellerProof = JSON.parse(await readFile(sellerProofPath, "utf8"));
-    if (sellerProof?.version !== 2 || sellerProof.kind !== "antseed-wash-trading-seller-proof"
-        || sellerProof.securityMode !== "development" || sellerProof.seller.toLowerCase() !== seller) {
-      throw new Error(`${seller}: invalid seller proof artifact`);
+
+  const witnessByClaim = new Map(witnessEntries.map(({ claim, witnessPath }) => [
+    claim.claimId.toLowerCase(),
+    `${claim.type === "P0_RECIPROCAL" ? "reciprocal" : "closed-loop"}:${witnessPath}`,
+  ]));
+  const sellerClaims = new Map();
+  for (const claim of bundle.claims) {
+    const witness = witnessByClaim.get(claim.claimId.toLowerCase());
+    if (!witness) throw new Error(`${claim.claimId}: approved claim witness is missing`);
+    for (const seller of claim.subjects.map((value) => value.toLowerCase())) {
+      const claims = sellerClaims.get(seller) ?? [];
+      claims.push({ claimId: claim.claimId.toLowerCase(), witness });
+      sellerClaims.set(seller, claims);
     }
-    sellerProofs.push({
+  }
+  const sellers = [...sellerClaims.keys()].sort();
+  if (sellers.length !== approved.approvedSellerCount) throw new Error("approved seller count mismatch");
+  const sellerArtifactDirectory = join(artifactDir, "sellers");
+  const sellerWitnessDirectory = join(artifactDir, "seller-witnesses");
+  await mkdir(sellerArtifactDirectory, { recursive: true });
+  await mkdir(sellerWitnessDirectory, { recursive: true });
+  const sellerResults = [];
+  for (const [sellerIndex, seller] of sellers.entries()) {
+    const claims = sellerClaims.get(seller).sort((left, right) => left.claimId.localeCompare(right.claimId));
+    const output = join(sellerArtifactDirectory, `${seller}.json`);
+    const command = [
+      "run", "--release", "-p", "loop-host", "--features", "sp1",
+      "--bin", "wash-trading-prove-seller", "--",
+      witnessOnly ? "--witness-only" : "--development",
+      "--seller", seller,
+      "--output", output,
+      "--seller-witness", join(sellerWitnessDirectory, `${seller}.json`),
+    ];
+    if (!witnessOnly) command.push("--seller-elf", guestElf("seller"));
+    for (const claim of claims) command.push("--claim", claim.witness);
+    console.error(`[${sellerIndex + 1}/${sellers.length}] ${witnessOnly ? "verifying" : "proving"} seller ${seller}`);
+    await run("cargo", command, root, { RUSTUP_TOOLCHAIN: toolchain });
+    const artifact = JSON.parse(await readFile(output, "utf8"));
+    if (artifact.seller?.toLowerCase() !== seller || artifact.claimCount !== claims.length
+        || artifact.provenWashVolumeRaw == null || artifact.proverNetworkSubmitted === true) {
+      throw new Error(`${seller}: invalid direct seller artifact`);
+    }
+    sellerResults.push({
       seller,
-      path: sellerProofPath,
-      sha256: sha256(await readFile(sellerProofPath)),
-      childCount: sellerProof.childCount,
-      provenWashVolumeRaw: sellerProof.provenWashVolumeRaw,
-      blockReferenceCount: sellerProof.blockReferenceCount,
+      path: output,
+      sha256: sha256(await readFile(output)),
+      claimCount: artifact.claimCount,
+      provenWashVolumeRaw: artifact.provenWashVolumeRaw,
+      blockReferenceCount: artifact.blockReferenceCount,
     });
   }
-  if (sellerProofs.length !== approved.approvedSellerCount) {
-    throw new Error("not every approved seller received a proof artifact");
+  const totalProvenWashVolumeRaw = sellerResults
+    .reduce((total, result) => total + BigInt(result.provenWashVolumeRaw), 0n)
+    .toString();
+  if (totalProvenWashVolumeRaw !== approved.uniqueSettlementVolumeRaw) {
+    throw new Error(`direct seller total ${totalProvenWashVolumeRaw} differs from approved ${approved.uniqueSettlementVolumeRaw}`);
   }
   const summary = {
-    version: 1,
-    kind: "antseed-wash-trading-approved-development-summary",
+    version: 2,
+    kind: witnessOnly
+      ? "antseed-wash-trading-approved-development-witness-summary"
+      : "antseed-wash-trading-approved-development-summary",
+    proofArchitecture: "direct-seller-v1",
     securityMode: "development",
-    completeness: "all-approved-sellers-materialized-offchain",
+    completeness: witnessOnly
+      ? "all-approved-seller-witnesses-native-verified"
+      : "all-approved-sellers-proved-offchain",
+    proverNetworkSubmitted: false,
     snapshotLock: { path: copiedSnapshotLockPath, sha256: sha256(await readFile(copiedSnapshotLockPath)) },
     ...approved,
-    sellerProofCount: sellerProofs.length,
-    sellerProofs,
+    sellerProofCount: witnessOnly ? 0 : sellerResults.length,
+    sellerWitnessCount: sellerResults.length,
+    totalProvenWashVolumeRaw,
+    sellerResults,
   };
   await mkdir(dirname(summaryPath), { recursive: true });
   await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);

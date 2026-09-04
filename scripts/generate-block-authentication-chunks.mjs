@@ -2,48 +2,56 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-export function buildBlockAuthenticationChunks(aggregate, chunkSize = 100) {
-  if (aggregate?.version !== 1 || aggregate.kind !== "antseed-wash-trading-aggregate-proof") {
-    throw new Error("invalid aggregate proof artifact");
+export function buildBlockAuthenticationChunks(sellerProof, chunkSize = 100) {
+  if (sellerProof?.version !== 3 || sellerProof.kind !== "antseed-wash-trading-seller-proof"
+      || sellerProof.proofArchitecture !== "direct-seller-v1") {
+    throw new Error("invalid direct seller proof artifact");
   }
   if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) throw new Error("chunk size must be positive");
-  if (chunkSize !== aggregate.blockAuthenticationChunkSize) throw new Error("chunk size differs from SP1 commitment");
-  if (!Array.isArray(aggregate.blockReferences)
-      || aggregate.blockReferences.length !== aggregate.blockReferenceCount) {
-    throw new Error("aggregate block-reference count mismatch");
+  if (chunkSize !== sellerProof.blockAuthenticationChunkSize) throw new Error("chunk size differs from SP1 commitment");
+  const chunks = sellerProof.blockAuthenticationChunks;
+  if (!Array.isArray(chunks) || chunks.length !== sellerProof.blockAuthenticationChunkCount) {
+    throw new Error("seller block-authentication chunk count mismatch");
   }
-  const references = aggregate.blockReferences.map((reference, index) => {
-    const number = Number(reference.number);
-    const blockHash = normalizeHash(reference.blockHash);
-    if (!Number.isSafeInteger(number) || number <= 0) throw new Error(`invalid block number at ${index}`);
-    if (index > 0 && number <= Number(aggregate.blockReferences[index - 1].number)) {
-      throw new Error("block references must be strictly ordered");
-    }
-    return { number, blockHash };
-  });
-  const root = normalizeHash(aggregate.blockAuthenticationRoot);
-  const chunks = aggregate.blockAuthenticationChunks;
-  if (!Array.isArray(chunks) || chunks.length !== aggregate.blockAuthenticationChunkCount) {
-    throw new Error("aggregate block-authentication chunk count mismatch");
-  }
-  let observedReferences = 0;
+  const references = [];
   for (const [index, chunk] of chunks.entries()) {
-    if (chunk.index !== index || !Array.isArray(chunk.references) || !Array.isArray(chunk.proof)) {
+    if (chunk.index !== index || !Array.isArray(chunk.references) || chunk.references.length === 0
+        || chunk.references.length > chunkSize || !Array.isArray(chunk.proof)) {
       throw new Error("invalid block-authentication chunk");
     }
-    observedReferences += chunk.references.length;
+    for (const reference of chunk.references) {
+      const number = Number(reference.number);
+      const blockHash = normalizeHash(reference.blockHash);
+      if (!Number.isSafeInteger(number) || number <= 0) throw new Error(`invalid block number in chunk ${index}`);
+      if (references.length > 0 && number <= references.at(-1).number) {
+        throw new Error("block references must be strictly ordered");
+      }
+      references.push({ number, blockHash });
+    }
   }
-  if (observedReferences !== references.length) throw new Error("block-authentication chunks are incomplete");
+  if (references.length !== sellerProof.blockReferenceCount) {
+    throw new Error("seller block-reference count mismatch");
+  }
   return {
-    version: 1,
-    kind: "antseed-wash-trading-block-authentication-chunks",
-    chainId: aggregate.chainId,
-    reportRoot: aggregate.reportRoot,
+    version: 2,
+    kind: "antseed-wash-trading-seller-block-authentication-chunks",
+    proofArchitecture: "direct-seller-v1",
+    chainId: sellerProof.chainId,
+    seller: sellerProof.seller.toLowerCase(),
+    evidenceDigest: normalizeHash(sellerProof.evidenceDigest),
     blockReferenceCount: references.length,
-    blockAuthenticationRoot: root,
+    blockAuthenticationRoot: normalizeHash(sellerProof.blockAuthenticationRoot),
     chunkSize,
     chunkCount: chunks.length,
-    chunks: chunks.map((chunk) => ({ ...chunk, offset: chunk.index * chunkSize })),
+    chunks: chunks.map((chunk) => ({
+      index: chunk.index,
+      offset: chunk.index * chunkSize,
+      references: chunk.references.map((reference) => ({
+        number: Number(reference.number),
+        blockHash: normalizeHash(reference.blockHash),
+      })),
+      proof: chunk.proof.map(normalizeHash),
+    })),
   };
 }
 
@@ -54,11 +62,16 @@ function normalizeHash(value) {
 
 if (process.argv[1] && resolve(process.argv[1]) === new URL(import.meta.url).pathname) {
   const args = process.argv.slice(2);
-  const value = (flag) => { const index = args.indexOf(flag); return index < 0 ? null : args[index + 1]; };
-  const aggregatePath = value("--aggregate");
+  const value = (flag) => {
+    const index = args.indexOf(flag);
+    return index < 0 ? null : args[index + 1];
+  };
+  const sellerProofPath = value("--seller-proof") ?? value("--aggregate");
   const outputPath = value("--output");
-  if (!aggregatePath || !outputPath) throw new Error("usage: generate-block-authentication-chunks.mjs --aggregate aggregate.json --output chunks.json [--chunk-size 100]");
-  const aggregate = JSON.parse(await readFile(resolve(aggregatePath), "utf8"));
-  const result = buildBlockAuthenticationChunks(aggregate, Number(value("--chunk-size") ?? 100));
+  if (!sellerProofPath || !outputPath) {
+    throw new Error("usage: generate-block-authentication-chunks.mjs --seller-proof seller.json --output chunks.json [--chunk-size 100]");
+  }
+  const sellerProof = JSON.parse(await readFile(resolve(sellerProofPath), "utf8"));
+  const result = buildBlockAuthenticationChunks(sellerProof, Number(value("--chunk-size") ?? 100));
   await writeFile(resolve(outputPath), `${JSON.stringify(result, null, 2)}\n`);
 }

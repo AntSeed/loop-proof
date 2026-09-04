@@ -2,38 +2,40 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-export const submitHistoricalAggregateSignature = "submitHistoricalAggregate(bytes,bytes)";
-export const submitHistoricalAggregateSelector = "2a64a7e6";
+export const stageSellerProofSignature = "stageSellerProof(bytes,bytes)";
+export const stageSellerProofSelector = "2be631a3";
 
-export function buildAggregateCalldataArtifact(aggregate) {
-  if (aggregate?.version !== 1 || aggregate.kind !== "antseed-wash-trading-aggregate-proof") {
-    throw new Error("invalid aggregate proof artifact");
+export function buildSellerCalldataArtifact(sellerProof) {
+  if (sellerProof?.version !== 3 || sellerProof.kind !== "antseed-wash-trading-seller-proof"
+      || sellerProof.proofArchitecture !== "direct-seller-v1" || sellerProof.proved !== true
+      || sellerProof.verified !== true) {
+    throw new Error("invalid direct seller proof artifact");
   }
-  const aggregatorProgramId = fixedHex(aggregate.aggregatorProgramId, 32, "aggregator program ID");
-  const aggregatorProgramVKey = fixedHex(aggregate.aggregatorProgramVKey, 32, "aggregator program vkey");
-  const publicValues = dynamicHex(aggregate.publicValues, "public values");
-  const proofBytes = dynamicHex(aggregate.proofBytes, "proof bytes");
-  const calldata = encodeSubmitHistoricalAggregate(publicValues, proofBytes);
+  const sellerProgramVKey = fixedHex(sellerProof.sellerProgramVKey, 32, "seller program vkey");
+  const publicValues = dynamicHex(sellerProof.publicValues, "public values");
+  const proofBytes = dynamicHex(sellerProof.proofBytes, "proof bytes");
+  if (proofBytes === "0x") throw new Error("proof bytes are empty");
   return {
-    version: 1,
-    kind: "antseed-wash-trading-submit-historical-aggregate-calldata",
-    securityMode: aggregate.securityMode,
-    chainId: aggregate.chainId,
-    callSignature: submitHistoricalAggregateSignature,
-    aggregatorProgramId,
-    aggregatorProgramVKey,
+    version: 2,
+    kind: "antseed-wash-trading-stage-seller-proof-calldata",
+    proofArchitecture: "direct-seller-v1",
+    securityMode: sellerProof.securityMode,
+    chainId: sellerProof.chainId,
+    seller: sellerProof.seller.toLowerCase(),
+    sellerProgramVKey,
+    callSignature: stageSellerProofSignature,
     publicValues,
     proofBytes,
-    calldata,
+    calldata: encodeStageSellerProof(publicValues, proofBytes),
   };
 }
 
-export function encodeSubmitHistoricalAggregate(publicValues, proofBytes) {
+export function encodeStageSellerProof(publicValues, proofBytes) {
   const publicValuesBody = encodeDynamicBytes(dynamicHex(publicValues, "public values"));
   const proofBody = encodeDynamicBytes(dynamicHex(proofBytes, "proof bytes"));
-  const headSize = 32 * 2;
+  const headSize = 64;
   const proofOffset = headSize + publicValuesBody.length / 2;
-  return `0x${submitHistoricalAggregateSelector}${word(headSize)}${word(proofOffset)}${publicValuesBody}${proofBody}`;
+  return `0x${stageSellerProofSelector}${word(headSize)}${word(proofOffset)}${publicValuesBody}${proofBody}`;
 }
 
 function encodeDynamicBytes(value) {
@@ -44,9 +46,7 @@ function encodeDynamicBytes(value) {
 }
 
 function fixedHex(value, byteLength, label) {
-  if (!new RegExp(`^0x[0-9a-fA-F]{${byteLength * 2}}$`).test(value ?? "")) {
-    throw new Error(`invalid ${label}`);
-  }
+  if (!new RegExp(`^0x[0-9a-fA-F]{${byteLength * 2}}$`).test(value ?? "")) throw new Error(`invalid ${label}`);
   return value.toLowerCase();
 }
 
@@ -65,12 +65,11 @@ if (process.argv[1] && resolve(process.argv[1]) === new URL(import.meta.url).pat
     const index = args.indexOf(flag);
     return index < 0 ? null : args[index + 1];
   };
-  const aggregatePath = value("--aggregate");
+  const sellerProofPath = value("--seller-proof") ?? value("--aggregate");
   const outputPath = value("--output");
-  if (!aggregatePath || !outputPath) {
-    throw new Error("usage: generate-aggregate-calldata.mjs --aggregate aggregate-proof.json --output calldata.json");
+  if (!sellerProofPath || !outputPath) {
+    throw new Error("usage: generate-aggregate-calldata.mjs --seller-proof seller-proof.json --output calldata.json");
   }
-  const aggregate = JSON.parse(await readFile(resolve(aggregatePath), "utf8"));
-  const artifact = buildAggregateCalldataArtifact(aggregate);
-  await writeFile(resolve(outputPath), `${JSON.stringify(artifact, null, 2)}\n`);
+  const sellerProof = JSON.parse(await readFile(resolve(sellerProofPath), "utf8"));
+  await writeFile(resolve(outputPath), `${JSON.stringify(buildSellerCalldataArtifact(sellerProof), null, 2)}\n`);
 }

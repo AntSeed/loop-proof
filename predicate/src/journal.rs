@@ -1,4 +1,4 @@
-//! The public child-proof journal.
+//! The claim journal consumed privately by the direct seller proof.
 
 use alloy_primitives::{keccak256, Address, B256};
 use alloy_sol_types::SolValue;
