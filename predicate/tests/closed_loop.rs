@@ -380,7 +380,7 @@ fn protocol_deposit_funding_is_accepted() {
 }
 
 #[test]
-fn native_funding_proves_seeding_without_cross_unit_coverage() {
+fn native_funding_is_rejected_in_the_guest() {
     // SELLER is the raw transaction's `to`; use it as the funded buyer so the
     // native evidence itself is shape-valid.
     let mut cfg = LoopCfg::default();
@@ -408,12 +408,11 @@ fn native_funding_proves_seeding_without_cross_unit_coverage() {
         },
     };
     input.ledgers.clear();
-    let journal = verify_closed_loop(&input).unwrap();
-    assert_eq!(journal.subjects[0].wash_volume, 400_000_000);
+    assert_rejects(&input, "native funding is not supported");
 }
 
 #[test]
-fn native_and_usdc_funding_cannot_be_mixed() {
+fn native_funding_is_rejected_even_when_usdc_evidence_is_present() {
     let mut input = closed_loop_input(&LoopCfg::default());
     input.blocks[0] = transfer_block(PERIOD_START_BLOCK, 1_000, FUNDER, BUYERS[0], 1, true);
     input.fundings[0].kind = FundingKind::Native {
@@ -426,7 +425,7 @@ fn native_and_usdc_funding_cannot_be_mixed() {
             receipt: 0,
         },
     };
-    assert_rejects(&input, "cannot mix native and USDC evidence");
+    assert_rejects(&input, "native funding is not supported");
 }
 
 #[test]

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   buildApprovedBatchSummary,
+  buildWitnessOnlySummary,
   countClaimMaterializationBlocks,
   isCurrentWitness,
   mapWithConcurrency,
@@ -88,6 +89,19 @@ test("approved development summary rejects partial plans", () => {
   plan.claims.pop();
   plan.claimCount = 1;
   assert.throws(() => validateApprovedSet(fixtureBundle(), plan), /partial proof plan/);
+});
+
+test("witness-only summary proves completeness without a prover-network submission", () => {
+  const approved = buildApprovedBatchSummary(fixtureBundle(), fixturePlan());
+  const witnesses = [
+    { claimId: "closed", claimType: "P0_CLOSED_LOOP", path: "/closed.json", sha256: "0x1" },
+    { claimId: "pair", claimType: "P0_RECIPROCAL", path: "/pair.json", sha256: "0x2" },
+  ];
+  const summary = buildWitnessOnlySummary(approved, witnesses, { path: "/lock.json", sha256: "0x3" });
+  assert.equal(summary.witnessCount, 2);
+  assert.equal(summary.proverNetworkSubmitted, false);
+  assert.equal(summary.completeness, "all-approved-claims-materialized-and-guest-verified-offchain");
+  assert.throws(() => buildWitnessOnlySummary(approved, witnesses.slice(1), {}), /not every approved claim/);
 });
 
 test("development generation binds the unified snapshot lock", () => {

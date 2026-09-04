@@ -58,6 +58,23 @@ export function buildApprovedBatchSummary(bundle, plan) {
   };
 }
 
+export function buildWitnessOnlySummary(approved, witnesses, snapshotLock) {
+  if (witnesses.length !== approved.approvedClaimCount) {
+    throw new Error("not every approved claim has a witness");
+  }
+  return {
+    version: 1,
+    kind: "antseed-wash-trading-approved-development-witness-summary",
+    securityMode: "development",
+    completeness: "all-approved-claims-materialized-and-guest-verified-offchain",
+    proverNetworkSubmitted: false,
+    snapshotLock,
+    ...approved,
+    witnessCount: witnesses.length,
+    witnesses,
+  };
+}
+
 export function validateApprovedSet(bundle, plan) {
   if (bundle?.version !== 1 || bundle.kind !== "antseed-wash-trading-proof-bundle" || !Array.isArray(bundle.claims)) {
     throw new Error("invalid approved proof bundle");
@@ -228,6 +245,7 @@ async function main() {
   const snapshotLockPath = resolve(required(value("--snapshot-lock"), "--snapshot-lock"));
   const toolchain = process.env.RUSTUP_TOOLCHAIN ?? "1.94";
   const skipGuestBuild = args.includes("--skip-guest-build");
+  const witnessOnly = args.includes("--witness-only");
   const materializeConcurrency = positiveInteger(
     value("--materialize-concurrency") ?? process.env.WASH_TRADING_MATERIALIZE_CONCURRENCY ?? "2",
     "--materialize-concurrency",
@@ -293,6 +311,23 @@ async function main() {
     children.push(`${claim.type === "P0_RECIPROCAL" ? "reciprocal" : "closed-loop"}:${witnessPath}`);
   }
   if (children.length !== approved.approvedClaimCount) throw new Error("not every approved claim has a witness");
+
+  if (witnessOnly) {
+    const witnesses = await Promise.all(witnessEntries.map(async ({ claim, witnessPath }) => ({
+      claimId: claim.claimId,
+      claimType: claim.type,
+      path: witnessPath,
+      sha256: await sha256File(witnessPath),
+    })));
+    const summary = buildWitnessOnlySummary(approved, witnesses, {
+      path: copiedSnapshotLockPath,
+      sha256: sha256(await readFile(copiedSnapshotLockPath)),
+    });
+    await mkdir(dirname(summaryPath), { recursive: true });
+    await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
+    console.log(`WASH_TRADING_APPROVED_DEVELOPMENT_WITNESS_SUMMARY=${JSON.stringify(summary)}`);
+    return;
+  }
 
   for (const guest of ["closed-loop", "reciprocal", "aggregator"]) {
     if (!skipGuestBuild) {

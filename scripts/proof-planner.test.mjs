@@ -97,7 +97,7 @@ test("closed-loop planner combines direct and relay returns when direct credit i
   const dependencies = [
     { ...evidence("direct", null, 46_303_099, 10n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder", from: "seller", to: "funder", timestamp: 99 },
     relay,
-    { dependencyId: "native", evidenceType: "NATIVE_FUNDING", buyer: "a", funder: "funder", blockNumber: 46_303_001, transactionIndex: 0, logIndex: 0, valueWei: "7" },
+    { ...evidence("funding", "a", 46_303_001, 100n), evidenceType: "USDC_FUNDING", funder: "funder" },
     evidence("settlement", "a", 46_303_031, 100n),
   ];
   const plan = planClaim(claim, dependencies, { reportRoot: "0x2" });
@@ -134,28 +134,20 @@ test("closed-loop planner retains replenishments before the final settlement", (
   }]);
 });
 
-test("closed-loop planner reports native funding diagnostics in wei", () => {
+test("closed-loop planner rejects native-only funding", () => {
   const claim = { claimId: "claim", type: "P0_CLOSED_LOOP", subjects: ["seller"], approvedBuyers: ["a"], approvedFunders: ["funder"], dependencyRoot: "0x1", metrics: { qualifiedVolumeRaw: "10" } };
   const dependencies = [
     { ...evidence("closure", null, 46_303_100, 3n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
     { dependencyId: "native", evidenceType: "NATIVE_FUNDING", buyer: "a", funder: "funder", blockNumber: 46_303_001, transactionIndex: 0, logIndex: 0, valueWei: "7" },
     evidence("settlement", "a", 46_303_031, 10n),
   ];
-  const plan = planClaim(claim, dependencies, { reportRoot: "0x2" });
-  assert.equal(plan.fundingStrategy, "NATIVE");
-  assert.deepEqual(plan.fundingDiagnostics, [{
-    buyer: "a",
-    retainedRecords: 1,
-    excludedLateRecords: 0,
-    totalRecords: 1,
-    fundingUnit: "wei",
-    retainedAmountRaw: "7",
-    excludedLateAmountRaw: "0",
-    totalAmountRaw: "7",
-  }]);
+  assert.throws(
+    () => planClaim(claim, dependencies, { reportRoot: "0x2" }),
+    /no valid cohort funding strategy; usdcFundings=0/,
+  );
 });
 
-test("native funding selection is capped by authenticated return capacity", () => {
+test("USDC funding selection is capped by authenticated return capacity", () => {
   const claim = {
     claimId: "claim",
     type: "P0_CLOSED_LOOP",
@@ -167,7 +159,7 @@ test("native funding selection is capped by authenticated return capacity", () =
   };
   const dependencies = [
     { ...evidence("closure", null, 46_303_100, 20n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
-    { dependencyId: "native", evidenceType: "NATIVE_FUNDING", buyer: "a", funder: "funder", blockNumber: 46_303_001, transactionIndex: 0, logIndex: 0, valueWei: "7" },
+    { ...evidence("funding", "a", 46_303_001, 101n), evidenceType: "USDC_FUNDING", funder: "funder" },
     evidence("first", "a", 46_303_031, 60n),
     evidence("second", "a", 46_303_032, 40n),
     evidence("excluded", "a", 46_303_033, 1n),

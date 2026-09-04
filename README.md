@@ -24,15 +24,18 @@ permanent, the claimant is assumed adversarial: a predicate satisfiable by
 sprinkling a few dollars around an honest seller would be a weapon. Three
 magnitudes must therefore be bound together at comparable scale:
 
-- **FUND** — activity the funder initiated for the buyer cohort, attributed by
-  recovered transaction signer. USDC funding must satisfy
-  `Σ FUND ≥ α_fund · Σ SETTLE`; native funding proves common seeding and
-  ordering without comparing ETH and USDC units;
+Predicate version 8 removes native funding from closed-loop proofs. Existing
+native-funded plans, witnesses, proofs, and closed-loop guest vkeys are not
+valid for this rule version and must not be submitted to a production registry.
+
+- **FUND** — USDC activity the funder initiated for the buyer cohort. Funding
+  must satisfy `Σ FUND ≥ α_fund · Σ SETTLE`; native funding is rejected because
+  ETH value cannot establish conservation of USDC settlement volume;
 - **SETTLE** — `ChannelSettled` volume from those buyers to the subject,
   each strictly after its buyer's funding;
 - **RETURN** — value flowing back seller → funder, per-hop retention ≥
   `ρ_hop`, end-to-end within `T_path` (`Σ RETURN ≥ α_return · Σ SETTLE`);
-- **LEDGER** — for USDC-funded cohorts, per-buyer attribution through the protocol's own accounting:
+- **LEDGER** — per-buyer attribution through the protocol's own accounting:
   `Deposits.buyers[b].balance` proven at the period end must reconcile
   with the funder-attributed capital
   (`balance_end + settledₑᵥ ≤ funded · (1 + ε_ledger)`).
@@ -124,6 +127,19 @@ node scripts/generate-approved-development-proofs.mjs \
   --plan /path/to/proof-plan.json \
   --snapshot-lock /path/to/snapshot-lock.json \
   --artifact-dir out/approved-development-proofs
+```
+
+Pass `--witness-only` to stop after every canonical witness has been
+materialized and verified by the native guest predicate. This mode does not
+build SP1 proofs, contact a prover network, or produce submission calldata:
+
+```bash
+node scripts/generate-approved-development-proofs.mjs \
+  --bundle /path/to/proof-bundle.json \
+  --plan /path/to/proof-plan.json \
+  --snapshot-lock /path/to/snapshot-lock.json \
+  --artifact-dir out/approved-development-witnesses \
+  --witness-only
 ```
 
 The approved development runner also writes

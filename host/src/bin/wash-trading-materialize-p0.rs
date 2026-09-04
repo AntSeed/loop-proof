@@ -12,8 +12,8 @@ use std::{
 };
 use wash_predicate::{
     reciprocal::PairDepositEvidence, BuyerLedger, ClosedLoopInput, EvidenceBlock, FundingEvidence,
-    FundingKind, LogRef, ReceiptRef, ReciprocalInput, ReturnPath, StateRead, TransactionRef,
-    BASE_CHAIN_ID, BUYER_ACCOUNT_BALANCE_OFFSET, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT,
+    FundingKind, LogRef, ReceiptRef, ReciprocalInput, ReturnPath, StateRead, BASE_CHAIN_ID,
+    BUYER_ACCOUNT_BALANCE_OFFSET, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT,
 };
 
 #[derive(Debug, Deserialize)]
@@ -79,7 +79,6 @@ struct MaterializedEvidence {
     blocks: Vec<EvidenceBlock>,
     block_positions: BTreeMap<u64, usize>,
     receipt_positions: BTreeMap<(u64, u64), usize>,
-    transaction_positions: BTreeMap<(u64, u64), usize>,
     log_positions: BTreeMap<(u64, u64), usize>,
 }
 
@@ -108,6 +107,14 @@ fn main() -> Result<()> {
         "P0_CLOSED_LOOP" | "P0_RECIPROCAL"
     ) {
         bail!("claim {} is not a supported P0 claim", claim.claim_id);
+    }
+    if claim.claim_type == "P0_CLOSED_LOOP"
+        && claim
+            .selected_evidence
+            .iter()
+            .any(|entry| entry.evidence_type == "NATIVE_FUNDING")
+    {
+        bail!("closed-loop plans cannot use native funding");
     }
 
     let client = Client::new(&rpc_endpoints()?);
@@ -183,7 +190,6 @@ fn materialize_evidence(
     let mut blocks = Vec::with_capacity(targets.len());
     let mut block_positions = BTreeMap::new();
     let mut receipt_positions = BTreeMap::new();
-    let mut transaction_positions = BTreeMap::new();
     let mut log_positions = BTreeMap::new();
     let targets = targets
         .into_iter()
@@ -206,9 +212,6 @@ fn materialize_evidence(
         for (position, proof) in block.receipts.iter().enumerate() {
             receipt_positions.insert((block_number, proof.tx_index), position);
         }
-        for (position, proof) in block.transactions.iter().enumerate() {
-            transaction_positions.insert((block_number, proof.tx_index), position);
-        }
         for (block_log_index, local_index) in located_logs {
             log_positions.insert((block_number, block_log_index), local_index);
         }
@@ -218,7 +221,6 @@ fn materialize_evidence(
         blocks,
         block_positions,
         receipt_positions,
-        transaction_positions,
         log_positions,
     })
 }
@@ -237,12 +239,7 @@ fn build_closed_loop(
     let funding_entries = claim
         .selected_evidence
         .iter()
-        .filter(|entry| {
-            matches!(
-                entry.evidence_type.as_str(),
-                "USDC_FUNDING" | "NATIVE_FUNDING"
-            )
-        })
+        .filter(|entry| entry.evidence_type == "USDC_FUNDING")
         .collect::<Vec<_>>();
     let funder = funding_entries
         .first()
@@ -280,14 +277,10 @@ fn build_closed_loop(
         })
         .collect::<Result<Vec<_>>>()?;
     let returns = build_return_paths(claim, seller, funder, materialized)?;
-    let ledgers = if funding_entries[0].evidence_type == "NATIVE_FUNDING" {
-        Vec::new()
-    } else {
-        buyers
-            .iter()
-            .map(|buyer| buyer_ledger(client, materialized, *buyer, period_end_block))
-            .collect::<Result<Vec<_>>>()?
-    };
+    let ledgers = buyers
+        .iter()
+        .map(|buyer| buyer_ledger(client, materialized, *buyer, period_end_block))
+        .collect::<Result<Vec<_>>>()?;
     Ok(ClosedLoopInput {
         chain_id: BASE_CHAIN_ID,
         period_start_block,
@@ -372,12 +365,10 @@ fn funding_evidence(
     materialized: &MaterializedEvidence,
 ) -> Result<FundingEvidence> {
     let buyer = entry.buyer.context("funding buyer missing")?;
-    let kind = if entry.evidence_type == "NATIVE_FUNDING" {
-        FundingKind::Native {
-            transaction: transaction_ref(entry, materialized)?,
-            receipt: receipt_ref(entry, materialized)?,
-        }
-    } else if let Some(deposit_log_index) = entry.deposit_log_index {
+    if entry.evidence_type != "USDC_FUNDING" {
+        bail!("unsupported funding evidence type {}", entry.evidence_type);
+    }
+    let kind = if let Some(deposit_log_index) = entry.deposit_log_index {
         FundingKind::ProtocolDeposit {
             transfer: log_ref(
                 entry,
@@ -501,10 +492,7 @@ fn is_pair_deposit(entry: &PlannedEvidence, subjects: &[Address]) -> bool {
 }
 
 fn requires_transaction_proof(entry: &PlannedEvidence) -> bool {
-    matches!(
-        entry.evidence_type.as_str(),
-        "USDC_FUNDING" | "NATIVE_FUNDING"
-    )
+    entry.evidence_type == "USDC_FUNDING"
 }
 
 fn atomic_evidence(entry: &PlannedEvidence) -> Vec<&PlannedEvidence> {
@@ -533,24 +521,6 @@ fn receipt_ref(entry: &PlannedEvidence, materialized: &MaterializedEvidence) -> 
             .receipt_positions
             .get(&(block_number, transaction_index))
             .context("materialized receipt missing")?,
-    })
-}
-
-fn transaction_ref(
-    entry: &PlannedEvidence,
-    materialized: &MaterializedEvidence,
-) -> Result<TransactionRef> {
-    let block_number = required(entry.block_number, "block number", entry)?;
-    let transaction_index = required(entry.transaction_index, "transaction index", entry)?;
-    Ok(TransactionRef {
-        block: *materialized
-            .block_positions
-            .get(&block_number)
-            .context("materialized block missing")?,
-        transaction: *materialized
-            .transaction_positions
-            .get(&(block_number, transaction_index))
-            .context("materialized transaction missing")?,
     })
 }
 

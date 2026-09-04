@@ -38,7 +38,7 @@ pub use reciprocal::{verify_reciprocal, ReciprocalInput};
 
 // ─── Rule identity ────────────────────────────────────────────────────────
 
-pub const PREDICATE_VERSION: u32 = 7;
+pub const PREDICATE_VERSION: u32 = 8;
 pub const CLOSED_LOOP_PREDICATE_ID: u8 = 1;
 pub const RECIPROCAL_PREDICATE_ID: u8 = 2;
 pub const BASE_CHAIN_ID: u64 = 8_453;
@@ -156,9 +156,7 @@ pub struct StateRead {
     pub proof: StorageProof,
 }
 
-/// `FUND` evidence: capital from the funder crediting one buyer. Every form
-/// is attributed by recovering the funding transaction's signer — log topics
-/// alone never attribute.
+/// `FUND` evidence: USDC capital from the funder crediting one buyer.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FundingKind {
     /// Direct USDC transfer funder → buyer. Attribution comes from the
@@ -167,9 +165,9 @@ pub enum FundingKind {
     /// `Deposits.deposit(buyer, …)`: USDC transfer funder → Deposits paired
     /// with `Deposited(buyer, amount)` in the same receipt.
     ProtocolDeposit { transfer: LogRef, deposited: LogRef },
-    /// Native transfer funder → buyer. Establishes funding order and shape
-    /// only: native value is a different unit and never counts toward the
-    /// USDC coverage or ledger sums.
+    /// Legacy witness shape retained for decoding old artifacts. The closed-loop
+    /// predicate rejects this variant because native value cannot establish
+    /// USDC conservation.
     Native {
         transaction: TransactionRef,
         receipt: ReceiptRef,

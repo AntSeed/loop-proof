@@ -59,27 +59,19 @@ pub fn verify_closed_loop(input: &ClosedLoopInput) -> Result<WashJournal, String
         blocks: &input.blocks,
     };
     let mut used_logs: BTreeSet<LogKey> = BTreeSet::new();
-    let mut used_transactions: BTreeSet<(u64, u64)> = BTreeSet::new();
-
     // ── FUND ──────────────────────────────────────────────────────────────
-    let funding = verify_fundings(input, &resolver, &mut used_logs, &mut used_transactions)?;
+    let funding = verify_fundings(input, &resolver, &mut used_logs)?;
 
     // ── SETTLE (measurement + ordering) ───────────────────────────────────
     let settle = verify_settlements(input, &resolver, &funding, &mut used_logs)?;
 
     // ── Funding coverage: Σ FUND ≥ α_fund · Σ SETTLE ──────────────────────
-    if funding.native_mode {
-        if !input.ledgers.is_empty() {
-            return Err("ledger: native funding must not include USDC ledgers".into());
-        }
-    } else {
-        if !meets_ratio(funding.total_usdc, settle.total, ALPHA_FUND_BPS) {
-            return Err("closed loop: funding below the coverage fraction".into());
-        }
-
-        // ── Attribution (LEDGER) ──────────────────────────────────────────
-        verify_ledgers(input, &resolver, &funding, &settle)?;
+    if !meets_ratio(funding.total_usdc, settle.total, ALPHA_FUND_BPS) {
+        return Err("closed loop: funding below the coverage fraction".into());
     }
+
+    // ── Attribution (LEDGER) ──────────────────────────────────────────────
+    verify_ledgers(input, &resolver, &funding, &settle)?;
 
     // ── RETURN ────────────────────────────────────────────────────────────
     verify_returns(input, &resolver, &settle, &mut used_logs)?;
@@ -113,32 +105,25 @@ struct FundingSummary {
     total_usdc: u128,
     /// Earliest funding timestamp per buyer — settlements must come after.
     earliest_time: BTreeMap<Address, u64>,
-    native_mode: bool,
 }
 
 fn verify_fundings(
     input: &ClosedLoopInput,
     resolver: &ChainResolver<'_>,
     used_logs: &mut BTreeSet<LogKey>,
-    used_transactions: &mut BTreeSet<(u64, u64)>,
 ) -> Result<FundingSummary, String> {
     let cohort: BTreeSet<Address> = input.buyers.iter().copied().collect();
-    let has_native = input
+    if input
         .fundings
         .iter()
-        .any(|evidence| matches!(evidence.kind, FundingKind::Native { .. }));
-    let has_usdc = input
-        .fundings
-        .iter()
-        .any(|evidence| !matches!(evidence.kind, FundingKind::Native { .. }));
-    if has_native && has_usdc {
-        return Err("funding: cannot mix native and USDC evidence".into());
+        .any(|evidence| matches!(evidence.kind, FundingKind::Native { .. }))
+    {
+        return Err("funding: native funding is not supported".into());
     }
     let mut summary = FundingSummary {
         usdc_per_buyer: BTreeMap::new(),
         total_usdc: 0,
         earliest_time: BTreeMap::new(),
-        native_mode: has_native,
     };
     for evidence in &input.fundings {
         if !cohort.contains(&evidence.buyer) {
@@ -196,44 +181,8 @@ fn verify_fundings(
                 resolver.require_signer(input.funder, transfer)?;
                 (deposited_amount, resolver.timestamp(transfer)?)
             }
-            FundingKind::Native {
-                transaction,
-                receipt,
-            } => {
-                let (receipt_proof, receipt_block) = resolver.receipt(receipt)?;
-                if !loop_core::receipt_success(&receipt_proof.value)? {
-                    return Err("funding: native funding receipt reverted".into());
-                }
-                let (envelope, signer, transaction_block) =
-                    resolver.decoded_transaction(transaction)?;
-                let (transaction_proof, _) = resolver.transaction(transaction)?;
-                if receipt.block != transaction.block
-                    || receipt_proof.tx_index != transaction_proof.tx_index
-                    || receipt_block.header.number != transaction_block.header.number
-                {
-                    return Err("funding: native receipt/transaction mismatch".into());
-                }
-                ensure_event_in_period(
-                    transaction_block.header.number,
-                    input.period_start_block,
-                    input.period_end_block,
-                    "native funding",
-                )?;
-                if !used_transactions
-                    .insert((transaction_block.header.number, transaction_proof.tx_index))
-                {
-                    return Err("funding: duplicate evidence".into());
-                }
-                use alloy_consensus::Transaction;
-                if signer != input.funder
-                    || envelope.to() != Some(evidence.buyer)
-                    || envelope.value().is_zero()
-                {
-                    return Err("funding: invalid native funding".into());
-                }
-                // Native value is a different unit: it establishes funding
-                // order and shape but never counts toward USDC sums.
-                (0, transaction_block.header.timestamp)
+            FundingKind::Native { .. } => {
+                return Err("funding: native funding is not supported".into())
             }
         };
         if usdc_amount > 0 {

@@ -107,7 +107,7 @@ export async function planProofBundle(bundle, {
 async function readPlanCheckpoint(directory, claim, bundle) {
   try {
     const checkpoint = JSON.parse(await readFile(`${directory}/${claim.claimId}.json`, "utf8"));
-    if (checkpoint.version !== 1
+    if (checkpoint.version !== 2
       || checkpoint.claimId !== claim.claimId
       || checkpoint.reportRoot !== bundle.reportRoot) return null;
     return checkpoint.plan;
@@ -119,7 +119,7 @@ async function readPlanCheckpoint(directory, claim, bundle) {
 
 async function writePlanCheckpoint(directory, claim, plan, bundle) {
   await writeFile(`${directory}/${claim.claimId}.json`, `${JSON.stringify({
-    version: 1,
+    version: 2,
     claimId: claim.claimId,
     reportRoot: bundle.reportRoot,
     plan,
@@ -290,10 +290,7 @@ export async function resolveDependency(dependency, bundle, callRpc) {
 }
 
 function planCohort(claim, dependencies, bundle, ledgerBalances, allowLedgerSelection) {
-  const strategyCandidates = [
-    ...buildCohortStrategies("USDC", claim, dependencies, bundle.period, ledgerBalances, allowLedgerSelection),
-    ...buildCohortStrategies("NATIVE", claim, dependencies, bundle.period, null, allowLedgerSelection),
-  ];
+  const strategyCandidates = buildCohortStrategies(claim, dependencies, bundle.period, ledgerBalances, allowLedgerSelection);
   if (strategyCandidates.length === 0) throw new Error(`${claim.claimId}: no valid cohort funding strategy; ${cohortDiagnostics(claim, dependencies)}`);
   strategyCandidates.sort(compareCost);
   const selected = strategyCandidates[0];
@@ -316,25 +313,20 @@ function planCohort(claim, dependencies, bundle, ledgerBalances, allowLedgerSele
 
 function cohortDiagnostics(claim, dependencies) {
   const settlements = dependencies.filter((entry) => entry.evidenceType === "SETTLEMENT" && claim.approvedBuyers.includes(entry.buyer));
-  return ["USDC", "NATIVE"].map((strategy) => {
-    const fundingType = strategy === "USDC" ? "USDC_FUNDING" : "NATIVE_FUNDING";
-    const fundings = dependencies.filter((entry) => entry.evidenceType === fundingType && claim.approvedBuyers.includes(entry.buyer) && claim.approvedFunders.includes(entry.funder));
-    const fundedBuyers = new Set(fundings.map((entry) => entry.buyer));
-    const postFundingVolume = settlements.filter((entry) => fundings.some((funding) => funding.buyer === entry.buyer && entry.blockNumber > funding.blockNumber)).reduce((total, entry) => total + BigInt(entry.amountRaw), 0n);
-    return `${strategy.toLowerCase()}Fundings=${fundings.length},buyers=${fundedBuyers.size},postFundingVolumeRaw=${postFundingVolume}`;
-  }).join("; ");
+  const fundings = dependencies.filter((entry) => entry.evidenceType === "USDC_FUNDING" && claim.approvedBuyers.includes(entry.buyer) && claim.approvedFunders.includes(entry.funder));
+  const fundedBuyers = new Set(fundings.map((entry) => entry.buyer));
+  const postFundingVolume = settlements.filter((entry) => fundings.some((funding) => funding.buyer === entry.buyer && entry.blockNumber > funding.blockNumber)).reduce((total, entry) => total + BigInt(entry.amountRaw), 0n);
+  return `usdcFundings=${fundings.length},buyers=${fundedBuyers.size},postFundingVolumeRaw=${postFundingVolume}`;
 }
 
-function buildCohortStrategies(strategy, claim, dependencies, period, ledgerBalances = null, allowLedgerSelection = false) {
-  const fundingType = strategy === "USDC" ? "USDC_FUNDING" : "NATIVE_FUNDING";
-  const fundings = dependencies.filter((entry) => entry.evidenceType === fundingType && claim.approvedBuyers.includes(entry.buyer) && claim.approvedFunders.includes(entry.funder));
+function buildCohortStrategies(claim, dependencies, period, ledgerBalances = null, allowLedgerSelection = false) {
+  const fundings = dependencies.filter((entry) => entry.evidenceType === "USDC_FUNDING" && claim.approvedBuyers.includes(entry.buyer) && claim.approvedFunders.includes(entry.funder));
   const settlements = dependencies.filter((entry) => entry.evidenceType === "SETTLEMENT" && claim.approvedBuyers.includes(entry.buyer));
   const funderGroups = [...new Set(fundings.map((entry) => entry.funder))].sort();
   return funderGroups.flatMap((selectedFunder) => {
     const closure = selectClosureForFunder(dependencies, selectedFunder, claim.approvedBuyers, claim.subjects[0], period);
     if (!closure) return [];
     const candidate = buildCohortStrategy(
-      strategy,
       fundings.filter((entry) => entry.funder === selectedFunder),
       settlements,
       closure,
@@ -345,7 +337,7 @@ function buildCohortStrategies(strategy, claim, dependencies, period, ledgerBala
   });
 }
 
-function buildCohortStrategy(strategy, fundings, settlements, closure, approvedVolumeRaw, ledgerBalances) {
+function buildCohortStrategy(fundings, settlements, closure, approvedVolumeRaw, ledgerBalances) {
   const fundingByBuyer = new Map();
   for (const funding of fundings) {
     if (!fundingByBuyer.has(funding.buyer)) fundingByBuyer.set(funding.buyer, []);
@@ -369,7 +361,7 @@ function buildCohortStrategy(strategy, fundings, settlements, closure, approvedV
   const fixedBlocks = closure.evidence.flatMap(atomicEvidence).map((entry) => entry.blockNumber).filter(Number.isSafeInteger);
   const requiredBuyers = closure.evidence.filter((entry) => entry.evidenceType === "DIRECT_SELLER_BUYER").map((entry) => entry.buyer);
   const maximumVolumeRaw = returnSettlementCapacity(closure.evidence);
-  const selection = strategy === "USDC" && ledgerBalances
+  const selection = ledgerBalances
     ? selectLedgerAwareSettlements(
       eligibleSettlements,
       fundingByBuyer,
@@ -397,13 +389,13 @@ function buildCohortStrategy(strategy, fundings, settlements, closure, approvedV
   }
   const funding = selection.buyers.flatMap((buyer) => (fundingByBuyer.get(buyer) ?? [])
     .filter((entry) => entry.blockNumber < latestSettlementByBuyer.get(buyer).blockNumber));
-  if (strategy === "USDC" && ledgerBalances && sumRaw(funding) * 10_000n < selection.volumeRaw * 9_000n) return null;
+  if (ledgerBalances && sumRaw(funding) * 10_000n < selection.volumeRaw * 9_000n) return null;
   const fundingDiagnostics = selection.buyers.map((buyer) => {
     const records = fundingByBuyer.get(buyer) ?? [];
     const retained = funding.filter((entry) => entry.buyer === buyer);
     const excludedLate = records.filter((entry) => !retained.includes(entry));
     const total = (values) => values.reduce(
-      (sum, entry) => sum + BigInt(strategy === "NATIVE" ? entry.valueWei : entry.amountRaw),
+      (sum, entry) => sum + BigInt(entry.amountRaw),
       0n,
     ).toString();
     return {
@@ -411,7 +403,7 @@ function buildCohortStrategy(strategy, fundings, settlements, closure, approvedV
       retainedRecords: retained.length,
       excludedLateRecords: excludedLate.length,
       totalRecords: records.length,
-      fundingUnit: strategy === "NATIVE" ? "wei" : "usdc_raw",
+      fundingUnit: "usdc_raw",
       retainedAmountRaw: total(retained),
       excludedLateAmountRaw: total(excludedLate),
       totalAmountRaw: total(records),
@@ -419,7 +411,7 @@ function buildCohortStrategy(strategy, fundings, settlements, closure, approvedV
   });
   const allEvidence = [...closure.evidence, ...funding, ...selection.settlements];
   return {
-    strategy,
+    strategy: "USDC",
     closure,
     funding,
     settlements: selection.settlements,
@@ -792,7 +784,7 @@ export async function finalizeLedgerAwareBundle(bundle, {
 async function readClaimCheckpoint(directory, sourceClaim, bundle) {
   try {
     const checkpoint = JSON.parse(await readFile(`${directory}/${sourceClaim.claimId}.json`, "utf8"));
-    if (checkpoint.version !== 1
+    if (checkpoint.version !== 2
       || checkpoint.sourceClaimId !== sourceClaim.claimId
       || canonicalJson(checkpoint.period) !== canonicalJson(bundle.period)
       || canonicalJson(checkpoint.contracts) !== canonicalJson(bundle.contracts)) return null;
@@ -805,7 +797,7 @@ async function readClaimCheckpoint(directory, sourceClaim, bundle) {
 
 async function writeClaimCheckpoint(directory, sourceClaim, finalizedClaim, bundle) {
   await writeFile(`${directory}/${sourceClaim.claimId}.json`, `${JSON.stringify({
-    version: 1,
+    version: 2,
     sourceClaimId: sourceClaim.claimId,
     period: bundle.period,
     contracts: bundle.contracts,
