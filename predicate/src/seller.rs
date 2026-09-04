@@ -7,7 +7,7 @@ use alloy_sol_types::SolValue;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const SELLER_JOURNAL_SCHEMA_VERSION: u32 = 2;
+pub const SELLER_JOURNAL_SCHEMA_VERSION: u32 = 1;
 pub const BLOCK_AUTHENTICATION_CHUNK_SIZE: usize = 100;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

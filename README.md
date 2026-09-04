@@ -7,7 +7,7 @@ that materializes raw Base evidence into proof witnesses.
 A seller result is proven directly from raw evidence. One SP1 execution
 re-verifies every included closed-loop and reciprocal claim, unions settlement
 IDs, rejects conflicts and overlaps, authenticates every referenced block, and
-commits one schema-2 seller journal for the registry. There are no recursive
+commits one schema-1 seller journal for the registry. There are no recursive
 child proofs and no seller-aggregator guest.
 
 This repository is proof infrastructure, not a mainnet security approval. A
@@ -43,7 +43,7 @@ parameters are ratios or evidence-shape bounds.
 ```text
 core/             Receipt, transaction, state, and MPT verification primitives
 predicate/        Closed-loop, reciprocal, and direct seller verification
-program/seller/   Single SP1 guest; emits the schema-2 registry journal
+program/seller/   Single SP1 guest; emits the schema-1 registry journal
 host/             Witness materializer and direct seller prover
 scripts/          Historical orchestration, attestations, quotes, and calldata
 ```
@@ -189,5 +189,5 @@ Merkle proof needed by `authenticateBlockReferences` before finalization.
 
 `PREDICATE_VERSION`, ratio parameters, contract addresses, and storage-slot
 bindings are constants in `predicate/src/lib.rs`. Any semantic change alters
-the seller ELF and therefore its program vkey. The schema-2 registry pins that
+the seller ELF and therefore its program vkey. The schema-1 registry pins that
 single seller vkey and the concrete SP1 verifier release.

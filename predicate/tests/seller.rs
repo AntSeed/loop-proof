@@ -17,7 +17,7 @@ fn closed_loop_claim_produces_direct_seller_journal() {
     let seller = claim.seller;
     let verified =
         verify_seller(&input(seller, vec![SellerClaimInput::ClosedLoop(claim)])).unwrap();
-    assert_eq!(verified.journal.schema_version, 2);
+    assert_eq!(verified.journal.schema_version, 1);
     assert_eq!(verified.journal.seller, seller);
     assert!(verified.journal.proven_wash_volume > 0);
     assert_eq!(
