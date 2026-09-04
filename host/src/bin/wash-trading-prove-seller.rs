@@ -2,19 +2,22 @@ use alloy_primitives::{hex, Address, B256};
 use anyhow::{bail, Context, Result};
 #[path = "../proving.rs"]
 mod proving;
+#[path = "../rpc.rs"]
+mod rpc;
 use proving::ProofClient;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sp1_sdk::blocking::{Prover, ProverClient};
-use sp1_sdk::{Elf, HashableKey, ProvingKey, SP1Stdin};
+use sp1_sdk::{Elf, HashableKey, ProvingKey, SP1ProofMode, SP1ProofWithPublicValues, SP1Stdin};
 use std::{
     env, fs,
     path::{Path, PathBuf},
     time::Instant,
 };
-use wash_predicate::seller::block_authentication_chunks;
+use wash_predicate::seller::{block_authentication_chunks, TotalVolumeBoundary};
 use wash_predicate::{
-    verify_seller, ClosedLoopInput, ReciprocalInput, SellerClaimInput, SellerProofInput,
+    verify_seller, ClosedLoopInput, ReciprocalInput, SellerEvidence, SellerProofInput,
+    CHANNELS_ADDRESS, CHANNELS_AGENT_STATS_SLOT, STAKING_ADDRESS, STAKING_SELLER_AGENT_ID_SLOT,
 };
 
 const ARTIFACT_VERSION: u64 = 3;
@@ -27,7 +30,7 @@ enum Mode {
     Production,
 }
 
-struct ClaimSpec {
+struct EvidenceSpec {
     kind: String,
     witness: PathBuf,
 }
@@ -40,62 +43,51 @@ fn main() -> Result<()> {
         .context("invalid --seller address")?;
     let output = PathBuf::from(required(&args, "--output")?);
     let seller_witness = optional(&args, "--seller-witness").map(PathBuf::from);
-    let claim_specs = values(&args, "--claim")
-        .into_iter()
-        .map(parse_claim)
-        .collect::<Result<Vec<_>>>()?;
-    if claim_specs.is_empty() {
-        bail!("at least one --claim kind:witness.json is required");
-    }
-
-    let mut claims = Vec::with_capacity(claim_specs.len());
-    let mut source_claim_ids = Vec::with_capacity(claim_specs.len());
-    let mut period = None;
-    for claim in &claim_specs {
-        let bytes = fs::read(&claim.witness)
-            .with_context(|| format!("read {}", claim.witness.display()))?;
-        let (input, claim_period, source_claim_id) = match claim.kind.as_str() {
+    let evidence_spec = parse_evidence_spec(&args)?;
+    let bytes = fs::read(&evidence_spec.witness)
+        .with_context(|| format!("read {}", evidence_spec.witness.display()))?;
+    let (evidence, (period_start_block, period_end_block), source_claim_id) =
+        match evidence_spec.kind.as_str() {
             "closed-loop" => {
                 let input: ClosedLoopInput = serde_json::from_slice(&bytes)
-                    .with_context(|| format!("decode {}", claim.witness.display()))?;
+                    .with_context(|| format!("decode {}", evidence_spec.witness.display()))?;
                 let claim_period = (input.period_start_block, input.period_end_block);
                 let source_claim_id = input.source_claim_id;
                 (
-                    SellerClaimInput::ClosedLoop(input),
+                    SellerEvidence::ClosedLoop(input),
                     claim_period,
                     source_claim_id,
                 )
             }
             "reciprocal" => {
                 let input: ReciprocalInput = serde_json::from_slice(&bytes)
-                    .with_context(|| format!("decode {}", claim.witness.display()))?;
+                    .with_context(|| format!("decode {}", evidence_spec.witness.display()))?;
                 let claim_period = (input.period_start_block, input.period_end_block);
                 let source_claim_id = input.source_claim_id;
                 (
-                    SellerClaimInput::Reciprocal(input),
+                    SellerEvidence::Reciprocal(input),
                     claim_period,
                     source_claim_id,
                 )
             }
-            kind => bail!("unsupported claim kind {kind}"),
+            kind => bail!("unsupported evidence kind {kind}"),
         };
-        if period
-            .replace(claim_period)
-            .is_some_and(|existing| existing != claim_period)
-        {
-            bail!("all claim witnesses must use one identical period");
+    let source_claim_ids = [source_claim_id];
+    let total_volume = match optional(&args, "--total-volume-witness") {
+        Some(path) => {
+            let bytes =
+                fs::read(&path).with_context(|| format!("read total-volume witness {path}"))?;
+            serde_json::from_slice(&bytes)
+                .with_context(|| format!("decode total-volume witness {path}"))?
         }
-        claims.push(input);
-        source_claim_ids.push(source_claim_id);
-    }
-    source_claim_ids.sort();
-
-    let (period_start_block, period_end_block) = period.expect("claims are not empty");
+        None => fetch_total_volume_witness(seller, period_end_block)?,
+    };
     let seller_input = SellerProofInput {
         seller,
         period_start_block,
         period_end_block,
-        claims,
+        total_volume,
+        evidence,
     };
     let native_start = Instant::now();
     let verified = verify_seller(&seller_input).map_err(anyhow::Error::msg)?;
@@ -112,6 +104,7 @@ fn main() -> Result<()> {
             "version": 1,
             "kind": "antseed-wash-trading-seller-witness",
             "proofArchitecture": "direct-seller-v1",
+            "evidenceFormat": "single-bundle-v1",
             "securityMode": "development",
             "proverNetworkSubmitted": false,
             "seller": seller,
@@ -120,6 +113,7 @@ fn main() -> Result<()> {
             "claimCount": source_claim_ids.len(),
             "sourceClaimIds": source_claim_ids,
             "provenWashVolumeRaw": verified.journal.proven_wash_volume.to_string(),
+            "totalSellerVolumeRaw": verified.journal.total_seller_volume.to_string(),
             "evidenceDigest": verified.journal.evidence_digest,
             "blockReferenceCount": verified.journal.block_reference_count,
             "blockAuthenticationChunkSize": verified.journal.block_authentication_chunk_size,
@@ -177,20 +171,21 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let mut proving_stdin = SP1Stdin::new();
-    proving_stdin.write(&seller_input_bytes);
     let (proof, request_id, security_mode) = match mode {
         Mode::Development => {
             let client = ProofClient::from_args(true, &args)?;
-            let proving_key = client.setup(elf)?;
-            if proving_key.verifying_key().bytes32() != key.verifying_key().bytes32() {
-                bail!("SP1 setup returned inconsistent seller vkeys");
-            }
-            let proof = client.prove_groth16(&proving_key, proving_stdin)?;
-            client.verify(&proof, &proving_key)?;
+            let proof = SP1ProofWithPublicValues::create_mock_proof(
+                key.verifying_key(),
+                executed_public_values,
+                SP1ProofMode::Groth16,
+                light.version(),
+            );
+            client.verify(&proof, &key)?;
             (proof, None, "development")
         }
         Mode::Production => {
+            let mut proving_stdin = SP1Stdin::new();
+            proving_stdin.write(&seller_input_bytes);
             if !args.iter().any(|value| value == "--confirm-production") {
                 bail!("production proving requires --confirm-production");
             }
@@ -280,6 +275,7 @@ fn proof_artifact(
         "version": ARTIFACT_VERSION,
         "kind": "antseed-wash-trading-seller-proof",
         "proofArchitecture": "direct-seller-v1",
+        "evidenceFormat": "single-bundle-v1",
         "securityMode": security_mode,
         "proverNetworkSubmitted": security_mode == "production",
         "schemaVersion": verified.journal.schema_version,
@@ -291,6 +287,7 @@ fn proof_artifact(
         "claimCount": source_claim_ids.len(),
         "sourceClaimIds": source_claim_ids,
         "provenWashVolumeRaw": verified.journal.proven_wash_volume.to_string(),
+        "totalSellerVolumeRaw": verified.journal.total_seller_volume.to_string(),
         "evidenceDigest": verified.journal.evidence_digest,
         "blockReferenceCount": verified.journal.block_reference_count,
         "blockAuthenticationChunkSize": verified.journal.block_authentication_chunk_size,
@@ -336,9 +333,35 @@ fn parse_mode(args: &[String]) -> Result<Mode> {
     }
 }
 
-fn parse_claim(value: String) -> Result<ClaimSpec> {
-    let (kind, witness) = value.split_once(':').context("--claim must be kind:path")?;
-    Ok(ClaimSpec {
+fn parse_evidence_spec(args: &[String]) -> Result<EvidenceSpec> {
+    if args
+        .iter()
+        .any(|argument| argument.starts_with("--evidence="))
+    {
+        bail!("use --evidence kind:path as separate arguments");
+    }
+    if args
+        .iter()
+        .any(|argument| argument == "--claim" || argument.starts_with("--claim="))
+    {
+        bail!("--claim is no longer supported; use exactly one --evidence kind:path");
+    }
+    if args
+        .iter()
+        .filter(|argument| argument.as_str() == "--evidence")
+        .count()
+        != 1
+    {
+        bail!("exactly one --evidence kind:path is required per seller proof");
+    }
+    let value = required(args, "--evidence")?;
+    let (kind, witness) = value
+        .split_once(':')
+        .context("--evidence must be kind:path")?;
+    if !matches!(kind, "closed-loop" | "reciprocal") || witness.is_empty() {
+        bail!("--evidence must be closed-loop:path or reciprocal:path");
+    }
+    Ok(EvidenceSpec {
         kind: kind.to_owned(),
         witness: PathBuf::from(witness),
     })
@@ -440,6 +463,55 @@ fn required(args: &[String], flag: &str) -> Result<String> {
     optional(args, flag).with_context(|| format!("missing {flag}"))
 }
 
+/// Fetch the seller's total-volume witness: the period-end boundary header
+/// with storage proofs for `Staking.sellerAgentId[seller]` and
+/// `Channels._agentStats[agentId].totalVolumeUsdc`. Requires an archive
+/// node (`BASE_RPC_URLS`/`BASE_RPC_URL`).
+fn fetch_total_volume_witness(
+    seller: Address,
+    period_end_block: u64,
+) -> Result<TotalVolumeBoundary> {
+    let endpoints = rpc_endpoints()?;
+    let client = rpc::Client::new(&endpoints);
+    let number = period_end_block;
+    let header = client.header(number)?;
+    let agent_id_slot = loop_core::mapping_slot_address(seller, STAKING_SELLER_AGENT_ID_SLOT);
+    let (agent_id_proof, agent_id) =
+        client.storage_witness(&header, STAKING_ADDRESS, agent_id_slot)?;
+    if agent_id.is_zero() {
+        bail!("seller {seller} is not a staked agent at block {number}");
+    }
+    let counter_slot = loop_core::slot_offset(
+        loop_core::mapping_slot_u256(agent_id, CHANNELS_AGENT_STATS_SLOT),
+        wash_predicate::AGENT_STATS_TOTAL_VOLUME_OFFSET,
+    );
+    let (total_volume_proof, _) =
+        client.storage_witness(&header, CHANNELS_ADDRESS, counter_slot)?;
+    Ok(TotalVolumeBoundary {
+        header,
+        agent_id: agent_id_proof,
+        total_volume: total_volume_proof,
+    })
+}
+
+fn rpc_endpoints() -> Result<Vec<String>> {
+    let value = env::var("BASE_RPC_URLS")
+        .or_else(|_| env::var("BASE_RPC_URL"))
+        .context(
+            "BASE_RPC_URLS or BASE_RPC_URL is not configured (or pass --total-volume-witness)",
+        )?;
+    let endpoints = value
+        .split(',')
+        .map(str::trim)
+        .filter(|endpoint| !endpoint.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if endpoints.is_empty() {
+        bail!("Base RPC configuration contains no endpoints");
+    }
+    Ok(endpoints)
+}
+
 fn optional(args: &[String], flag: &str) -> Option<String> {
     args.iter()
         .position(|value| value == flag)
@@ -447,13 +519,48 @@ fn optional(args: &[String], flag: &str) -> Option<String> {
         .cloned()
 }
 
-fn values(args: &[String], flag: &str) -> Vec<String> {
-    args.iter()
-        .enumerate()
-        .filter_map(|(index, value)| {
-            (value == flag)
-                .then(|| args.get(index + 1).cloned())
-                .flatten()
-        })
-        .collect()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_exactly_one_evidence_bundle() {
+        for kind in ["closed-loop", "reciprocal"] {
+            let parsed =
+                parse_evidence_spec(&["--evidence".into(), format!("{kind}:input.json")]).unwrap();
+            assert_eq!(parsed.kind, kind);
+            assert_eq!(parsed.witness, PathBuf::from("input.json"));
+        }
+    }
+
+    #[test]
+    fn rejects_missing_multiple_and_legacy_evidence_arguments() {
+        for args in [
+            vec![],
+            vec!["--evidence"],
+            vec!["--claim", "closed-loop:input.json"],
+            vec![
+                "--evidence",
+                "closed-loop:first.json",
+                "--evidence",
+                "closed-loop:second.json",
+            ],
+            vec![
+                "--evidence",
+                "closed-loop:input.json",
+                "--claim",
+                "reciprocal:input.json",
+            ],
+            vec!["--evidence", "closed-loop:"],
+            vec!["--evidence", "unknown:input.json"],
+            vec![
+                "--evidence",
+                "closed-loop:first.json",
+                "--evidence=reciprocal:second.json",
+            ],
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert!(parse_evidence_spec(&args).is_err());
+        }
+    }
 }

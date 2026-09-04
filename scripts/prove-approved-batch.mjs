@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mapWithConcurrency, shardProofPlan } from "./generate-approved-development-proofs.mjs";
 import { approveCostQuote, sha256File } from "./proving-cost-quote.mjs";
+import { sellerEvidenceByAddress, singleEvidenceEntry } from "./seller-evidence.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -34,6 +35,7 @@ async function main() {
   const planPath = resolve(value("--plan"));
   const artifactDir = resolve(value("--artifact-dir"));
   const witnessDir = resolve(value("--witness-dir"));
+  const totalVolumeWitnessDir = value("--total-volume-witness-dir") ? resolve(value("--total-volume-witness-dir")) : null;
   const sellerElf = resolve(value("--seller-elf"));
   const guestAttestationPath = resolve(value("--guest-attestation"));
   const sellerScope = value("--seller")?.toLowerCase() ?? null;
@@ -44,6 +46,7 @@ async function main() {
 
   const bundle = JSON.parse(await readFile(bundlePath, "utf8"));
   validateBundle(bundle);
+  sellerEvidenceByAddress(bundle, bundle.claims.map((claim) => ({ claim })));
   const claimById = new Map(bundle.claims.map((claim) => [claim.claimId.toLowerCase(), claim]));
   const allSellers = [...new Set(
     bundle.claims.flatMap((claim) => claim.subjects.map((seller) => seller.toLowerCase())),
@@ -84,7 +87,7 @@ async function main() {
       throw new Error(`${entry.claim.claimId}: validated witness is missing at ${entry.witnessPath}`);
     }
   }
-  const claimsBySeller = sellerClaims(bundle, entries);
+  const evidenceBySeller = sellerEvidenceByAddress(bundle, entries);
 
   const networkArgs = [
     "--production", "--confirm-production",
@@ -101,7 +104,7 @@ async function main() {
     scope: { seller: sellerScope },
     sellers: selectedSellers,
     claimCount: new Set(selectedSellers.flatMap(
-      (seller) => claimsBySeller.get(seller).map((entry) => entry.claim.claimId),
+      (seller) => [evidenceBySeller.get(seller).claim.claimId],
     )).size,
     sources: {
       proofBundleSha256: sha256(await readFile(bundlePath)),
@@ -122,6 +125,15 @@ async function main() {
     "build", "--release", "-p", "loop-host", "--features", "sp1",
     "--bin", "wash-trading-prove-seller",
   ], root);
+  await preflightSellerInputs({
+    prover: resolve(root, "target/release/wash-trading-prove-seller"),
+    sellers: selectedSellers,
+    evidenceBySeller,
+    period: bundle.period,
+    artifactDir: join(artifactDir, "native-preflight"),
+    concurrency: sellerConcurrency,
+    totalVolumeWitnessDir,
+  });
   if (preflightOnly) {
     console.log(`WASH_TRADING_PRODUCTION_PREFLIGHT=${JSON.stringify({
       proofArchitecture: "direct-seller-v1",
@@ -140,8 +152,8 @@ async function main() {
   const prover = resolve(root, "target/release/wash-trading-prove-seller");
   const sellerProofs = await mapWithConcurrency(selectedSellers, sellerConcurrency, async (seller, index) => {
     const output = join(sellerArtifactDir, `${seller}.json`);
-    const claims = claimsBySeller.get(seller);
-    const existing = await loadCurrentSellerProof(output, seller, bundle.period, claims.length, guest.programVKey);
+    const evidence = evidenceBySeller.get(seller);
+    const existing = await loadCurrentSellerProof(output, seller, bundle.period, 1, guest.programVKey);
     if (existing) {
       console.error(`[${index + 1}/${selectedSellers.length}] reusing paid direct seller proof ${seller}`);
       return summarizeSellerProof(existing, output);
@@ -154,10 +166,11 @@ async function main() {
       "--seller-witness", join(sellerWitnessDir, `${seller}.json`),
       "--request-checkpoint", output.replace(/\.json$/, ".request.json"),
     ];
-    for (const entry of claims) command.push("--claim", `${entry.kind}:${entry.witnessPath}`);
+    if (totalVolumeWitnessDir) command.push("--total-volume-witness", join(totalVolumeWitnessDir, `${seller}.json`));
+    command.push("--evidence", `${evidence.kind}:${evidence.witnessPath}`);
     console.error(`[${index + 1}/${selectedSellers.length}] requesting paid direct seller proof ${seller}`);
     await run(prover, command, root);
-    const proof = await loadCurrentSellerProof(output, seller, bundle.period, claims.length, guest.programVKey);
+    const proof = await loadCurrentSellerProof(output, seller, bundle.period, 1, guest.programVKey);
     if (!proof) throw new Error(`${seller}: paid direct seller artifact failed validation`);
     return summarizeSellerProof(proof, output);
   });
@@ -177,6 +190,7 @@ async function main() {
     quoteDigest: quote.digest,
     runConfigPath,
     sellerProofCount: sellerProofs.length,
+    totalSellerVolumeRaw: sellerProofs.reduce((total, proof) => total + BigInt(proof.totalSellerVolumeRaw), 0n).toString(),
     totalProvenWashVolumeRaw,
     approvedUniqueSettlementVolumeRaw: indexedPlan.approved.uniqueSettlementVolumeRaw,
     sellerProofs,
@@ -184,24 +198,6 @@ async function main() {
   const summaryPath = join(artifactDir, `summary-${sellerScope ?? "full"}.json`);
   await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
   console.log(`WASH_TRADING_PRODUCTION_SUMMARY=${JSON.stringify(summary)}`);
-}
-
-function sellerClaims(bundle, entries) {
-  const byClaim = new Map(entries.map((entry) => [entry.claim.claimId.toLowerCase(), entry]));
-  const result = new Map();
-  for (const claim of bundle.claims) {
-    const entry = byClaim.get(claim.claimId.toLowerCase());
-    if (!entry) throw new Error(`${claim.claimId}: proof-plan entry is missing`);
-    for (const seller of claim.subjects.map((value) => value.toLowerCase())) {
-      const claims = result.get(seller) ?? [];
-      claims.push(entry);
-      result.set(seller, claims);
-    }
-  }
-  for (const claims of result.values()) {
-    claims.sort((left, right) => left.claim.claimId.localeCompare(right.claim.claimId));
-  }
-  return result;
 }
 
 async function validateGuestAttestation(attestation, sellerElf) {
@@ -226,11 +222,14 @@ export async function loadCurrentSellerProof(path, seller, period, claimCount, s
   if (artifact?.version !== 3 || artifact.kind !== "antseed-wash-trading-seller-proof"
       || artifact.proofArchitecture !== "direct-seller-v1"
       || artifact.securityMode !== "production" || artifact.seller?.toLowerCase() !== seller
-      || artifact.claimCount !== claimCount
+      || claimCount !== 1 || artifact.claimCount !== 1
+      || artifact.evidenceFormat !== "single-bundle-v1"
+      || !Array.isArray(artifact.sourceClaimIds) || artifact.sourceClaimIds.length !== 1
       || artifact.periodStartBlock !== period.startBlock
       || artifact.periodEndBlock !== period.endBlockExclusive - 1
       || artifact.sellerProgramVKey?.toLowerCase() !== sellerProgramVKey.toLowerCase()
       || artifact.proved !== true || artifact.verified !== true
+      || !/^[1-9][0-9]*$/.test(artifact.totalSellerVolumeRaw ?? "")
       || !/^0x(?:[0-9a-f]{2})+$/i.test(artifact.publicValues ?? "")
       || !/^0x(?:[0-9a-f]{2})+$/i.test(artifact.proofBytes ?? "")
       || artifact.proofBytes === "0x" || artifact.requestId == null) {
@@ -239,12 +238,50 @@ export async function loadCurrentSellerProof(path, seller, period, claimCount, s
   return artifact;
 }
 
+export async function preflightSellerInputs({
+  prover, sellers, evidenceBySeller, period, artifactDir, concurrency = 1, totalVolumeWitnessDir = null, runVerifier = run,
+}) {
+  for (const seller of sellers) singleEvidenceEntry(evidenceBySeller.get(seller), seller);
+  await mkdir(artifactDir, { recursive: true });
+  const failures = [];
+  const results = await mapWithConcurrency(sellers, concurrency, async (seller) => {
+    try {
+      const evidence = evidenceBySeller.get(seller);
+      const output = join(artifactDir, `${seller}.json`);
+      const command = ["--witness-only", "--seller", seller, "--output", output];
+      if (totalVolumeWitnessDir) command.push("--total-volume-witness", join(totalVolumeWitnessDir, `${seller}.json`));
+      command.push("--evidence", `${evidence.kind}:${evidence.witnessPath}`);
+      await runVerifier(prover, command, root);
+      const artifact = JSON.parse(await readFile(output, "utf8"));
+      if (artifact.kind !== "antseed-wash-trading-seller-witness" || artifact.verified !== true
+          || artifact.proverNetworkSubmitted !== false || artifact.seller?.toLowerCase() !== seller
+          || artifact.periodStartBlock !== period.startBlock || artifact.periodEndBlock !== period.endBlockExclusive - 1
+          || artifact.claimCount !== 1 || artifact.evidenceFormat !== "single-bundle-v1"
+          || !Array.isArray(artifact.sourceClaimIds) || artifact.sourceClaimIds.length !== 1
+          || !/^[1-9][0-9]*$/.test(artifact.totalSellerVolumeRaw ?? "")) {
+        throw new Error("invalid native seller preflight artifact");
+      }
+      return { seller, provenWashVolumeRaw: artifact.provenWashVolumeRaw, totalSellerVolumeRaw: artifact.totalSellerVolumeRaw };
+    } catch (error) {
+      failures.push({ seller, error: error.message });
+      return null;
+    }
+  });
+  const summary = { complete: failures.length === 0, proverNetworkSubmitted: false, sellers: results.filter(Boolean), failures };
+  await writeFile(join(artifactDir, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
+  if (failures.length > 0) {
+    throw new Error(`${failures.length} seller inputs failed native preflight; no paid requests submitted: ${failures.map(failure => failure.seller).join(", ")}`);
+  }
+  return summary;
+}
+
 async function summarizeSellerProof(proof, path) {
   return {
     seller: proof.seller.toLowerCase(),
     path,
     claimCount: proof.claimCount,
     provenWashVolumeRaw: proof.provenWashVolumeRaw,
+    totalSellerVolumeRaw: proof.totalSellerVolumeRaw,
     blockReferenceCount: proof.blockReferenceCount,
     sha256: await sha256File(path),
   };

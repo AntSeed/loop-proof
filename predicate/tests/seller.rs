@@ -1,13 +1,16 @@
 mod common;
 
 use alloy_primitives::{address, b256, B256};
-use common::{closed_loop_input, reciprocal_input, LoopCfg, PairCfg};
+use common::{
+    closed_loop_input, reciprocal_input, total_volume_witness, LoopCfg, PairCfg,
+    TOTAL_VOLUME_END_COUNTER,
+};
 use wash_predicate::seller::{
     block_authentication_chunks, block_authentication_leaf, block_authentication_root,
     evidence_digest, HistoricalBlockRef, SellerJournal, SolSellerSettlement,
 };
 use wash_predicate::{
-    verify_block_authentication_chunk, verify_seller, FundingKind, ReceiptRef, SellerClaimInput,
+    verify_block_authentication_chunk, verify_seller, FundingKind, ReceiptRef, SellerEvidence,
     SellerProofInput, TransactionRef, PERIOD_END_BLOCK, PERIOD_START_BLOCK,
 };
 
@@ -15,11 +18,14 @@ use wash_predicate::{
 fn closed_loop_claim_produces_direct_seller_journal() {
     let claim = closed_loop_input(&LoopCfg::default());
     let seller = claim.seller;
-    let verified =
-        verify_seller(&input(seller, vec![SellerClaimInput::ClosedLoop(claim)])).unwrap();
+    let verified = verify_seller(&input(seller, SellerEvidence::ClosedLoop(claim))).unwrap();
     assert_eq!(verified.journal.schema_version, 1);
     assert_eq!(verified.journal.seller, seller);
     assert!(verified.journal.proven_wash_volume > 0);
+    assert_eq!(
+        verified.journal.total_seller_volume,
+        TOTAL_VOLUME_END_COUNTER
+    );
     assert_eq!(
         SellerJournal::abi_decode(&verified.journal.abi_encode()).unwrap(),
         verified.journal
@@ -27,41 +33,64 @@ fn closed_loop_claim_produces_direct_seller_journal() {
 }
 
 #[test]
+fn total_volume_is_the_end_counter_and_boundary_joins_block_refs() {
+    let claim = closed_loop_input(&LoopCfg::default());
+    let seller = claim.seller;
+    let proof = input(seller, SellerEvidence::ClosedLoop(claim));
+    let verified = verify_seller(&proof).unwrap();
+    assert_eq!(
+        verified.journal.total_seller_volume,
+        TOTAL_VOLUME_END_COUNTER
+    );
+    assert!(verified
+        .block_refs
+        .iter()
+        .any(|reference| reference.number == PERIOD_END_BLOCK));
+}
+
+#[test]
+fn unstaked_seller_has_no_denominator() {
+    let claim = closed_loop_input(&LoopCfg::default());
+    let seller = claim.seller;
+    let mut proof = input(seller, SellerEvidence::ClosedLoop(claim));
+    proof.total_volume = common::unstaked_total_volume_witness(seller);
+    let error = verify_seller(&proof).unwrap_err();
+    assert!(
+        error.contains("not a staked agent") || error.contains("conflicting boundary block hash"),
+        "{error}"
+    );
+}
+
+#[test]
+fn boundary_at_the_wrong_block_is_rejected() {
+    let claim = closed_loop_input(&LoopCfg::default());
+    let seller = claim.seller;
+    let mut proof = input(seller, SellerEvidence::ClosedLoop(claim));
+    proof.total_volume.header.number = PERIOD_END_BLOCK - 1;
+    let error = verify_seller(&proof).unwrap_err();
+    assert!(error.contains("the rule requires block"), "{error}");
+}
+
+#[test]
 fn reciprocal_claim_proves_each_wallet_separately() {
     let claim = reciprocal_input(&PairCfg::default());
     let first = verify_seller(&input(
         claim.address_a,
-        vec![SellerClaimInput::Reciprocal(claim.clone())],
+        SellerEvidence::Reciprocal(claim.clone()),
     ))
     .unwrap();
-    let second = verify_seller(&input(
-        claim.address_b,
-        vec![SellerClaimInput::Reciprocal(claim)],
-    ))
-    .unwrap();
+    let second = verify_seller(&input(claim.address_b, SellerEvidence::Reciprocal(claim))).unwrap();
     assert_ne!(first.journal.seller, second.journal.seller);
     assert!(first.journal.proven_wash_volume > 0);
     assert!(second.journal.proven_wash_volume > 0);
 }
 
 #[test]
-fn duplicate_claim_and_wrong_seller_are_rejected() {
+fn wrong_seller_is_rejected() {
     let claim = closed_loop_input(&LoopCfg::default());
-    let seller = claim.seller;
-    let duplicate = input(
-        seller,
-        vec![
-            SellerClaimInput::ClosedLoop(claim.clone()),
-            SellerClaimInput::ClosedLoop(claim),
-        ],
-    );
-    assert!(verify_seller(&duplicate)
-        .unwrap_err()
-        .contains("duplicate claim id"));
-
     let wrong = input(
         address!("0000000000000000000000000000000000000bad"),
-        duplicate.claims[..1].to_vec(),
+        SellerEvidence::ClosedLoop(claim),
     );
     assert!(verify_seller(&wrong)
         .unwrap_err()
@@ -71,15 +100,15 @@ fn duplicate_claim_and_wrong_seller_are_rejected() {
 #[test]
 fn invalid_top_level_input_is_rejected() {
     let claim = closed_loop_input(&LoopCfg::default());
-    assert!(verify_seller(&input(claim.seller, vec![])).is_err());
     assert!(verify_seller(&SellerProofInput {
         seller: alloy_primitives::Address::ZERO,
         period_start_block: PERIOD_START_BLOCK,
         period_end_block: PERIOD_END_BLOCK,
-        claims: vec![SellerClaimInput::ClosedLoop(claim.clone())],
+        total_volume: total_volume_witness(alloy_primitives::Address::ZERO),
+        evidence: SellerEvidence::ClosedLoop(claim.clone()),
     })
     .is_err());
-    let mut wrong_period = input(claim.seller, vec![SellerClaimInput::ClosedLoop(claim)]);
+    let mut wrong_period = input(claim.seller, SellerEvidence::ClosedLoop(claim));
     wrong_period.period_end_block += 1;
     assert!(verify_seller(&wrong_period)
         .unwrap_err()
@@ -99,32 +128,34 @@ fn native_funding_is_rejected_through_direct_seller_verification() {
             receipt: 0,
         },
     };
-    let error = verify_seller(&input(
-        claim.seller,
-        vec![SellerClaimInput::ClosedLoop(claim)],
-    ))
-    .unwrap_err();
+    let error = verify_seller(&input(claim.seller, SellerEvidence::ClosedLoop(claim))).unwrap_err();
     assert!(error.contains("native funding is not supported"));
 }
 
 #[test]
-fn multiple_claims_union_and_deduplicate_settlements() {
-    let first = closed_loop_input(&LoopCfg::default());
-    let mut overlap = first.clone();
-    overlap.source_claim_id = B256::repeat_byte(0x77);
-    let seller = first.seller;
-    let verified = verify_seller(&input(
-        seller,
-        vec![
-            SellerClaimInput::ClosedLoop(first.clone()),
-            SellerClaimInput::ClosedLoop(overlap),
-        ],
-    ))
-    .unwrap();
-    assert_eq!(
-        verified.journal.proven_wash_volume,
-        first.settlements.len() as u128 * 400_000_000
-    );
+fn guest_input_requires_one_evidence_object_and_rejects_legacy_claims() {
+    let evidence = closed_loop_input(&LoopCfg::default());
+    let original =
+        serde_json::to_value(input(evidence.seller, SellerEvidence::ClosedLoop(evidence))).unwrap();
+    let decoded: SellerProofInput = serde_json::from_value(original.clone()).unwrap();
+    verify_seller(&decoded).unwrap();
+
+    for count in [0, 1, 2] {
+        let mut legacy = original.clone();
+        let evidence = legacy.as_object_mut().unwrap().remove("evidence").unwrap();
+        legacy["claims"] = serde_json::json!(vec![evidence; count]);
+        assert!(serde_json::from_value::<SellerProofInput>(legacy).is_err());
+    }
+    let mut mixed = original.clone();
+    mixed["claims"] = serde_json::json!([original["evidence"].clone()]);
+    assert!(serde_json::from_value::<SellerProofInput>(mixed).is_err());
+    let mut array = original.clone();
+    array["evidence"] =
+        serde_json::json!([original["evidence"].clone(), original["evidence"].clone()]);
+    assert!(serde_json::from_value::<SellerProofInput>(array).is_err());
+    let mut missing = original;
+    missing.as_object_mut().unwrap().remove("evidence");
+    assert!(serde_json::from_value::<SellerProofInput>(missing).is_err());
 }
 
 #[test]
@@ -173,11 +204,12 @@ fn solidity_vectors_and_merkle_root_are_unchanged() {
     ));
 }
 
-fn input(seller: alloy_primitives::Address, claims: Vec<SellerClaimInput>) -> SellerProofInput {
+fn input(seller: alloy_primitives::Address, evidence: SellerEvidence) -> SellerProofInput {
     SellerProofInput {
         seller,
         period_start_block: PERIOD_START_BLOCK,
         period_end_block: PERIOD_END_BLOCK,
-        claims,
+        total_volume: total_volume_witness(seller),
+        evidence,
     }
 }

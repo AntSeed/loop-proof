@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadCurrentSellerProof, writeStableRunConfig } from "./prove-approved-batch.mjs";
+import { loadCurrentSellerProof, preflightSellerInputs, writeStableRunConfig } from "./prove-approved-batch.mjs";
 
 const seller = `0x${"1".repeat(40)}`;
 const sellerProgramVKey = `0x${"2".repeat(64)}`;
@@ -16,13 +16,16 @@ async function withCheckpoint(run) {
     version: 3,
     kind: "antseed-wash-trading-seller-proof",
     proofArchitecture: "direct-seller-v1",
+    evidenceFormat: "single-bundle-v1",
     securityMode: "production",
     seller,
     sellerProgramVKey,
     periodStartBlock: 10,
     periodEndBlock: 19,
-    claimCount: 2,
+    claimCount: 1,
+    sourceClaimIds: [`0x${"6".repeat(64)}`],
     provenWashVolumeRaw: "100",
+    totalSellerVolumeRaw: "200",
     blockReferenceCount: 4,
     publicValues: "0x1234",
     proofBytes: "0xabcd",
@@ -40,7 +43,7 @@ async function withCheckpoint(run) {
 
 test("accepts a verified version 3 paid direct seller checkpoint", async () => {
   await withCheckpoint(async ({ artifact, path }) => {
-    assert.deepEqual(await loadCurrentSellerProof(path, seller, period, 2, sellerProgramVKey), artifact);
+    assert.deepEqual(await loadCurrentSellerProof(path, seller, period, 1, sellerProgramVKey), artifact);
   });
 });
 
@@ -53,20 +56,63 @@ test("rejects stale or incomplete direct seller checkpoints", async () => {
     { seller: `0x${"4".repeat(40)}` },
     { sellerProgramVKey: `0x${"5".repeat(64)}` },
     { periodEndBlock: 20 },
-    { claimCount: 1 },
+    { claimCount: 2 },
+    { evidenceFormat: undefined },
+    { sourceClaimIds: [] },
+    { sourceClaimIds: "a" },
+    { sourceClaimIds: ["first", "second"] },
     { proofBytes: "0x" },
     { requestId: null },
     { proved: false },
     { verified: false },
+    { totalSellerVolumeRaw: undefined },
+    { totalSellerVolumeRaw: "0" },
   ];
   for (const mutation of invalidArtifacts) {
     await withCheckpoint(async ({ artifact, path }) => {
       await writeFile(path, JSON.stringify({ ...artifact, ...mutation }));
       await assert.rejects(
-        loadCurrentSellerProof(path, seller, period, 2, sellerProgramVKey),
+        loadCurrentSellerProof(path, seller, period, 1, sellerProgramVKey),
         /stale or invalid paid direct seller checkpoint/,
       );
     });
+  }
+});
+
+test("paid preflight attempts every seller without enabling paid proving", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "wash-native-preflight-"));
+  const sellers = [seller, `0x${"4".repeat(40)}`, `0x${"5".repeat(40)}`];
+  const attempts = [];
+  try {
+    await assert.rejects(preflightSellerInputs({
+      prover: "test-prover", sellers, period, artifactDir: directory,
+      totalVolumeWitnessDir: join(directory, "boundaries"),
+      evidenceBySeller: new Map(sellers.map(value => [value, { kind: "closed-loop", witnessPath: "claim.json" }])),
+      runVerifier: async (_prover, args) => {
+        assert.equal(args[0], "--witness-only");
+        assert.ok(!args.includes("--production"));
+        assert.ok(!args.includes("--claim"));
+        assert.equal(args.filter(argument => argument === "--evidence").length, 1);
+        const current = args[args.indexOf("--seller") + 1];
+        assert.equal(args[args.indexOf("--total-volume-witness") + 1], join(directory, "boundaries", `${current}.json`));
+        attempts.push(current);
+        if (current === sellers[1]) throw new Error("not a staked agent at period end");
+        await writeFile(args[args.indexOf("--output") + 1], JSON.stringify({
+          kind: "antseed-wash-trading-seller-witness", verified: true, proverNetworkSubmitted: false,
+          evidenceFormat: "single-bundle-v1", sourceClaimIds: ["source"],
+          seller: current, periodStartBlock: 10, periodEndBlock: 19, claimCount: 1,
+          provenWashVolumeRaw: "100", totalSellerVolumeRaw: "200",
+        }));
+      },
+    }), /1 seller inputs failed native preflight; no paid requests submitted/);
+    assert.deepEqual(attempts, sellers);
+    const summary = JSON.parse(await readFile(join(directory, "summary.json"), "utf8"));
+    assert.equal(summary.complete, false);
+    assert.equal(summary.sellers.length, 2);
+    assert.equal(summary.failures[0].seller, sellers[1]);
+    assert.match(summary.failures[0].error, /not a staked agent/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

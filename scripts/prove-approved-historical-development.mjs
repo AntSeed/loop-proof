@@ -5,6 +5,7 @@ import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mapWithConcurrency } from "./generate-approved-development-proofs.mjs";
+import { sellerEvidenceByAddress } from "./seller-evidence.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -36,8 +37,8 @@ async function main() {
   if (entries.length !== bundle.claims.length) {
     throw new Error(`expected ${bundle.claims.length} witnesses, found ${entries.length}`);
   }
-  const claimsBySeller = sellerClaims(bundle, entries);
-  const sellers = [...claimsBySeller.keys()].sort();
+  const evidenceBySeller = sellerEvidenceByAddress(bundle, entries);
+  const sellers = [...evidenceBySeller.keys()].sort();
 
   let sellerProgramVKey = null;
   if (mode !== "witness-only") {
@@ -62,34 +63,42 @@ async function main() {
   await mkdir(sellerDir, { recursive: true });
   await mkdir(sellerWitnessDir, { recursive: true });
   const prover = resolve(root, "target/release/wash-trading-prove-seller");
-  const sellerResults = await mapWithConcurrency(sellers, sellerConcurrency, async (seller, index) => {
-    const claims = claimsBySeller.get(seller);
-    const output = join(sellerDir, `${seller}.json`);
-    const existing = await loadCurrentArtifact(output, seller, bundle.period, claims.length, mode, sellerProgramVKey);
-    if (existing) {
-      console.error(`[${index + 1}/${sellers.length}] reusing direct seller ${mode} artifact ${seller}`);
-      return summarize(existing, output);
+  const sellerFailures = [];
+  const results = await mapWithConcurrency(sellers, sellerConcurrency, async (seller, index) => {
+    try {
+      const evidence = evidenceBySeller.get(seller);
+      const output = join(sellerDir, `${seller}.json`);
+      const existing = await loadCurrentArtifact(output, seller, bundle.period, 1, mode, sellerProgramVKey);
+      if (existing) {
+        console.error(`[${index + 1}/${sellers.length}] reusing direct seller ${mode} artifact ${seller}`);
+        return summarize(existing, output);
+      }
+      const command = [
+        `--${mode}`,
+        "--seller", seller,
+        "--output", output,
+        "--seller-witness", join(sellerWitnessDir, `${seller}.json`),
+      ];
+      if (mode !== "witness-only") command.push("--seller-elf", sellerElf);
+      command.push("--evidence", `${evidence.kind}:${evidence.witnessPath}`);
+      console.error(`[${index + 1}/${sellers.length}] generating direct seller ${mode} artifact ${seller}`);
+      await run(prover, command, root);
+      const artifact = await loadCurrentArtifact(output, seller, bundle.period, 1, mode, sellerProgramVKey);
+      if (!artifact) throw new Error(`${seller}: direct seller artifact was not written`);
+      return summarize(artifact, output);
+    } catch (error) {
+      sellerFailures.push({ seller, error: error.message });
+      console.error(`${seller}: ${error.message}`);
+      return null;
     }
-    const command = [
-      `--${mode}`,
-      "--seller", seller,
-      "--output", output,
-      "--seller-witness", join(sellerWitnessDir, `${seller}.json`),
-    ];
-    if (mode !== "witness-only") command.push("--seller-elf", sellerElf);
-    for (const entry of claims) command.push("--claim", `${entry.kind}:${entry.witnessPath}`);
-    console.error(`[${index + 1}/${sellers.length}] generating direct seller ${mode} artifact ${seller}`);
-    await run(prover, command, root);
-    const artifact = await loadCurrentArtifact(output, seller, bundle.period, claims.length, mode, sellerProgramVKey);
-    if (!artifact) throw new Error(`${seller}: direct seller artifact was not written`);
-    return summarize(artifact, output);
   });
+  const sellerResults = results.filter(Boolean);
 
   const totalProvenWashVolumeRaw = sellerResults
     .reduce((total, seller) => total + BigInt(seller.provenWashVolumeRaw), 0n)
     .toString();
   const approvedTotal = approvedUniqueSettlementVolume(bundle);
-  if (totalProvenWashVolumeRaw !== approvedTotal) {
+  if (sellerFailures.length === 0 && totalProvenWashVolumeRaw !== approvedTotal) {
     throw new Error(`direct seller total ${totalProvenWashVolumeRaw} differs from approved ${approvedTotal}`);
   }
   const summary = {
@@ -103,6 +112,9 @@ async function main() {
     approvedSellerCount: sellers.length,
     sellerProgramVKey,
     sellerArtifactCount: sellerResults.length,
+    sellerFailures,
+    complete: sellerFailures.length === 0,
+    totalSellerVolumeRaw: sellerResults.reduce((total, seller) => total + BigInt(seller.totalSellerVolumeRaw), 0n).toString(),
     totalProvenWashVolumeRaw,
     totalProvenWashVolumeUsdc: formatUsdc(totalProvenWashVolumeRaw),
     sellerResults,
@@ -110,6 +122,7 @@ async function main() {
   await mkdir(artifactDir, { recursive: true });
   await writeFile(join(artifactDir, `summary-${mode}.json`), `${JSON.stringify(summary, null, 2)}\n`);
   console.log(`WASH_TRADING_APPROVED_DEVELOPMENT_SUMMARY=${JSON.stringify(summary)}`);
+  if (sellerFailures.length > 0) process.exitCode = 1;
 }
 
 async function loadWitnessEntries(directory, approvedClaims, period) {
@@ -140,23 +153,7 @@ async function loadWitnessEntries(directory, approvedClaims, period) {
   return entries;
 }
 
-function sellerClaims(bundle, entries) {
-  const byClaim = new Map(entries.map((entry) => [entry.claim.claimId.toLowerCase(), entry]));
-  const result = new Map();
-  for (const claim of bundle.claims) {
-    const entry = byClaim.get(claim.claimId.toLowerCase());
-    if (!entry) throw new Error(`${claim.claimId}: witness is missing`);
-    for (const seller of claim.subjects.map((value) => value.toLowerCase())) {
-      const claims = result.get(seller) ?? [];
-      claims.push(entry);
-      result.set(seller, claims);
-    }
-  }
-  for (const claims of result.values()) claims.sort((a, b) => a.claim.claimId.localeCompare(b.claim.claimId));
-  return result;
-}
-
-async function loadCurrentArtifact(path, seller, period, claimCount, mode, sellerProgramVKey) {
+export async function loadCurrentArtifact(path, seller, period, claimCount, mode, sellerProgramVKey) {
   if (!await isNonemptyFile(path)) return null;
   const artifact = JSON.parse(await readFile(path, "utf8"));
   const expectedVersion = mode === "witness-only" ? 1 : 3;
@@ -165,9 +162,12 @@ async function loadCurrentArtifact(path, seller, period, claimCount, mode, selle
     : "antseed-wash-trading-seller-proof";
   if (artifact?.version !== expectedVersion || artifact.kind !== expectedKind
       || artifact.proofArchitecture !== "direct-seller-v1" || artifact.securityMode !== "development"
-      || artifact.seller?.toLowerCase() !== seller || artifact.claimCount !== claimCount
+      || artifact.seller?.toLowerCase() !== seller || claimCount !== 1 || artifact.claimCount !== 1
+      || artifact.evidenceFormat !== "single-bundle-v1"
+      || !Array.isArray(artifact.sourceClaimIds) || artifact.sourceClaimIds.length !== 1
       || artifact.periodStartBlock !== period.startBlock || artifact.periodEndBlock !== period.endBlockExclusive - 1
       || artifact.verified !== true || artifact.proverNetworkSubmitted === true
+      || !/^[1-9][0-9]*$/.test(artifact.totalSellerVolumeRaw ?? "")
       || (sellerProgramVKey != null && artifact.sellerProgramVKey?.toLowerCase() !== sellerProgramVKey)) {
     return null;
   }
@@ -183,6 +183,7 @@ async function summarize(artifact, path) {
     sha256: sha256(await readFile(path)),
     claimCount: artifact.claimCount,
     provenWashVolumeRaw: artifact.provenWashVolumeRaw,
+    totalSellerVolumeRaw: artifact.totalSellerVolumeRaw,
     blockReferenceCount: artifact.blockReferenceCount,
     instructionCount: artifact.instructionCount ?? null,
   };
@@ -266,14 +267,19 @@ function run(command, commandArgs, cwd, extraEnv = {}) {
     const child = spawn(command, commandArgs, {
       cwd,
       env: { ...process.env, ...extraEnv },
-      stdio: "inherit",
+      stdio: ["ignore", "inherit", "pipe"],
+    });
+    let recentStderr = "";
+    child.stderr.on("data", (chunk) => {
+      process.stderr.write(chunk);
+      recentStderr = `${recentStderr}${chunk}`.slice(-4096);
     });
     child.on("error", reject);
-    child.on("exit", (code) => code === 0 ? resolveRun() : reject(new Error(`${command} exited with ${code}`)));
+    child.on("close", (code, signal) => code === 0 ? resolveRun() : reject(new Error(`${command} exited with ${signal ?? code}\n${recentStderr.trim()}`)));
   });
 }
 
-main().catch((error) => {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch((error) => {
   console.error(error.stack ?? error.message);
   process.exitCode = 1;
 });

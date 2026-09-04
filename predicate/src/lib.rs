@@ -36,7 +36,7 @@ pub use journal::{settlement_id, SettlementRecord, SubjectRecord, WashJournal};
 pub use reciprocal::{verify_reciprocal, ReciprocalInput};
 pub use seller::{
     verify_block_authentication_chunk, verify_seller, BlockAuthenticationChunk, HistoricalBlockRef,
-    SellerClaimInput, SellerJournal, SellerProofInput, SolSellerSettlement, VerifiedSeller,
+    SellerEvidence, SellerJournal, SellerProofInput, SolSellerSettlement, VerifiedSeller,
 };
 
 // ─── Rule identity ────────────────────────────────────────────────────────
@@ -100,6 +100,7 @@ pub const MAX_RETURN_PATHS: usize = 512;
 pub const USDC_ADDRESS: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
 pub const CHANNELS_ADDRESS: Address = address!("BA66d3b4fbCf472F6F11D6F9F96aaCE96516F09d");
 pub const DEPOSITS_ADDRESS: Address = address!("0F7a3a8f4Da01637d1202bb5443fcF7F88F99fD2");
+pub const STAKING_ADDRESS: Address = address!("3652E6B22919bd322A25723B94BB207602E5c8e6");
 
 // ─── Storage layout bindings (verified against deployed bytecode) ─────────
 //
@@ -110,6 +111,14 @@ pub const DEPOSITS_ADDRESS: Address = address!("0F7a3a8f4Da01637d1202bb5443fcF7F
 pub const DEPOSITS_BUYERS_SLOT: u64 = 9;
 /// `BuyerAccount.balance` is the struct's first field.
 pub const BUYER_ACCOUNT_BALANCE_OFFSET: u64 = 0;
+/// `AntseedStaking.mapping(address => uint256) public sellerAgentId`.
+pub const STAKING_SELLER_AGENT_ID_SLOT: u64 = 4;
+/// `AntseedChannels.mapping(uint256 => AgentStats) private _agentStats`.
+pub const CHANNELS_AGENT_STATS_SLOT: u64 = 11;
+/// `AgentStats.totalVolumeUsdc`: `channelCount` and `ghostCount` pack into
+/// the struct's first slot, so the cumulative settled-volume counter lives
+/// at offset 1.
+pub const AGENT_STATS_TOTAL_VOLUME_OFFSET: u64 = 1;
 
 // ─── Evidence references ──────────────────────────────────────────────────
 

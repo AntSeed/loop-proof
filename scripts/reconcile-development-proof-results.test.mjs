@@ -23,8 +23,10 @@ test("verified direct seller proofs promote only matching proof candidates", () 
   });
   assert.equal(result.discovery.candidates[0].state, "proof_validated");
   assert.equal(result.discovery.candidates[0].proof.provenWashVolumeRaw, "60");
+  assert.equal(result.discovery.candidates[0].proof.totalSellerVolumeRaw, "100");
   assert.equal(result.discovery.candidates[1].state, "complete_no_loop");
   assert.equal(result.report.totalProvenWashVolumeRaw, "60");
+  assert.equal(result.report.totalSellerVolumeRaw, "100");
   assert.equal(result.report.proofArchitecture, "direct-seller-v1");
 });
 
@@ -43,6 +45,20 @@ test("recursive or unverified artifacts are rejected", () => {
     ...base,
     sellerProofs: [{ ...proof(seller, claimId), verified: false }],
   }), /invalid development direct seller proof/);
+  assert.throws(() => reconcileDevelopmentProofResults({
+    ...base,
+    sellerProofs: [{ ...proof(seller, claimId), totalSellerVolumeRaw: undefined }],
+  }), /invalid development direct seller proof/);
+  for (const mutation of [
+    { evidenceFormat: undefined }, { claimCount: 2 },
+    { sourceClaimIds: [] }, { sourceClaimIds: [claimId, hash("b")] },
+    { sourceClaimIds: "a" },
+  ]) {
+    assert.throws(() => reconcileDevelopmentProofResults({
+      ...base,
+      sellerProofs: [{ ...proof(seller, claimId), ...mutation }],
+    }), /invalid development direct seller proof/);
+  }
 });
 
 function proof(seller, claimId) {
@@ -50,6 +66,8 @@ function proof(seller, claimId) {
     version: 3,
     kind: "antseed-wash-trading-seller-proof",
     proofArchitecture: "direct-seller-v1",
+    evidenceFormat: "single-bundle-v1",
+    claimCount: 1,
     securityMode: "development",
     proved: true,
     verified: true,
@@ -59,6 +77,7 @@ function proof(seller, claimId) {
     publicValues: "0x12",
     proofBytes: "0x34",
     provenWashVolumeRaw: "60",
+    totalSellerVolumeRaw: "100",
     evidenceDigest: hash("e"),
     blockAuthenticationRoot: hash("b"),
   };

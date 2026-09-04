@@ -16,7 +16,10 @@ export function reconcileDevelopmentProofResults({ discovery, bundle, sellerProo
   for (const proof of sellerProofs) {
     if (proof?.version !== 3 || proof.kind !== "antseed-wash-trading-seller-proof"
         || proof.proofArchitecture !== "direct-seller-v1" || proof.securityMode !== "development"
-        || proof.proved !== true || proof.verified !== true || !Array.isArray(proof.sourceClaimIds)) {
+        || proof.evidenceFormat !== "single-bundle-v1" || proof.claimCount !== 1
+        || !/^[1-9][0-9]*$/.test(proof.totalSellerVolumeRaw ?? "")
+        || proof.proved !== true || proof.verified !== true
+        || !Array.isArray(proof.sourceClaimIds) || proof.sourceClaimIds.length !== 1) {
       throw new Error("invalid development direct seller proof artifact");
     }
     const seller = normalizeAddress(proof.seller);
@@ -52,6 +55,7 @@ export function reconcileDevelopmentProofResults({ discovery, bundle, sellerProo
         proofBytes: proof.proofBytes,
         proofPath: proof.proofPath ?? null,
         provenWashVolumeRaw: proof.provenWashVolumeRaw,
+        totalSellerVolumeRaw: proof.totalSellerVolumeRaw,
         evidenceDigest: proof.evidenceDigest,
         blockAuthenticationRoot: proof.blockAuthenticationRoot,
       },
@@ -77,6 +81,7 @@ export function reconcileDevelopmentProofResults({ discovery, bundle, sellerProo
       reportRoot: bundle.reportRoot,
       sellerProgramVKey,
       directSellerProofCount: sellerProofs.length,
+      totalSellerVolumeRaw: sellerProofs.reduce((total, proof) => total + BigInt(proof.totalSellerVolumeRaw), 0n).toString(),
       totalProvenWashVolumeRaw: sellerProofs
         .reduce((total, proof) => total + BigInt(proof.provenWashVolumeRaw), 0n)
         .toString(),

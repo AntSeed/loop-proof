@@ -4,9 +4,10 @@ Reference implementation of **AIP-4: Proof-Carrying Wash-Trading Enforcement**:
 the direct SP1 seller guest, conserved-value-loop predicates, and host tooling
 that materializes raw Base evidence into proof witnesses.
 
-A seller result is proven directly from raw evidence. One SP1 execution
-re-verifies every included closed-loop and reciprocal claim, unions settlement
-IDs, rejects conflicts and overlaps, authenticates every referenced block, and
+A seller result is proven directly from one raw evidence bundle. One SP1 execution
+verifies either a closed-loop bundle or a reciprocal bundle, rejects duplicate
+settlement IDs, authenticates every referenced block, proves the seller's total settled volume
+from the channels contract's own cumulative counter at the period end, and
 commits one schema-1 seller journal for the registry. There are no recursive
 child proofs and no seller-aggregator guest.
 
@@ -27,11 +28,17 @@ Both predicates prove a **conserved USDC value loop**, not merely transfers:
   end-to-end amount, and time bounds.
 - **LEDGER**: authenticated period-end `Deposits.buyers[buyer].balance` storage
   proofs reconcile the selected funding and settlement activity.
+- **TOTAL**: an authenticated period-end storage proof of
+  `AntseedChannels._agentStats[sellerAgentId].totalVolumeUsdc` commits the
+  seller's complete settled volume for the period (the period starts at
+  protocol genesis, so the end counter is the period total). The journal's
+  `provenWashVolume / totalSellerVolume` is therefore a lower-bound share
+  with a complete, non-selectable denominator.
 
 The direct seller verifier preserves the raw receipt, transaction, and storage
 Merkle-Patricia checks performed by `verify_closed_loop` and
-`verify_reciprocal`. It additionally enforces one seller and period, unique
-claim IDs, settlement-ID deduplication, conflicting-amount rejection, checked
+`verify_reciprocal`. It additionally enforces one seller, period, and evidence
+bundle, unique settlement IDs, checked
 volume arithmetic, deterministic evidence digests, and deterministic block
 authentication roots.
 
@@ -61,27 +68,52 @@ scripts/build-guests.sh
 node scripts/generate-development-proofs.mjs
 ```
 
-Produce one direct seller artifact from existing claim witnesses:
+Produce one direct seller artifact from an existing evidence witness:
 
 ```bash
 cargo run --release -p loop-host --features sp1 --bin wash-trading-prove-seller -- \
   --development \
   --seller 0x... \
   --seller-elf program/seller/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/seller-guest \
-  --claim closed-loop:/path/to/closed-loop.witness.json \
-  --claim reciprocal:/path/to/reciprocal.witness.json \
-  --seller-witness /path/to/combined-seller-witness.json \
+  --evidence closed-loop:/path/to/closed-loop.witness.json \
+  --seller-witness /path/to/seller-witness.json \
   --output /path/to/seller-proof.json
 ```
 
+Use `--evidence reciprocal:/path/to/reciprocal.witness.json` instead for a
+reciprocal bundle. Exactly one `--evidence` is required; legacy `--claim` and
+repeated evidence arguments are rejected. A bundle can contain many buyers,
+settlements, and return paths, but there is no cross-bundle seller aggregation.
+Batch tools reject multiple approved bundles for the same seller rather than
+silently picking one. A reciprocal bundle may produce a separate proof for each
+of its two sellers.
+
+The guest input has one `evidence` object, not a `claims` array. Old seller input
+JSON is rejected, even if its array has only one entry. Seller artifacts carry
+`evidenceFormat: "single-bundle-v1"`; `claimCount: 1` and the singleton
+`sourceClaimIds` array remain provenance metadata for downstream tools. Rebuild
+the guest and regenerate seller inputs and proofs with its new program vkey;
+old seller proof caches cannot be reused. This input simplification does not
+change the current schema-1 on-chain journal ABI. Raw closed-loop and reciprocal
+witness files remain reusable.
+
+Set `BASE_RPC_URL` (or comma-separated `BASE_RPC_URLS`) to an archive RPC for
+the period-end staking and channels storage proofs. For offline replay, pass
+`--total-volume-witness /path/to/boundary.json` instead. This is the
+`total_volume` object in the saved seller witness; no start-boundary
+proof is requested. Artifacts and seller summaries expose `totalSellerVolumeRaw`
+alongside `provenWashVolumeRaw`, both in USDC base units (six decimals).
+
 Available modes are:
 
-- `--witness-only`: runs complete native verification and writes the combined
+- `--witness-only`: runs complete native verification and writes the
   seller witness without initializing SP1 or a prover network.
 - `--execute-only`: additionally executes the seller guest and verifies its
   public values against native verification.
 - `--development`: executes the guest and creates a development proof artifact
-  accepted only by the local mock verifier integration.
+  accepted only by the local mock verifier integration. It reuses the checked
+  execution's public values to create and verify the SDK mock proof instead of
+  executing the same guest a second time.
 - `--production`: requests a real network Groth16 proof and requires
   `--confirm-production`, explicit price/time limits, a funded prover identity,
   and a resumable request checkpoint.
@@ -113,8 +145,36 @@ node scripts/generate-approved-development-proofs.mjs \
 
 The summary fails unless every approved claim maps to every affected seller and
 the sum of the 55 direct seller journals equals the approved unique settlement
-volume. No RPC is used when current witness-cache files already exist, and
-`proverNetworkSubmitted` remains `false`.
+volume. Cached claim witnesses avoid re-fetching claim evidence, but the seller
+prover still needs the period-end total-volume storage proofs. All development
+modes keep `proverNetworkSubmitted` set to `false`.
+
+The paid batch orchestrator natively preflights every selected seller before
+submitting any network request, including in `--preflight-only` mode. Failures
+are recorded under `native-preflight/summary.json` and stop the entire selected
+batch before spending. Cost-quote approval and reproducible-guest checks still
+apply; a passing development artifact alone does not authorize paid proving.
+For an offline paid preflight and submission, pass `--total-volume-witness-dir`
+with one `<seller>.json` period-end boundary witness per selected seller; the
+same boundary file is used for both native preflight and the paid proof input.
+
+`prove-approved-historical-development.mjs` attempts every seller even if one
+fails, writes `sellerFailures` and `complete` in its summary, and exits nonzero
+for an incomplete run. An unstaked-at-period-end seller is a finding, not an
+automatically excluded claim. Cached artifacts without a positive authenticated
+total are stale and must be regenerated.
+
+To report actual return coverage from the verified claim witnesses:
+
+```bash
+cargo run --release -p wash-predicate --example report_return_coverage -- /path/to/witnesses > return-coverage.json
+```
+
+For transfer-return closed loops, coverage is the sum of each return path's
+minimum hop amount divided by the claim's selected settled volume. The fixed
+`ALPHA_RETURN_BPS` floor remains 2000 (20%); it is not the wash share `V/T`.
+Self-funded loops close by identity, and reciprocal claims do not use this
+alpha-return test. Neither is assigned a fabricated measured return percentage.
 
 To execute or development-prove existing historical witnesses:
 

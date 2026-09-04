@@ -5,6 +5,7 @@ import { createReadStream } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sellerEvidenceByAddress } from "./seller-evidence.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const MAX_PREDICATE_BLOCK_REFS = 65_536;
@@ -252,6 +253,7 @@ async function main() {
   );
   const bundleBytes = await readFile(bundlePath);
   const bundle = JSON.parse(bundleBytes);
+  sellerEvidenceByAddress(bundle, bundle.claims.map((claim) => ({ claim })));
   const snapshotLock = JSON.parse(await readFile(snapshotLockPath, "utf8"));
   await mkdir(artifactDir, { recursive: true });
   const planShardsDirectory = join(artifactDir, "plan-shards");
@@ -326,17 +328,10 @@ async function main() {
     claim.claimId.toLowerCase(),
     `${claim.type === "P0_RECIPROCAL" ? "reciprocal" : "closed-loop"}:${witnessPath}`,
   ]));
-  const sellerClaims = new Map();
-  for (const claim of bundle.claims) {
-    const witness = witnessByClaim.get(claim.claimId.toLowerCase());
-    if (!witness) throw new Error(`${claim.claimId}: approved claim witness is missing`);
-    for (const seller of claim.subjects.map((value) => value.toLowerCase())) {
-      const claims = sellerClaims.get(seller) ?? [];
-      claims.push({ claimId: claim.claimId.toLowerCase(), witness });
-      sellerClaims.set(seller, claims);
-    }
-  }
-  const sellers = [...sellerClaims.keys()].sort();
+  const evidenceBySeller = sellerEvidenceByAddress(bundle, witnessEntries.map(({ claim }) => ({
+    claim, witness: witnessByClaim.get(claim.claimId.toLowerCase()),
+  })));
+  const sellers = [...evidenceBySeller.keys()].sort();
   if (sellers.length !== approved.approvedSellerCount) throw new Error("approved seller count mismatch");
   const sellerArtifactDirectory = join(artifactDir, "sellers");
   const sellerWitnessDirectory = join(artifactDir, "seller-witnesses");
@@ -344,7 +339,7 @@ async function main() {
   await mkdir(sellerWitnessDirectory, { recursive: true });
   const sellerResults = [];
   for (const [sellerIndex, seller] of sellers.entries()) {
-    const claims = sellerClaims.get(seller).sort((left, right) => left.claimId.localeCompare(right.claimId));
+    const evidence = evidenceBySeller.get(seller);
     const output = join(sellerArtifactDirectory, `${seller}.json`);
     const command = [
       "run", "--release", "-p", "loop-host", "--features", "sp1",
@@ -355,12 +350,14 @@ async function main() {
       "--seller-witness", join(sellerWitnessDirectory, `${seller}.json`),
     ];
     if (!witnessOnly) command.push("--seller-elf", guestElf("seller"));
-    for (const claim of claims) command.push("--claim", claim.witness);
+    command.push("--evidence", evidence.witness);
     console.error(`[${sellerIndex + 1}/${sellers.length}] ${witnessOnly ? "verifying" : "proving"} seller ${seller}`);
     await run("cargo", command, root, { RUSTUP_TOOLCHAIN: toolchain });
     const artifact = JSON.parse(await readFile(output, "utf8"));
-    if (artifact.seller?.toLowerCase() !== seller || artifact.claimCount !== claims.length
-        || artifact.provenWashVolumeRaw == null || artifact.proverNetworkSubmitted === true) {
+    if (artifact.seller?.toLowerCase() !== seller || artifact.claimCount !== 1
+        || artifact.evidenceFormat !== "single-bundle-v1"
+        || artifact.provenWashVolumeRaw == null || !/^[1-9][0-9]*$/.test(artifact.totalSellerVolumeRaw ?? "")
+        || artifact.proverNetworkSubmitted === true) {
       throw new Error(`${seller}: invalid direct seller artifact`);
     }
     sellerResults.push({
@@ -369,6 +366,7 @@ async function main() {
       sha256: sha256(await readFile(output)),
       claimCount: artifact.claimCount,
       provenWashVolumeRaw: artifact.provenWashVolumeRaw,
+      totalSellerVolumeRaw: artifact.totalSellerVolumeRaw,
       blockReferenceCount: artifact.blockReferenceCount,
     });
   }
@@ -388,6 +386,7 @@ async function main() {
     completeness: witnessOnly
       ? "all-approved-seller-witnesses-native-verified"
       : "all-approved-sellers-proved-offchain",
+    totalSellerVolumeRaw: sellerResults.reduce((total, seller) => total + BigInt(seller.totalSellerVolumeRaw), 0n).toString(),
     proverNetworkSubmitted: false,
     snapshotLock: { path: copiedSnapshotLockPath, sha256: sha256(await readFile(copiedSnapshotLockPath)) },
     ...approved,
