@@ -195,13 +195,16 @@ fn missing_or_short_return_is_rejected() {
     cfg.return_paths = vec![];
     assert_rejects(&closed_loop_input(&cfg), "below the coverage fraction");
 
-    // Σ settle = 1_200_000_000; α_return = 2_000 bps → arrival ≥ 240_000_000.
+    // Σ settle = 1_200_000_000; α_return = 3_000 bps → arrival ≥ 360_000_000.
     let mut cfg = LoopCfg::default();
-    cfg.return_paths = vec![vec![(FUNDER, 240_000_000)]];
+    cfg.return_paths = vec![vec![(FUNDER, 360_000_000)]];
     verify_closed_loop(&closed_loop_input(&cfg)).unwrap();
 
     let mut cfg = LoopCfg::default();
-    cfg.return_paths = vec![vec![(FUNDER, 239_999_999)]];
+    cfg.return_paths = vec![vec![(FUNDER, 359_999_999)]];
+    assert_rejects(&closed_loop_input(&cfg), "below the coverage fraction");
+
+    cfg.return_paths = vec![vec![(FUNDER, 240_000_000)]];
     assert_rejects(&closed_loop_input(&cfg), "below the coverage fraction");
 }
 
@@ -209,12 +212,12 @@ fn missing_or_short_return_is_rejected() {
 fn return_hop_retention_boundary_is_exact() {
     // ρ_hop = 2_800: a hop forwarding exactly 28% passes…
     let mut cfg = LoopCfg::default();
-    cfg.return_paths = vec![vec![(RELAY, 1_300_000_000), (FUNDER, 364_000_000)]];
+    cfg.return_paths = vec![vec![(RELAY, 2_200_000_000), (FUNDER, 616_000_000)]];
     verify_closed_loop(&closed_loop_input(&cfg)).unwrap();
 
     // …one unit less does not.
     let mut cfg = LoopCfg::default();
-    cfg.return_paths = vec![vec![(RELAY, 1_300_000_000), (FUNDER, 363_999_999)]];
+    cfg.return_paths = vec![vec![(RELAY, 2_200_000_000), (FUNDER, 615_999_999)]];
     assert_rejects(
         &closed_loop_input(&cfg),
         "retains more than the permitted share",

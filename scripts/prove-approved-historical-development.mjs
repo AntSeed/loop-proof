@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mapWithConcurrency } from "./generate-approved-development-proofs.mjs";
 import { sellerEvidenceByAddress } from "./seller-evidence.mjs";
+import { PREDICATE_POLICY } from "./predicate-policy.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -55,8 +56,15 @@ async function main() {
     if (!await isNonemptyFile(sellerElf)) throw new Error(`seller guest ELF is missing: ${sellerElf}`);
   }
   await run("cargo", [
-    "build", "--release", "-p", "loop-host", "--features", "sp1", "--bin", "wash-trading-prove-seller",
+    "build", "--release", "-p", "loop-host", "--features", "sp1", "--bin", "wash-trading-prove-seller", "--bin", "loop-host",
   ], root, { RUSTUP_TOOLCHAIN: process.env.RUSTUP_TOOLCHAIN ?? "1.94" });
+  if (mode !== "witness-only") {
+    const builtVKey = execFileSync(resolve(root, "target/release/loop-host"), ["vkey", "--elf", sellerElf], { encoding: "utf8" }).trim().toLowerCase();
+    if (!/^0x[0-9a-f]{64}$/.test(builtVKey) || (sellerProgramVKey != null && sellerProgramVKey !== builtVKey)) {
+      throw new Error("seller guest verification key differs from build attestation");
+    }
+    sellerProgramVKey = builtVKey;
+  }
 
   const sellerDir = join(artifactDir, "sellers");
   const sellerWitnessDir = join(artifactDir, "seller-witnesses");
@@ -164,10 +172,12 @@ export async function loadCurrentArtifact(path, seller, period, claimCount, mode
       || artifact.proofArchitecture !== "direct-seller-v1" || artifact.securityMode !== "development"
       || artifact.seller?.toLowerCase() !== seller || claimCount !== 1 || artifact.claimCount !== 1
       || artifact.evidenceFormat !== "single-bundle-v1"
+      || artifact.alphaReturnBps !== PREDICATE_POLICY.alphaReturnBps
       || !Array.isArray(artifact.sourceClaimIds) || artifact.sourceClaimIds.length !== 1
       || artifact.periodStartBlock !== period.startBlock || artifact.periodEndBlock !== period.endBlockExclusive - 1
       || artifact.verified !== true || artifact.proverNetworkSubmitted === true
       || !/^[1-9][0-9]*$/.test(artifact.totalSellerVolumeRaw ?? "")
+      || (mode !== "witness-only" && sellerProgramVKey == null)
       || (sellerProgramVKey != null && artifact.sellerProgramVKey?.toLowerCase() !== sellerProgramVKey)) {
     return null;
   }

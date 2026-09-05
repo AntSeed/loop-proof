@@ -63,7 +63,7 @@ test("cached relay discovery is seller and funder agnostic and deterministic", a
 });
 
 test("required return rounds up to the smallest raw unit", () => {
-  assert.equal(requiredReturnRaw(10_612_500_621n), 2_122_500_125n);
+  assert.equal(requiredReturnRaw(10_612_500_621n), 3_183_750_187n);
 });
 
 test("two-transfer relay evidence receives the smaller-hop credit", () => {

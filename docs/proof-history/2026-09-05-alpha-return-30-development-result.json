@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "label": "Uniform 30% development replay and local contract submission — completed September 5, 2026",
+  "alphaReturnBps": 3000,
+  "periodStartBlock": 44471575,
+  "periodEndBlock": 50672526,
+  "developmentSellerCount": 54,
+  "anvilPassedSellerCount": 54,
+  "provenWashVolumeRaw": "146692697298",
+  "totalSellerVolumeRaw": "190205878768",
+  "sellerProgramVKey": "0x0028d499469d8bdb345427dccf15bbbf3f1c582625a0a5690e7ac3576ef6ed99",
+  "guestElfSha256": "0x64fc83ab149f425bf91c7f451fc28645d24623894378efd2efed3f48d0847562",
+  "securityMode": "development",
+  "productionReady": false,
+  "aip4Compliant": false,
+  "proverNetworkSubmitted": false,
+  "liveChainSubmitted": false,
+  "archivedArtifactHashesUnchanged": 54,
+  "excluded": [
+    {
+      "seller": "0x3b5f5b27b789dd4848625befca5d85ee49624da9",
+      "status": "previously-rejected-not-retested"
+    },
+    {
+      "seller": "0x6e4dfb6f34ef798b67c6f546b4da15a170e6e8be",
+      "status": "previously-rejected-not-retested"
+    },
+    {
+      "seller": "0xa76cd6e86dc48e3e7fd24c4807a844b4d6caba27",
+      "status": "previously-rejected-not-retested"
+    },
+    {
+      "seller": "0xddbc2bb655d94251113908701896bbd786af20a2",
+      "status": "previously-rejected-not-retested"
+    },
+    {
+      "seller": "0xe2d4c66359fa70a1fba7985c9ffbdd6c4f9a1848",
+      "status": "previously-rejected-not-retested"
+    }
+  ],
+  "blockers": [
+    "AIP-4 funding completeness and direct-transfer signer attribution unresolved",
+    "Return and hop calibration differs from pasted AIP-4 near-unity constraints",
+    "Zero/partial denominator handling and enforcement-policy alignment unresolved",
+    "Development proofs use a mock verifier, not production Groth16 verification",
+    "Live canonical BlockhashStore coverage must be rechecked before production submission"
+  ],
+  "replaySummary": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt30-development-replay-2026-09-05/summary.json",
+  "replaySummarySha256": "0xdfb8c9fbad8be23ec7992f19e93365dc047abf267bfaa54f0e88f91da7b1ca94",
+  "anvilSummary": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt30-development-replay-2026-09-05/anvil/summary.json",
+  "anvilSummarySha256": "0xd50e9765a1cfcf08a40a55aaf861274114c764112ae9bbc961c217c3420cb589",
+  "startedAt": "2026-09-05T11:11:00.635Z",
+  "finishedAt": "2026-09-05T12:03:54.454Z"
+}

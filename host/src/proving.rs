@@ -81,13 +81,21 @@ impl ProofClient {
         }
     }
 
-    pub fn request_groth16(&self, key: &SP1ProvingKey, stdin: SP1Stdin) -> Result<B256> {
+    pub fn request_groth16(
+        &self,
+        key: &SP1ProvingKey,
+        stdin: SP1Stdin,
+        instruction_count: u64,
+        prover_gas_units: u64,
+    ) -> Result<B256> {
         match self {
             Self::Development(_) => bail!("development proving does not create network requests"),
             Self::Network { client, options } => client
                 .prove(key, stdin)
                 .groth16()
                 .deferred_proof_verification(false)
+                .cycle_limit(instruction_count)
+                .gas_limit(prover_gas_units)
                 .max_price_per_pgu(options.max_price_per_pgu)
                 .timeout(options.proof_timeout)
                 .request(),

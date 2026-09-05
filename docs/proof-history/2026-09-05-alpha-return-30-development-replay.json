@@ -1,0 +1,537 @@
+{
+  "version": 1,
+  "securityMode": "development",
+  "alphaReturnBps": 3000,
+  "productionReady": false,
+  "periodStartBlock": 44471575,
+  "periodEndBlock": 50672526,
+  "sellerProgramVKey": "0x0028d499469d8bdb345427dccf15bbbf3f1c582625a0a5690e7ac3576ef6ed99",
+  "sellerElf": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt30-reproducible-2026-09-05/guests/seller-guest",
+  "guestAttestation": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt30-reproducible-2026-09-05/guest-attestation.json",
+  "prover": "/Users/alex/Documents/code/antseed-org/worktrees/direct-seller-proof/target/release/wash-trading-prove-seller",
+  "blockers": [
+    "AIP-4 funding completeness and direct-transfer signer attribution unresolved",
+    "Return and hop calibration differs from pasted AIP-4 near-unity constraints",
+    "Zero/partial denominator handling and enforcement-policy alignment unresolved",
+    "Development proofs use a mock verifier, not production Groth16 verification",
+    "Live canonical BlockhashStore coverage must be rechecked before production submission"
+  ],
+  "excluded": [
+    {
+      "seller": "0x3b5f5b27b789dd4848625befca5d85ee49624da9",
+      "status": "previously-rejected-not-retested"
+    },
+    {
+      "seller": "0x6e4dfb6f34ef798b67c6f546b4da15a170e6e8be",
+      "status": "previously-rejected-not-retested"
+    },
+    {
+      "seller": "0xa76cd6e86dc48e3e7fd24c4807a844b4d6caba27",
+      "status": "previously-rejected-not-retested"
+    },
+    {
+      "seller": "0xddbc2bb655d94251113908701896bbd786af20a2",
+      "status": "previously-rejected-not-retested"
+    },
+    {
+      "seller": "0xe2d4c66359fa70a1fba7985c9ffbdd6c4f9a1848",
+      "status": "previously-rejected-not-retested"
+    }
+  ],
+  "sellers": [
+    {
+      "seller": "0xb629449e487740c5fb86d7c4ddd51709d692dab4",
+      "label": "CatGPT",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0xb629449e487740c5fb86d7c4ddd51709d692dab4.json",
+      "provenWashVolumeRaw": "38292186064",
+      "totalSellerVolumeRaw": "40362999991",
+      "evidenceDigest": "0xb91343ffefa9785686916174b6573c9c6036ceb5ea217dae0ae81886c5ba4fc9",
+      "previousExecutionMillis": 1107219
+    },
+    {
+      "seller": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+      "label": "Flash",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c.json",
+      "provenWashVolumeRaw": "46341556102",
+      "totalSellerVolumeRaw": "48995164849",
+      "evidenceDigest": "0xc18b60d90ae1f228ff1351a9d67241bb06cb580f986662f070cd00e6513e7d44",
+      "previousExecutionMillis": 548329
+    },
+    {
+      "seller": "0x1b46b5ed9512dc2ad4c4a3d9ec89aebe4dee3631",
+      "label": "Agent 53626",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x1b46b5ed9512dc2ad4c4a3d9ec89aebe4dee3631.json",
+      "provenWashVolumeRaw": "557300000",
+      "totalSellerVolumeRaw": "557300000",
+      "evidenceDigest": "0x12e8c614e4b877a13b2cc48eb75c4cd681192e024d2c23720cf8dd4c771de050",
+      "previousExecutionMillis": 191655
+    },
+    {
+      "seller": "0x3a59c0058d6f4d75887aadf6812855a75b9ef1fd",
+      "label": "Prompt-Forge",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt30-2026-09-05/expanded-original-sellers/0x3a59c0058d6f4d75887aadf6812855a75b9ef1fd/seller-input.json",
+      "provenWashVolumeRaw": "11156194466",
+      "totalSellerVolumeRaw": "11605934345",
+      "evidenceDigest": "0xd01d6533ee143b68c73f4b55c10cecfd927d6851af81350ba835963a9856c8dd",
+      "previousExecutionMillis": 165298
+    },
+    {
+      "seller": "0xc9cd64754b9c273522012526da15fee8520a772b",
+      "label": "Agent 53795",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0xc9cd64754b9c273522012526da15fee8520a772b.json",
+      "provenWashVolumeRaw": "428200000",
+      "totalSellerVolumeRaw": "428200000",
+      "evidenceDigest": "0x4a12aacdaad463dfb28bad843399db2d33e28d8de58e5ef1637ee0a02ae07575",
+      "previousExecutionMillis": 158843
+    },
+    {
+      "seller": "0x6f9b9e63d3f776d359eb2fb0a82d12ee496fbefe",
+      "label": "StrataCode",
+      "evidenceKind": "closed-loop",
+      "evidencePath": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt50-fixed-volume-authenticated-2026-09-05-run2/0x6f9b9e63d3f776d359eb2fb0a82d12ee496fbefe/expanded.witness.json",
+      "totalVolumePath": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt50-fixed-volume-authenticated-2026-09-05-run2/0x6f9b9e63d3f776d359eb2fb0a82d12ee496fbefe/total-volume-witness.json",
+      "provenWashVolumeRaw": "3921597042",
+      "totalSellerVolumeRaw": "14512873336",
+      "evidenceDigest": "0x322288a82b046365406c3c0778332e93b16dcc6fe35bc8cf712d26f9ada95b70",
+      "previousExecutionMillis": 142536
+    },
+    {
+      "seller": "0x0ecbde32e1dc6c3fb8aada176cea7954316e9696",
+      "label": "Agent 53781",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x0ecbde32e1dc6c3fb8aada176cea7954316e9696.json",
+      "provenWashVolumeRaw": "389000000",
+      "totalSellerVolumeRaw": "389000000",
+      "evidenceDigest": "0xd13027ca783213b1b68db286057532b56dec16dac03f71eddc0a0fe4225770f5",
+      "previousExecutionMillis": 141737
+    },
+    {
+      "seller": "0xc7e303a65f454c1ac3bd2a88e95e7fa5f6a6946a",
+      "label": "Agent 53625",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0xc7e303a65f454c1ac3bd2a88e95e7fa5f6a6946a.json",
+      "provenWashVolumeRaw": "560100000",
+      "totalSellerVolumeRaw": "560100000",
+      "evidenceDigest": "0xdf458357158a4ec290f16ec11f05fafe73318454c388b6e26861e8558cbef70b",
+      "previousExecutionMillis": 129470
+    },
+    {
+      "seller": "0x74d4ca0dcb2d9140da86dbf7bbe97eef7d4f2f72",
+      "label": "InferenceLab",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x74d4ca0dcb2d9140da86dbf7bbe97eef7d4f2f72.json",
+      "provenWashVolumeRaw": "4687961620",
+      "totalSellerVolumeRaw": "12012656168",
+      "evidenceDigest": "0xb9b9e2d1bd385704d0322362e2c84d04b93c18d1e33f1d6c85419b6b7b895003",
+      "previousExecutionMillis": 128664
+    },
+    {
+      "seller": "0xcccf2236260bfd0d65abc011563b4796b2040366",
+      "label": "Agent 53621",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0xcccf2236260bfd0d65abc011563b4796b2040366.json",
+      "provenWashVolumeRaw": "330600000",
+      "totalSellerVolumeRaw": "330600000",
+      "evidenceDigest": "0xa4cf0cbc29ee89e64a86d93c561b2e0551ab08eccca52b035dd8ac5c06867bad",
+      "previousExecutionMillis": 118493
+    },
+    {
+      "seller": "0x40f158cc85f06f272c704822e39943ef1dc168ae",
+      "label": "Agent 53619",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x40f158cc85f06f272c704822e39943ef1dc168ae.json",
+      "provenWashVolumeRaw": "340200000",
+      "totalSellerVolumeRaw": "340200000",
+      "evidenceDigest": "0x0e91068d93476795c9a405e39bfb0b4880e43b73e3a3c23a47b7a1f4aeb342a3",
+      "previousExecutionMillis": 114903
+    },
+    {
+      "seller": "0x85f64f9736aeb122e387779a80c5257ad43ba834",
+      "label": "Agent 53620",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x85f64f9736aeb122e387779a80c5257ad43ba834.json",
+      "provenWashVolumeRaw": "340300000",
+      "totalSellerVolumeRaw": "340300000",
+      "evidenceDigest": "0x59abc06951c852553ad6f7ccabed4ddeb440e32b8f2bf1728fde1352dab218ac",
+      "previousExecutionMillis": 114107
+    },
+    {
+      "seller": "0x94c3f5af394542cfa123f32e17a7a25feeed6758",
+      "label": "NoaxAI",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt30-2026-09-05/expanded-original-sellers/0x94c3f5af394542cfa123f32e17a7a25feeed6758/seller-input.json",
+      "provenWashVolumeRaw": "9781569372",
+      "totalSellerVolumeRaw": "10258688713",
+      "evidenceDigest": "0xb0f354fc3615971c6a726c187ec22e37da86668650f577cf638753a541110be1",
+      "previousExecutionMillis": 112139
+    },
+    {
+      "seller": "0xb88bcda463f6522d5406b935559f09b826cdc17c",
+      "label": "Agent 53618",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0xb88bcda463f6522d5406b935559f09b826cdc17c.json",
+      "provenWashVolumeRaw": "494000000",
+      "totalSellerVolumeRaw": "494000000",
+      "evidenceDigest": "0x238f1fbf19e497dfa4bfacd092ab1c1508fd2029e71950688396e38b024e4a05",
+      "previousExecutionMillis": 111290
+    },
+    {
+      "seller": "0x17cca44fd5c8d5a2e28b9645ec9977d46537c89b",
+      "label": "Agent 53617",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x17cca44fd5c8d5a2e28b9645ec9977d46537c89b.json",
+      "provenWashVolumeRaw": "488800000",
+      "totalSellerVolumeRaw": "488800000",
+      "evidenceDigest": "0xb8dcd51360279500b8365416d1f10d2e180a88bb4ecf6f8f7a76b1921854230a",
+      "previousExecutionMillis": 109823
+    },
+    {
+      "seller": "0xbd0cd45b7b486f312460e657701350fab953a3d2",
+      "label": "TokenShop",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0xbd0cd45b7b486f312460e657701350fab953a3d2.json",
+      "provenWashVolumeRaw": "5131629830",
+      "totalSellerVolumeRaw": "11639713190",
+      "evidenceDigest": "0xb4651070e68b275d75aa3d8886df2a05f3d87de7e1018228e35a72604a6ea9d5",
+      "previousExecutionMillis": 103373
+    },
+    {
+      "seller": "0x7adbe9474e067376da5dea2f757ea3eaa60dc915",
+      "label": "Argus AI",
+      "evidenceKind": "closed-loop",
+      "evidencePath": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt50-fixed-volume-authenticated-2026-09-05-argus/0x7adbe9474e067376da5dea2f757ea3eaa60dc915/expanded.witness.json",
+      "totalVolumePath": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt50-fixed-volume-authenticated-2026-09-05-argus/0x7adbe9474e067376da5dea2f757ea3eaa60dc915/total-volume-witness.json",
+      "provenWashVolumeRaw": "7307835420",
+      "totalSellerVolumeRaw": "11646564164",
+      "evidenceDigest": "0xa84fc7fca8bd41c99a4642cad3e5458711d7397c6afeadd1924529e33527b37f",
+      "previousExecutionMillis": 102104
+    },
+    {
+      "seller": "0x1f761c8d047c73e4de85f07f54b5ef4f01d8e3d0",
+      "label": "Agent 53796",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x1f761c8d047c73e4de85f07f54b5ef4f01d8e3d0.json",
+      "provenWashVolumeRaw": "434000000",
+      "totalSellerVolumeRaw": "434000000",
+      "evidenceDigest": "0xde0bae9a246ed6a574ded65b31f2a80a4cf02aa4fa76574480a615f114dec67b",
+      "previousExecutionMillis": 99677
+    },
+    {
+      "seller": "0x3639a405bd9a7f943b069e68e70dad28a9583bbc",
+      "label": "Agent 53604",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x3639a405bd9a7f943b069e68e70dad28a9583bbc.json",
+      "provenWashVolumeRaw": "277500000",
+      "totalSellerVolumeRaw": "277500000",
+      "evidenceDigest": "0xc8a2bb8f92c2690099e0b24e71c1bce31e749ca646e3de3950ace07081bfe728",
+      "previousExecutionMillis": 95331
+    },
+    {
+      "seller": "0x8923a4be978521e078e72b92077d59fe2c4deac8",
+      "label": "Agent 53603",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x8923a4be978521e078e72b92077d59fe2c4deac8.json",
+      "provenWashVolumeRaw": "283100000",
+      "totalSellerVolumeRaw": "283100000",
+      "evidenceDigest": "0x520eac4320a5ab645a96125717696ae5c4102110110c33c248d5323b38ef23ca",
+      "previousExecutionMillis": 94949
+    },
+    {
+      "seller": "0xe93d3458f07a4d3f93f321a234d55cf084a679af",
+      "label": "Agent 53634",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0xe93d3458f07a4d3f93f321a234d55cf084a679af.json",
+      "provenWashVolumeRaw": "225100000",
+      "totalSellerVolumeRaw": "225100000",
+      "evidenceDigest": "0xc4fee6561c3b6dc37b9c92c54a5eedb14455c32d1e7f06972f076196bef261cf",
+      "previousExecutionMillis": 88428
+    },
+    {
+      "seller": "0x1c98fa01dcc641e431346be0767bc7344e889761",
+      "label": "Agent 53782",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x1c98fa01dcc641e431346be0767bc7344e889761.json",
+      "provenWashVolumeRaw": "389900000",
+      "totalSellerVolumeRaw": "389900000",
+      "evidenceDigest": "0xa5abf0af521f06da16ab6db4a265e9aac65ad65cf081d949e912c2cd03c2e52a",
+      "previousExecutionMillis": 86372
+    },
+    {
+      "seller": "0x69f915d18ab913f0c86913a94c353b46a5e7baa4",
+      "label": "Agent 53629",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x69f915d18ab913f0c86913a94c353b46a5e7baa4.json",
+      "provenWashVolumeRaw": "244600000",
+      "totalSellerVolumeRaw": "244600000",
+      "evidenceDigest": "0x67ca852e11e330d6a322da2777c014b41650364ec151ec96bc28586e9617d933",
+      "previousExecutionMillis": 84166
+    },
+    {
+      "seller": "0xc92bc8c21a66b5b10fbfdbea8be56b8fee51d0ab",
+      "label": "Agent 53628",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0xc92bc8c21a66b5b10fbfdbea8be56b8fee51d0ab.json",
+      "provenWashVolumeRaw": "244400000",
+      "totalSellerVolumeRaw": "244400000",
+      "evidenceDigest": "0xda1e7f9f4cdcf118eb6bf5b1e5e00933f5a863abf78ef5486ab98a4a6d8dbcbe",
+      "previousExecutionMillis": 83933
+    },
+    {
+      "seller": "0xea8859617ffef68890b92b2df480458cd7a6581c",
+      "label": "Agent 53624",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0xea8859617ffef68890b92b2df480458cd7a6581c.json",
+      "provenWashVolumeRaw": "331800000",
+      "totalSellerVolumeRaw": "331800000",
+      "evidenceDigest": "0x7721e4360297b9e690f6125af5734fd1facfcba07357369ac5873d49ca88c713",
+      "previousExecutionMillis": 82079
+    },
+    {
+      "seller": "0xc70734320044e6a7934d97b58eaa2df7d102b0f0",
+      "label": "Agent 53639",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0xc70734320044e6a7934d97b58eaa2df7d102b0f0.json",
+      "provenWashVolumeRaw": "223300000",
+      "totalSellerVolumeRaw": "223300000",
+      "evidenceDigest": "0x03ba11e1f3e37191840dd97bbd5423c4c5f30ea136b59f9463fad11c00498dca",
+      "previousExecutionMillis": 81400
+    },
+    {
+      "seller": "0x3c5babfb591d405625dffda1635ea4f077d64838",
+      "label": "Agent 53642",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x3c5babfb591d405625dffda1635ea4f077d64838.json",
+      "provenWashVolumeRaw": "225600000",
+      "totalSellerVolumeRaw": "225600000",
+      "evidenceDigest": "0x79eadf69a2e388d78a59f9730f93738ad8aa5c91754c3297bcbbb144ec0f7dd5",
+      "previousExecutionMillis": 79846
+    },
+    {
+      "seller": "0x41a609faf354500f5e4af4501b05f045bf0de985",
+      "label": "ClaudeNode",
+      "evidenceKind": "closed-loop",
+      "evidencePath": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt50-fixed-volume-authenticated-2026-09-05-run2/0x41a609faf354500f5e4af4501b05f045bf0de985/expanded.witness.json",
+      "totalVolumePath": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt50-fixed-volume-authenticated-2026-09-05-run2/0x41a609faf354500f5e4af4501b05f045bf0de985/total-volume-witness.json",
+      "provenWashVolumeRaw": "2469402792",
+      "totalSellerVolumeRaw": "2489462822",
+      "evidenceDigest": "0x87013ab94380d19bd4e605c9b30496ea8854f4a569f036e513d53e791f7b99e1",
+      "previousExecutionMillis": 78499
+    },
+    {
+      "seller": "0x83e57cbffc0d789f57c6ae0b0326385ad715c00f",
+      "label": "Agent 53640",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x83e57cbffc0d789f57c6ae0b0326385ad715c00f.json",
+      "provenWashVolumeRaw": "222600000",
+      "totalSellerVolumeRaw": "222600000",
+      "evidenceDigest": "0xfe2f89166d2185a2a2bb43c791ba754e19df95044cfc12981d292e44adfa0b93",
+      "previousExecutionMillis": 77874
+    },
+    {
+      "seller": "0xa06fda7beb9800a442c7f14e27b5b6fb2ab3a89e",
+      "label": "GPU-Garden",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0xa06fda7beb9800a442c7f14e27b5b6fb2ab3a89e.json",
+      "provenWashVolumeRaw": "4511325039",
+      "totalSellerVolumeRaw": "12720282591",
+      "evidenceDigest": "0xd66d56942455ea9871776adb2e3f8a960a2c4ec357ff2e3b03c987a772167651",
+      "previousExecutionMillis": 77444
+    },
+    {
+      "seller": "0xd63409b6520b114d4666d8568e925653eae66a30",
+      "label": "Agent 53622",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0xd63409b6520b114d4666d8568e925653eae66a30.json",
+      "provenWashVolumeRaw": "330500000",
+      "totalSellerVolumeRaw": "330500000",
+      "evidenceDigest": "0x482165f8a83a932bceaf7d20104453ca4f81f63353b0883a4889e9500a859c3e",
+      "previousExecutionMillis": 77336
+    },
+    {
+      "seller": "0x918e2dbcc1243101d6fa212d0c75b30ec4626bf9",
+      "label": "Agent 53661",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x918e2dbcc1243101d6fa212d0c75b30ec4626bf9.json",
+      "provenWashVolumeRaw": "211500000",
+      "totalSellerVolumeRaw": "211500000",
+      "evidenceDigest": "0x74315094c94881c5db9f1b467af996960710a122076bd44f36356abab71a5596",
+      "previousExecutionMillis": 76864
+    },
+    {
+      "seller": "0x97a19f462f880c2cfb768dea465dc1a0eb08ad33",
+      "label": "Agent 53623",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x97a19f462f880c2cfb768dea465dc1a0eb08ad33.json",
+      "provenWashVolumeRaw": "326500000",
+      "totalSellerVolumeRaw": "326500000",
+      "evidenceDigest": "0x36cc017e92ad59c07197f26537103c3d9a184c234387edd9f795b42b949bb0bd",
+      "previousExecutionMillis": 75744
+    },
+    {
+      "seller": "0x05322ba8e1ae2c134d4bf20bbd21b435ae6cd098",
+      "label": "Agent 53641",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x05322ba8e1ae2c134d4bf20bbd21b435ae6cd098.json",
+      "provenWashVolumeRaw": "225700000",
+      "totalSellerVolumeRaw": "225700000",
+      "evidenceDigest": "0xda98868abfa9c0e35b6d8429f1d83fd4fdbc44b552af4dcce5f93932e3611958",
+      "previousExecutionMillis": 69645
+    },
+    {
+      "seller": "0xda96465c5ff412bb13a9b919a3247a681f7528f0",
+      "label": "surplus-provider",
+      "evidenceKind": "closed-loop",
+      "evidencePath": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt50-fixed-volume-authenticated-2026-09-05-run2/0xda96465c5ff412bb13a9b919a3247a681f7528f0/expanded.witness.json",
+      "totalVolumePath": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt50-fixed-volume-authenticated-2026-09-05-run2/0xda96465c5ff412bb13a9b919a3247a681f7528f0/total-volume-witness.json",
+      "provenWashVolumeRaw": "2427239551",
+      "totalSellerVolumeRaw": "3294542631",
+      "evidenceDigest": "0x773ab0380d10a3d3dfc5924299ee6909c9599369ded855092dc1e9d62ebf77b0",
+      "previousExecutionMillis": 67725
+    },
+    {
+      "seller": "0x40485259c7dd469f171d0789fb6597c07e32be0e",
+      "label": "Agent 53674",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x40485259c7dd469f171d0789fb6597c07e32be0e.json",
+      "provenWashVolumeRaw": "179600000",
+      "totalSellerVolumeRaw": "179600000",
+      "evidenceDigest": "0x5296792a520c4a677ec573531d0bff5ee74e4af02cb72a45b6609c32ad1a7209",
+      "previousExecutionMillis": 60713
+    },
+    {
+      "seller": "0x1982cb91d172e4064ea0eb65085234fcd9f2a40f",
+      "label": "Agent 53609",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x1982cb91d172e4064ea0eb65085234fcd9f2a40f.json",
+      "provenWashVolumeRaw": "237400000",
+      "totalSellerVolumeRaw": "237400000",
+      "evidenceDigest": "0x56240e855be67a0802aff921ea54efa1f0c07cbc8c5a0e4363507b335799049b",
+      "previousExecutionMillis": 56128
+    },
+    {
+      "seller": "0xb65de8dd31d0967a19c7e9f398fc8a4cc3060abf",
+      "label": "Agent 53610",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0xb65de8dd31d0967a19c7e9f398fc8a4cc3060abf.json",
+      "provenWashVolumeRaw": "239600000",
+      "totalSellerVolumeRaw": "239600000",
+      "evidenceDigest": "0x26a4dc2531275685468db52043f4342efd75e47e05599633defa37e8a19d6da5",
+      "previousExecutionMillis": 55805
+    },
+    {
+      "seller": "0x8fb7289428d6b3e3f253294c14d1bfaea7d6c05b",
+      "label": "Agent 53644",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x8fb7289428d6b3e3f253294c14d1bfaea7d6c05b.json",
+      "provenWashVolumeRaw": "224200000",
+      "totalSellerVolumeRaw": "224200000",
+      "evidenceDigest": "0x33c068cf0f6f231a0939c1d5a4f389c25e31e59be99e473e83371f3be26de9a4",
+      "previousExecutionMillis": 53480
+    },
+    {
+      "seller": "0x5b281ff194f7fd3f68e9379a7d433c752013024f",
+      "label": "Agent 53643",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x5b281ff194f7fd3f68e9379a7d433c752013024f.json",
+      "provenWashVolumeRaw": "224300000",
+      "totalSellerVolumeRaw": "224300000",
+      "evidenceDigest": "0xc7d0da05266968e6ac635f26e814384499ebfcd26f6314a22f76a3d5f4774752",
+      "previousExecutionMillis": 53451
+    },
+    {
+      "seller": "0x3fdb59a36204f0792d3d051ef4a26b7bc5160ec7",
+      "label": "Agent 53633",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x3fdb59a36204f0792d3d051ef4a26b7bc5160ec7.json",
+      "provenWashVolumeRaw": "225000000",
+      "totalSellerVolumeRaw": "225000000",
+      "evidenceDigest": "0xd5d0cc531c1136effc0dd6cdf4720bfa609ae0e78ecb06ee6bff05f3de56348f",
+      "previousExecutionMillis": 53426
+    },
+    {
+      "seller": "0x8d9ddb7ae530fde5c6c811cedd893b8028fe41f4",
+      "label": "Agent 53615",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x8d9ddb7ae530fde5c6c811cedd893b8028fe41f4.json",
+      "provenWashVolumeRaw": "218500000",
+      "totalSellerVolumeRaw": "218500000",
+      "evidenceDigest": "0x3c412c304022a49b8338de57ddac1eaf07b35025ef94407252efe0beb6b84829",
+      "previousExecutionMillis": 52585
+    },
+    {
+      "seller": "0x89118d485aab2f427bf4d9a44b09275222b1e4b3",
+      "label": "Agent 53662",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x89118d485aab2f427bf4d9a44b09275222b1e4b3.json",
+      "provenWashVolumeRaw": "211500000",
+      "totalSellerVolumeRaw": "211500000",
+      "evidenceDigest": "0x6976cbe7559ef83c8f3de04bc18962dd8c5b5ef628aba0a2f14e775b60868c31",
+      "previousExecutionMillis": 49912
+    },
+    {
+      "seller": "0x087800d22b7da6dcfef347f1dac6a9e6b7493e9e",
+      "label": "Agent 53645",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x087800d22b7da6dcfef347f1dac6a9e6b7493e9e.json",
+      "provenWashVolumeRaw": "101900000",
+      "totalSellerVolumeRaw": "101900000",
+      "evidenceDigest": "0xf61706bfda10182bce9cc2ce64398819ea7dbb88dbfefa106ce75faa4fb1110c",
+      "previousExecutionMillis": 46083
+    },
+    {
+      "seller": "0x20e7fb440a5ad18f7b9bae09ae51e806cde38b25",
+      "label": "Agent 53906",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x20e7fb440a5ad18f7b9bae09ae51e806cde38b25.json",
+      "provenWashVolumeRaw": "127300000",
+      "totalSellerVolumeRaw": "127300000",
+      "evidenceDigest": "0xe05339b5a28438e88a3e9c9aadab50b813ff197548d5949a7539f0de2c8e1cb9",
+      "previousExecutionMillis": 42333
+    },
+    {
+      "seller": "0x4581213a7a271c2424427fe4a991dd5ed7f65492",
+      "label": "Agent 53673",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x4581213a7a271c2424427fe4a991dd5ed7f65492.json",
+      "provenWashVolumeRaw": "179500000",
+      "totalSellerVolumeRaw": "179500000",
+      "evidenceDigest": "0x3fa1cf1167b8721585d5b64e4d1085114a1418d19eb225e48354143093c4bead",
+      "previousExecutionMillis": 42037
+    },
+    {
+      "seller": "0x8c0be23fbf68d6c317addafd59b1dfb42ea6806b",
+      "label": "Agent 53905",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x8c0be23fbf68d6c317addafd59b1dfb42ea6806b.json",
+      "provenWashVolumeRaw": "127300000",
+      "totalSellerVolumeRaw": "127300000",
+      "evidenceDigest": "0x2e65cd0d59fcb2dc806323f904813061ac93a824443e869b5fb72860cd4d0460",
+      "previousExecutionMillis": 30227
+    },
+    {
+      "seller": "0x6cedcd162ce26ea07df8562be548fd0597526454",
+      "label": "Agent 53646",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x6cedcd162ce26ea07df8562be548fd0597526454.json",
+      "provenWashVolumeRaw": "101900000",
+      "totalSellerVolumeRaw": "101900000",
+      "evidenceDigest": "0x361d7ba78d6f77814f13518c56f6f172b136720a085b33df0c1095e4e7ad63b0",
+      "previousExecutionMillis": 26106
+    },
+    {
+      "seller": "0x7877aa0c29f7c80a9a46bfd9c05dac8126471ff2",
+      "label": "antseed-violet-wren-1ff2",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x7877aa0c29f7c80a9a46bfd9c05dac8126471ff2.json",
+      "provenWashVolumeRaw": "44000000",
+      "totalSellerVolumeRaw": "46795968",
+      "evidenceDigest": "0xe3d404ad24f4cd41ff753cd92ba4aabd9d79c1c6cf5e401d36741367fbbfffa0",
+      "previousExecutionMillis": 14182
+    },
+    {
+      "seller": "0x4cf31b431f7559400dcd1269a787dd55d291ca49",
+      "label": "Agent 53612",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x4cf31b431f7559400dcd1269a787dd55d291ca49.json",
+      "provenWashVolumeRaw": "37500000",
+      "totalSellerVolumeRaw": "37500000",
+      "evidenceDigest": "0xb6ecd3d8858fd22e757d50aabcc175647920f7bd996f6c87434e0f9e36565624",
+      "previousExecutionMillis": 11360
+    },
+    {
+      "seller": "0x3ae220b8c315111111249a52296aeb1dd69f972d",
+      "label": "Agent 53613",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x3ae220b8c315111111249a52296aeb1dd69f972d.json",
+      "provenWashVolumeRaw": "19200000",
+      "totalSellerVolumeRaw": "19200000",
+      "evidenceDigest": "0xe949b893091ff5e9e5c8a80f5bdcb7705d8c0faf0a45a63c4a7ec3f98f6efcf0",
+      "previousExecutionMillis": 8138
+    },
+    {
+      "seller": "0x422c3faacdedfd0dea33705ea0000008f9a02e48",
+      "label": "Agent 53611",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x422c3faacdedfd0dea33705ea0000008f9a02e48.json",
+      "provenWashVolumeRaw": "20500000",
+      "totalSellerVolumeRaw": "20500000",
+      "evidenceDigest": "0x54d5d88bc22cca45ec160109ef1a08ccc5bfc57eac4955ce2756d473b3b2a7e2",
+      "previousExecutionMillis": 8027
+    },
+    {
+      "seller": "0x22a856f3aa4080b0eaeebfd7dca97c93b1618e80",
+      "label": "Agent 51196",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x22a856f3aa4080b0eaeebfd7dca97c93b1618e80.json",
+      "provenWashVolumeRaw": "10200000",
+      "totalSellerVolumeRaw": "10200000",
+      "evidenceDigest": "0xa282d43c545f76595ff57d1d8e2864a414312878c4822c7718a3de0f943bd83d",
+      "previousExecutionMillis": 5702
+    },
+    {
+      "seller": "0x22564606c08e09bef5d8addedefd4c2491a34ee9",
+      "label": "Agent 51303",
+      "sellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/seller-witnesses/0x22564606c08e09bef5d8addedefd4c2491a34ee9.json",
+      "provenWashVolumeRaw": "10200000",
+      "totalSellerVolumeRaw": "10200000",
+      "evidenceDigest": "0xa604e4b042610b17de8c04cd83bd8426ddcedc3b5fce90f3a3dcd1224ab8bdf5",
+      "previousExecutionMillis": 5638
+    }
+  ]
+}

@@ -67,6 +67,8 @@ struct PlannedEvidence {
     relay_forward: Option<Box<PlannedEvidence>>,
     #[serde(default)]
     funder_receipt: Option<Box<PlannedEvidence>>,
+    #[serde(default)]
+    hops: Option<Vec<PlannedEvidence>>,
 }
 
 #[derive(Default)]
@@ -499,6 +501,9 @@ fn atomic_evidence(entry: &PlannedEvidence) -> Vec<&PlannedEvidence> {
     if entry.evidence_type != "RELAY_PATH" {
         return vec![entry];
     }
+    if let Some(hops) = &entry.hops {
+        return hops.iter().collect();
+    }
     [
         entry.seller_payment.as_deref(),
         entry.relay_forward.as_deref(),
@@ -588,6 +593,7 @@ mod tests {
             seller_payment: None,
             relay_forward: None,
             funder_receipt: None,
+            hops: None,
         };
         assert!(is_pair_deposit(&entry, &[address(1), address(2)]));
         entry.deposit_log_index = None;
@@ -607,6 +613,7 @@ mod tests {
             seller_payment: None,
             relay_forward: None,
             funder_receipt: None,
+            hops: None,
         };
         let relay = PlannedEvidence {
             evidence_type: "RELAY_PATH".into(),
@@ -619,6 +626,7 @@ mod tests {
             seller_payment: Some(Box::new(hop("first"))),
             relay_forward: Some(Box::new(hop("second"))),
             funder_receipt: Some(Box::new(hop("third"))),
+            hops: None,
         };
         let expanded = atomic_evidence(&relay);
         assert_eq!(
@@ -641,5 +649,35 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["first", "second"]
         );
+    }
+
+    #[test]
+    fn planner_hop_arrays_deserialize_and_materialize_in_order() {
+        for hop_count in [2, 3, 9] {
+            let hops = (0..hop_count)
+                .map(|index| {
+                    serde_json::json!({
+                        "evidenceType": "RELAY_FORWARD",
+                        "blockNumber": 100 + index,
+                        "transactionIndex": 0,
+                        "logIndex": index,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let entry: PlannedEvidence = serde_json::from_value(serde_json::json!({
+                "evidenceType": "RELAY_PATH",
+                "hops": hops,
+            }))
+            .unwrap();
+            let expanded = atomic_evidence(&entry);
+            assert_eq!(expanded.len(), hop_count as usize);
+            assert_eq!(
+                expanded
+                    .iter()
+                    .map(|hop| hop.block_number.unwrap())
+                    .collect::<Vec<_>>(),
+                (100..100 + hop_count).collect::<Vec<_>>()
+            );
+        }
     }
 }

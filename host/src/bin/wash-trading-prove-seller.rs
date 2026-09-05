@@ -43,36 +43,92 @@ fn main() -> Result<()> {
         .context("invalid --seller address")?;
     let output = PathBuf::from(required(&args, "--output")?);
     let seller_witness = optional(&args, "--seller-witness").map(PathBuf::from);
+    let seller_input = load_seller_input(&args, seller)?;
+    let source_claim_ids = [match &seller_input.evidence {
+        SellerEvidence::ClosedLoop(evidence) => evidence.source_claim_id,
+        SellerEvidence::Reciprocal(evidence) => evidence.source_claim_id,
+    }];
+    run_seller_proof(
+        &args,
+        mode,
+        seller,
+        output,
+        seller_witness,
+        seller_input,
+        source_claim_ids,
+    )
+}
+
+fn validate_input_arguments(args: &[String]) -> Result<()> {
+    if args
+        .iter()
+        .any(|argument| argument.starts_with("--seller-input="))
+    {
+        bail!("use --seller-input path as separate arguments");
+    }
+    if args
+        .iter()
+        .filter(|argument| argument.as_str() == "--seller-input")
+        .count()
+        > 1
+    {
+        bail!("exactly one --seller-input is allowed");
+    }
+    if args.iter().any(|argument| argument == "--seller-input") {
+        let path = required(args, "--seller-input")?;
+        if path.starts_with("--") || path.is_empty() {
+            bail!("--seller-input requires a path");
+        }
+        if args.iter().any(|argument| {
+            ["--evidence", "--claim", "--total-volume-witness"]
+                .iter()
+                .any(|flag| argument == flag || argument.starts_with(&format!("{flag}=")))
+        }) {
+            bail!("--seller-input cannot be combined with evidence or total-volume overrides");
+        }
+    }
+    Ok(())
+}
+
+fn load_seller_input(args: &[String], seller: Address) -> Result<SellerProofInput> {
+    validate_input_arguments(args)?;
+    if let Some(path) = optional(args, "--seller-input") {
+        let bytes = fs::read(&path).with_context(|| format!("read seller input {path}"))?;
+        let input: SellerProofInput = serde_json::from_slice(&bytes)
+            .with_context(|| format!("decode seller input {path}"))?;
+        if input.seller != seller {
+            bail!("seller input does not match --seller");
+        }
+        return Ok(input);
+    }
     let evidence_spec = parse_evidence_spec(&args)?;
     let bytes = fs::read(&evidence_spec.witness)
         .with_context(|| format!("read {}", evidence_spec.witness.display()))?;
-    let (evidence, (period_start_block, period_end_block), source_claim_id) =
-        match evidence_spec.kind.as_str() {
-            "closed-loop" => {
-                let input: ClosedLoopInput = serde_json::from_slice(&bytes)
-                    .with_context(|| format!("decode {}", evidence_spec.witness.display()))?;
-                let claim_period = (input.period_start_block, input.period_end_block);
-                let source_claim_id = input.source_claim_id;
-                (
-                    SellerEvidence::ClosedLoop(input),
-                    claim_period,
-                    source_claim_id,
-                )
-            }
-            "reciprocal" => {
-                let input: ReciprocalInput = serde_json::from_slice(&bytes)
-                    .with_context(|| format!("decode {}", evidence_spec.witness.display()))?;
-                let claim_period = (input.period_start_block, input.period_end_block);
-                let source_claim_id = input.source_claim_id;
-                (
-                    SellerEvidence::Reciprocal(input),
-                    claim_period,
-                    source_claim_id,
-                )
-            }
-            kind => bail!("unsupported evidence kind {kind}"),
-        };
-    let source_claim_ids = [source_claim_id];
+    let (evidence, (period_start_block, period_end_block), _) = match evidence_spec.kind.as_str() {
+        "closed-loop" => {
+            let input: ClosedLoopInput = serde_json::from_slice(&bytes)
+                .with_context(|| format!("decode {}", evidence_spec.witness.display()))?;
+            let claim_period = (input.period_start_block, input.period_end_block);
+            let source_claim_id = input.source_claim_id;
+            (
+                SellerEvidence::ClosedLoop(input),
+                claim_period,
+                source_claim_id,
+            )
+        }
+        "reciprocal" => {
+            let input: ReciprocalInput = serde_json::from_slice(&bytes)
+                .with_context(|| format!("decode {}", evidence_spec.witness.display()))?;
+            let claim_period = (input.period_start_block, input.period_end_block);
+            let source_claim_id = input.source_claim_id;
+            (
+                SellerEvidence::Reciprocal(input),
+                claim_period,
+                source_claim_id,
+            )
+        }
+        kind => bail!("unsupported evidence kind {kind}"),
+    };
     let total_volume = match optional(&args, "--total-volume-witness") {
         Some(path) => {
             let bytes =
@@ -82,13 +138,24 @@ fn main() -> Result<()> {
         }
         None => fetch_total_volume_witness(seller, period_end_block)?,
     };
-    let seller_input = SellerProofInput {
+    Ok(SellerProofInput {
         seller,
         period_start_block,
         period_end_block,
         total_volume,
         evidence,
-    };
+    })
+}
+
+fn run_seller_proof(
+    args: &[String],
+    mode: Mode,
+    seller: Address,
+    output: PathBuf,
+    seller_witness: Option<PathBuf>,
+    seller_input: SellerProofInput,
+    source_claim_ids: [B256; 1],
+) -> Result<()> {
     let native_start = Instant::now();
     let verified = verify_seller(&seller_input).map_err(anyhow::Error::msg)?;
     let native_duration = native_start.elapsed();
@@ -105,11 +172,12 @@ fn main() -> Result<()> {
             "kind": "antseed-wash-trading-seller-witness",
             "proofArchitecture": "direct-seller-v1",
             "evidenceFormat": "single-bundle-v1",
+            "alphaReturnBps": wash_predicate::ALPHA_RETURN_BPS,
             "securityMode": "development",
             "proverNetworkSubmitted": false,
             "seller": seller,
-            "periodStartBlock": period_start_block,
-            "periodEndBlock": period_end_block,
+            "periodStartBlock": seller_input.period_start_block,
+            "periodEndBlock": seller_input.period_end_block,
             "claimCount": source_claim_ids.len(),
             "sourceClaimIds": source_claim_ids,
             "provenWashVolumeRaw": verified.journal.proven_wash_volume.to_string(),
@@ -142,6 +210,7 @@ fn main() -> Result<()> {
     let execution_start = Instant::now();
     let (executed_public_values, report) = light
         .execute(elf.clone(), execution_stdin)
+        .calculate_gas(true)
         .deferred_proof_verification(false)
         .run()?;
     let execution_duration = execution_start.elapsed();
@@ -149,6 +218,7 @@ fn main() -> Result<()> {
         bail!("seller guest public values differ from native verification");
     }
     let instruction_count = report.total_instruction_count();
+    let prover_gas_units = report.gas().context("execution did not report prover gas units")?;
 
     if mode == Mode::ExecuteOnly {
         let result = proof_artifact(
@@ -163,6 +233,7 @@ fn main() -> Result<()> {
             native_duration.as_millis(),
             execution_duration.as_millis(),
             instruction_count,
+            prover_gas_units,
             "development",
             false,
         );
@@ -184,6 +255,7 @@ fn main() -> Result<()> {
             (proof, None, "development")
         }
         Mode::Production => {
+            validate_prover_gas_limit(&args, prover_gas_units)?;
             let mut proving_stdin = SP1Stdin::new();
             proving_stdin.write(&seller_input_bytes);
             if !args.iter().any(|value| value == "--confirm-production") {
@@ -203,7 +275,12 @@ fn main() -> Result<()> {
                     &expected_public_values,
                 )?
             } else {
-                let request_id = client.request_groth16(&proving_key, proving_stdin)?;
+                let request_id = client.request_groth16(
+                    &proving_key,
+                    proving_stdin,
+                    instruction_count,
+                    prover_gas_units,
+                )?;
                 write_request_checkpoint(
                     &checkpoint_path,
                     seller,
@@ -247,6 +324,7 @@ fn main() -> Result<()> {
         native_duration.as_millis(),
         execution_duration.as_millis(),
         instruction_count,
+        prover_gas_units,
         security_mode,
         true,
     );
@@ -256,6 +334,18 @@ fn main() -> Result<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn validate_prover_gas_limit(args: &[String], measured: u64) -> Result<()> {
+    if args.iter().any(|argument| argument == "--max-prover-gas") {
+        let maximum: u64 = required(args, "--max-prover-gas")?
+            .parse()
+            .context("invalid --max-prover-gas")?;
+        if maximum == 0 || measured > maximum {
+            bail!("measured {measured} PGU exceeds approved limit {maximum}");
+        }
+    }
+    Ok(())
+}
+
 fn proof_artifact(
     verified: &wash_predicate::VerifiedSeller,
     source_claim_ids: &[B256],
@@ -268,6 +358,7 @@ fn proof_artifact(
     native_verification_millis: u128,
     execution_millis: u128,
     instruction_count: u64,
+    prover_gas_units: u64,
     security_mode: &str,
     proved: bool,
 ) -> serde_json::Value {
@@ -276,6 +367,7 @@ fn proof_artifact(
         "kind": "antseed-wash-trading-seller-proof",
         "proofArchitecture": "direct-seller-v1",
         "evidenceFormat": "single-bundle-v1",
+        "alphaReturnBps": wash_predicate::ALPHA_RETURN_BPS,
         "securityMode": security_mode,
         "proverNetworkSubmitted": security_mode == "production",
         "schemaVersion": verified.journal.schema_version,
@@ -308,6 +400,7 @@ fn proof_artifact(
         "nativeVerificationMillis": native_verification_millis,
         "executionMillis": execution_millis,
         "instructionCount": instruction_count,
+        "proverGasUnits": prover_gas_units.to_string(),
         "proved": proved,
         "verified": true,
     })
@@ -522,6 +615,53 @@ fn optional(args: &[String], flag: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enforces_measured_prover_gas_before_requesting() {
+        assert!(validate_prover_gas_limit(&["--max-prover-gas".into(), "100".into()], 100).is_ok());
+        for value in ["0", "99", "-1", "invalid"] {
+            assert!(validate_prover_gas_limit(&["--max-prover-gas".into(), value.into()], 100).is_err());
+        }
+        assert!(validate_prover_gas_limit(&["--max-prover-gas".into()], 100).is_err());
+    }
+
+    #[test]
+    fn saved_input_rejects_ambiguous_overrides() {
+        for arguments in [
+            vec!["--seller-input"],
+            vec!["--seller-input", "--development"],
+            vec!["--seller-input=input.json"],
+            vec![
+                "--seller-input",
+                "input.json",
+                "--seller-input",
+                "other.json",
+            ],
+            vec![
+                "--seller-input",
+                "input.json",
+                "--evidence",
+                "closed-loop:other.json",
+            ],
+            vec![
+                "--seller-input",
+                "input.json",
+                "--total-volume-witness",
+                "other.json",
+            ],
+            vec![
+                "--seller-input",
+                "input.json",
+                "--claim=closed-loop:other.json",
+            ],
+        ] {
+            assert!(validate_input_arguments(
+                &arguments.into_iter().map(str::to_owned).collect::<Vec<_>>()
+            )
+            .is_err());
+        }
+        assert!(validate_input_arguments(&["--seller-input".into(), "input.json".into()]).is_ok());
+    }
 
     #[test]
     fn accepts_exactly_one_evidence_bundle() {

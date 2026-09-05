@@ -1,6 +1,7 @@
 import { mkdir, open, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { finalizeBundle, finalizeClaim } from "./proof-bundle.mjs";
+import { ALPHA_FUND_BPS, ALPHA_RETURN_BPS, EPSILON_LEDGER_BPS, RHO_HOP_BPS as MIN_RELAY_RETAINED_BPS, T_PATH_SECONDS as MAX_RELAY_SECONDS, MAX_RETURN_PATHS, PREDICATE_POLICY, PREDICATE_POLICY_HASH, isCurrentPolicyCheckpoint } from "./predicate-policy.mjs";
 import {
   requiredReturnRaw,
   returnPathCreditRaw,
@@ -10,11 +11,6 @@ import {
 export const HISTORICAL_START_BLOCK = 44_469_557;
 export const MINIMUM_RECIPROCAL_VOLUME_BPS = 8_000n;
 
-const MAX_RELAY_SECONDS = 259_200;
-const MIN_RELAY_RETAINED_BPS = 2_800n;
-const EPSILON_LEDGER_BPS = 500n;
-const ALPHA_RETURN_BPS = 2_000n;
-const MAX_RETURN_PATHS = 512;
 const BUYERS_SELECTOR = "0x97a993aa";
 
 class RpcTransportError extends Error {
@@ -88,6 +84,8 @@ export async function planProofBundle(bundle, {
   return {
     version: 2,
     kind: "antseed-wash-trading-proof-plan",
+    predicatePolicy: PREDICATE_POLICY,
+    predicatePolicyHash: PREDICATE_POLICY_HASH,
     bundleVersion: bundle.version,
     chainId: bundle.chainId,
     reportRoot: bundle.reportRoot,
@@ -107,7 +105,7 @@ export async function planProofBundle(bundle, {
 async function readPlanCheckpoint(directory, claim, bundle) {
   try {
     const checkpoint = JSON.parse(await readFile(`${directory}/${claim.claimId}.json`, "utf8"));
-    if (checkpoint.version !== 2
+    if (!isCurrentPolicyCheckpoint(checkpoint)
       || checkpoint.claimId !== claim.claimId
       || checkpoint.reportRoot !== bundle.reportRoot) return null;
     return checkpoint.plan;
@@ -119,7 +117,8 @@ async function readPlanCheckpoint(directory, claim, bundle) {
 
 async function writePlanCheckpoint(directory, claim, plan, bundle) {
   await writeFile(`${directory}/${claim.claimId}.json`, `${JSON.stringify({
-    version: 2,
+    version: 3,
+    predicatePolicyHash: PREDICATE_POLICY_HASH,
     claimId: claim.claimId,
     reportRoot: bundle.reportRoot,
     plan,
@@ -161,10 +160,11 @@ function uniqueRpcRequests(dependencies, method) {
   return [...requests.values()];
 }
 
-export function planClaim(claim, dependencies, bundle, { ledgerBalances = null, allowLedgerSelection = false } = {}) {
+export function planClaim(claim, dependencies, bundle, { ledgerBalances = null, allowLedgerSelection = false, returnTargetBps = ALPHA_RETURN_BPS, maximizeVolume = false } = {}) {
+  requiredReturnRaw(0, returnTargetBps);
   if (claim.type === "P0_RECIPROCAL") return planReciprocal(claim, dependencies, bundle);
   if (claim.type !== "P0_CLOSED_LOOP") throw new Error(`${claim.claimId}: unsupported claim type ${claim.type}`);
-  return planCohort(claim, dependencies, bundle, ledgerBalances, allowLedgerSelection);
+  return planCohort(claim, dependencies, bundle, ledgerBalances, allowLedgerSelection, BigInt(returnTargetBps), maximizeVolume);
 }
 
 function authenticationGroup(blockNumber) {
@@ -289,10 +289,11 @@ export async function resolveDependency(dependency, bundle, callRpc) {
   return resolvedLog;
 }
 
-function planCohort(claim, dependencies, bundle, ledgerBalances, allowLedgerSelection) {
-  const strategyCandidates = buildCohortStrategies(claim, dependencies, bundle.period, ledgerBalances, allowLedgerSelection);
+function planCohort(claim, dependencies, bundle, ledgerBalances, allowLedgerSelection, returnTargetBps, maximizeVolume) {
+  const strategyCandidates = buildCohortStrategies(claim, dependencies, bundle.period, ledgerBalances, allowLedgerSelection, returnTargetBps);
   if (strategyCandidates.length === 0) throw new Error(`${claim.claimId}: no valid cohort funding strategy; ${cohortDiagnostics(claim, dependencies)}`);
-  strategyCandidates.sort(compareCost);
+  strategyCandidates.sort((left, right) => maximizeVolume && left.volumeRaw !== right.volumeRaw
+    ? left.volumeRaw > right.volumeRaw ? -1 : 1 : compareCost(left, right));
   const selected = strategyCandidates[0];
   const totals = dependencies.filter((entry) => entry.evidenceType === "TOTAL_SETTLEMENT");
   const evidence = [...selected.closure.evidence, ...selected.funding, ...selected.settlements, ...totals];
@@ -308,6 +309,8 @@ function planCohort(claim, dependencies, bundle, ledgerBalances, allowLedgerSele
     closureType: selected.closure.evidenceClass,
     optimizationMode: selected.optimizationMode,
     fundingDiagnostics: selected.fundingDiagnostics,
+    returnTargetBps: Number(returnTargetBps),
+    selectionObjective: maximizeVolume ? "maximize-volume-then-minimize-cost" : "minimize-cost",
   }, bundle);
 }
 
@@ -319,7 +322,7 @@ function cohortDiagnostics(claim, dependencies) {
   return `usdcFundings=${fundings.length},buyers=${fundedBuyers.size},postFundingVolumeRaw=${postFundingVolume}`;
 }
 
-function buildCohortStrategies(claim, dependencies, period, ledgerBalances = null, allowLedgerSelection = false) {
+function buildCohortStrategies(claim, dependencies, period, ledgerBalances = null, allowLedgerSelection = false, returnTargetBps = ALPHA_RETURN_BPS) {
   const fundings = dependencies.filter((entry) => entry.evidenceType === "USDC_FUNDING" && claim.approvedBuyers.includes(entry.buyer) && claim.approvedFunders.includes(entry.funder));
   const settlements = dependencies.filter((entry) => entry.evidenceType === "SETTLEMENT" && claim.approvedBuyers.includes(entry.buyer));
   const funderGroups = [...new Set(fundings.map((entry) => entry.funder))].sort();
@@ -332,12 +335,13 @@ function buildCohortStrategies(claim, dependencies, period, ledgerBalances = nul
       closure,
       allowLedgerSelection ? null : claim.metrics?.qualifiedVolumeRaw,
       ledgerBalances,
+      returnTargetBps,
     );
     return candidate ? [candidate] : [];
   });
 }
 
-function buildCohortStrategy(fundings, settlements, closure, approvedVolumeRaw, ledgerBalances) {
+function buildCohortStrategy(fundings, settlements, closure, approvedVolumeRaw, ledgerBalances, returnTargetBps) {
   const fundingByBuyer = new Map();
   for (const funding of fundings) {
     if (!fundingByBuyer.has(funding.buyer)) fundingByBuyer.set(funding.buyer, []);
@@ -353,14 +357,14 @@ function buildCohortStrategy(fundings, settlements, closure, approvedVolumeRaw, 
   if (closure.evidence.length > 0) {
     const targetReturnRaw = approvedVolumeRaw == null
       ? closure.evidence.reduce((total, entry) => total + returnPathCreditRaw(entry), 0n)
-      : requiredReturnRaw(approvedVolumeRaw);
+      : requiredReturnRaw(approvedVolumeRaw, returnTargetBps);
     const selectedClosure = selectReturnEvidence(closure.evidence, { requiredRaw: targetReturnRaw });
     if (approvedVolumeRaw != null && !selectedClosure.complete) return null;
     closure = { ...closure, evidence: selectedClosure.evidence };
   }
   const fixedBlocks = closure.evidence.flatMap(atomicEvidence).map((entry) => entry.blockNumber).filter(Number.isSafeInteger);
   const requiredBuyers = closure.evidence.filter((entry) => entry.evidenceType === "DIRECT_SELLER_BUYER").map((entry) => entry.buyer);
-  const maximumVolumeRaw = returnSettlementCapacity(closure.evidence);
+  const maximumVolumeRaw = returnSettlementCapacity(closure.evidence, returnTargetBps);
   const selection = ledgerBalances
     ? selectLedgerAwareSettlements(
       eligibleSettlements,
@@ -381,7 +385,7 @@ function buildCohortStrategy(fundings, settlements, closure, approvedVolumeRaw, 
     );
   if (!selection) return null;
   if (closure.evidence.length > 0 && !closureOccursAfterSettlements(selection.settlements, closure.evidence)) return null;
-  if (!returnCoverageQualifies(closure.evidence, selection.volumeRaw)) return null;
+  if (!returnCoverageQualifies(closure.evidence, selection.volumeRaw, returnTargetBps)) return null;
   const latestSettlementByBuyer = new Map();
   for (const settlement of selection.settlements) {
     const current = latestSettlementByBuyer.get(settlement.buyer);
@@ -389,7 +393,7 @@ function buildCohortStrategy(fundings, settlements, closure, approvedVolumeRaw, 
   }
   const funding = selection.buyers.flatMap((buyer) => (fundingByBuyer.get(buyer) ?? [])
     .filter((entry) => entry.blockNumber < latestSettlementByBuyer.get(buyer).blockNumber));
-  if (ledgerBalances && sumRaw(funding) * 10_000n < selection.volumeRaw * 9_000n) return null;
+  if (ledgerBalances && sumRaw(funding) * 10_000n < selection.volumeRaw * ALPHA_FUND_BPS) return null;
   const fundingDiagnostics = selection.buyers.map((buyer) => {
     const records = fundingByBuyer.get(buyer) ?? [];
     const retained = funding.filter((entry) => entry.buyer === buyer);
@@ -500,7 +504,7 @@ function selectWithinCapacity(settlements, capacityRaw) {
   return selected.sort(compareEvidence);
 }
 
-function returnCoverageQualifies(closureEvidence, settlementVolumeRaw) {
+function returnCoverageQualifies(closureEvidence, settlementVolumeRaw, returnTargetBps) {
   if (closureEvidence.length === 0) return true;
   if (closureEvidence.length > MAX_RETURN_PATHS) return false;
   const returnedRaw = closureEvidence.reduce((total, path) => {
@@ -508,10 +512,10 @@ function returnCoverageQualifies(closureEvidence, settlementVolumeRaw) {
       .reduce((minimum, amount) => amount < minimum ? amount : minimum);
     return total + credit;
   }, 0n);
-  return returnedRaw * 10_000n >= settlementVolumeRaw * ALPHA_RETURN_BPS;
+  return returnedRaw * 10_000n >= settlementVolumeRaw * returnTargetBps;
 }
 
-function returnSettlementCapacity(closureEvidence) {
+function returnSettlementCapacity(closureEvidence, returnTargetBps) {
   if (closureEvidence.length === 0) return null;
   if (closureEvidence.length > MAX_RETURN_PATHS) return 0n;
   const returnedRaw = closureEvidence.reduce((total, path) => {
@@ -519,7 +523,7 @@ function returnSettlementCapacity(closureEvidence) {
       .reduce((minimum, amount) => amount < minimum ? amount : minimum);
     return total + credit;
   }, 0n);
-  return returnedRaw * 10_000n / ALPHA_RETURN_BPS;
+  return returnedRaw * 10_000n / returnTargetBps;
 }
 function planReciprocal(claim, dependencies, bundle) {
   const selected = dependencies.filter((entry) => entry.evidenceType === "RECIPROCAL_SETTLEMENT").sort(compareEvidence);
@@ -784,7 +788,7 @@ export async function finalizeLedgerAwareBundle(bundle, {
 async function readClaimCheckpoint(directory, sourceClaim, bundle) {
   try {
     const checkpoint = JSON.parse(await readFile(`${directory}/${sourceClaim.claimId}.json`, "utf8"));
-    if (checkpoint.version !== 2
+    if (!isCurrentPolicyCheckpoint(checkpoint)
       || checkpoint.sourceClaimId !== sourceClaim.claimId
       || canonicalJson(checkpoint.period) !== canonicalJson(bundle.period)
       || canonicalJson(checkpoint.contracts) !== canonicalJson(bundle.contracts)) return null;
@@ -797,7 +801,8 @@ async function readClaimCheckpoint(directory, sourceClaim, bundle) {
 
 async function writeClaimCheckpoint(directory, sourceClaim, finalizedClaim, bundle) {
   await writeFile(`${directory}/${sourceClaim.claimId}.json`, `${JSON.stringify({
-    version: 2,
+    version: 3,
+    predicatePolicyHash: PREDICATE_POLICY_HASH,
     sourceClaimId: sourceClaim.claimId,
     period: bundle.period,
     contracts: bundle.contracts,
@@ -805,7 +810,7 @@ async function writeClaimCheckpoint(directory, sourceClaim, finalizedClaim, bund
   })}\n`);
 }
 
-async function authenticateClaim(claim, bundle, { rpcUrl, concurrency, fetchJson, onProgress }) {
+export async function authenticateClaim(claim, bundle, { rpcUrl, concurrency = 20, fetchJson = defaultFetchJson, onProgress = () => {} }) {
   const rpcCache = new Map();
   const callRpc = (method, params) => {
     const key = `${method}:${JSON.stringify(params)}`;

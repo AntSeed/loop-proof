@@ -1,7 +1,6 @@
+import { ALPHA_RETURN_BPS, RHO_HOP_BPS as MIN_RELAY_RETAINED_BPS, T_PATH_SECONDS as MAX_RELAY_SECONDS, MAX_RETURN_PATHS } from "./predicate-policy.mjs";
+
 const BASIS_POINTS = 10_000n;
-const MIN_RELAY_RETAINED_BPS = 2_800n;
-const MAX_RELAY_SECONDS = 259_200;
-const MAX_RETURN_PATHS = 512;
 
 export function atomicReturnEvidence(evidence) {
   if (evidence.evidenceType !== "RELAY_PATH") return [evidence];
@@ -14,8 +13,11 @@ export function returnPathCreditRaw(evidence) {
     .reduce((minimum, amount) => amount < minimum ? amount : minimum);
 }
 
-export function requiredReturnRaw(settlementVolumeRaw) {
-  const numerator = BigInt(settlementVolumeRaw) * 2_000n;
+export function requiredReturnRaw(settlementVolumeRaw, targetBps = ALPHA_RETURN_BPS) {
+  const volume = BigInt(settlementVolumeRaw);
+  const target = BigInt(targetBps);
+  if (volume < 0n || target <= 0n || target > BASIS_POINTS) throw new Error("invalid return volume or target basis points");
+  const numerator = volume * target;
   return (numerator + BASIS_POINTS - 1n) / BASIS_POINTS;
 }
 

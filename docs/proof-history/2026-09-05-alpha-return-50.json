@@ -1,0 +1,433 @@
+{
+  "label": "Archived alpha_return 50% baseline",
+  "alphaReturnBps": 5000,
+  "periodStartBlock": 44471575,
+  "periodEndBlock": 50672526,
+  "sellerProgramVKey": "0x00927080e32e3a180eb47f209908519abc780cf84d1e3d4a95000310fa2f4c32",
+  "developmentVerifiedSellers": 48,
+  "proverNetworkSubmitted": false,
+  "archiveDirectory": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05",
+  "sellers": [
+    {
+      "seller": "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "46341556102",
+      "totalSellerVolumeRaw": "48995164849",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c.json"
+    },
+    {
+      "seller": "0x05322ba8e1ae2c134d4bf20bbd21b435ae6cd098",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "225700000",
+      "totalSellerVolumeRaw": "225700000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x05322ba8e1ae2c134d4bf20bbd21b435ae6cd098.json"
+    },
+    {
+      "seller": "0x087800d22b7da6dcfef347f1dac6a9e6b7493e9e",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "101900000",
+      "totalSellerVolumeRaw": "101900000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x087800d22b7da6dcfef347f1dac6a9e6b7493e9e.json"
+    },
+    {
+      "seller": "0x0ecbde32e1dc6c3fb8aada176cea7954316e9696",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "389000000",
+      "totalSellerVolumeRaw": "389000000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x0ecbde32e1dc6c3fb8aada176cea7954316e9696.json"
+    },
+    {
+      "seller": "0x17cca44fd5c8d5a2e28b9645ec9977d46537c89b",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "488800000",
+      "totalSellerVolumeRaw": "488800000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x17cca44fd5c8d5a2e28b9645ec9977d46537c89b.json"
+    },
+    {
+      "seller": "0x1982cb91d172e4064ea0eb65085234fcd9f2a40f",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "237400000",
+      "totalSellerVolumeRaw": "237400000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x1982cb91d172e4064ea0eb65085234fcd9f2a40f.json"
+    },
+    {
+      "seller": "0x1b46b5ed9512dc2ad4c4a3d9ec89aebe4dee3631",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "557300000",
+      "totalSellerVolumeRaw": "557300000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x1b46b5ed9512dc2ad4c4a3d9ec89aebe4dee3631.json"
+    },
+    {
+      "seller": "0x1c98fa01dcc641e431346be0767bc7344e889761",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "389900000",
+      "totalSellerVolumeRaw": "389900000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x1c98fa01dcc641e431346be0767bc7344e889761.json"
+    },
+    {
+      "seller": "0x1f761c8d047c73e4de85f07f54b5ef4f01d8e3d0",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "434000000",
+      "totalSellerVolumeRaw": "434000000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x1f761c8d047c73e4de85f07f54b5ef4f01d8e3d0.json"
+    },
+    {
+      "seller": "0x20e7fb440a5ad18f7b9bae09ae51e806cde38b25",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "127300000",
+      "totalSellerVolumeRaw": "127300000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x20e7fb440a5ad18f7b9bae09ae51e806cde38b25.json"
+    },
+    {
+      "seller": "0x22564606c08e09bef5d8addedefd4c2491a34ee9",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "10200000",
+      "totalSellerVolumeRaw": "10200000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x22564606c08e09bef5d8addedefd4c2491a34ee9.json"
+    },
+    {
+      "seller": "0x22a856f3aa4080b0eaeebfd7dca97c93b1618e80",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "10200000",
+      "totalSellerVolumeRaw": "10200000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x22a856f3aa4080b0eaeebfd7dca97c93b1618e80.json"
+    },
+    {
+      "seller": "0x3639a405bd9a7f943b069e68e70dad28a9583bbc",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "277500000",
+      "totalSellerVolumeRaw": "277500000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x3639a405bd9a7f943b069e68e70dad28a9583bbc.json"
+    },
+    {
+      "seller": "0x3a59c0058d6f4d75887aadf6812855a75b9ef1fd",
+      "status": "rejected",
+      "error": "/Users/alex/Documents/code/antseed-org/worktrees/direct-seller-proof/target/release/wash-trading-prove-seller exited with 1\nError: return: value reaching the funder below the coverage fraction"
+    },
+    {
+      "seller": "0x3ae220b8c315111111249a52296aeb1dd69f972d",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "19200000",
+      "totalSellerVolumeRaw": "19200000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x3ae220b8c315111111249a52296aeb1dd69f972d.json"
+    },
+    {
+      "seller": "0x3b5f5b27b789dd4848625befca5d85ee49624da9",
+      "status": "rejected",
+      "error": "/Users/alex/Documents/code/antseed-org/worktrees/direct-seller-proof/target/release/wash-trading-prove-seller exited with 1\nError: seller 0x3B5f5b27B789dD4848625bEFca5d85EE49624DA9 is not a staked agent at block 50672526"
+    },
+    {
+      "seller": "0x3c5babfb591d405625dffda1635ea4f077d64838",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "225600000",
+      "totalSellerVolumeRaw": "225600000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x3c5babfb591d405625dffda1635ea4f077d64838.json"
+    },
+    {
+      "seller": "0x3fdb59a36204f0792d3d051ef4a26b7bc5160ec7",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "225000000",
+      "totalSellerVolumeRaw": "225000000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x3fdb59a36204f0792d3d051ef4a26b7bc5160ec7.json"
+    },
+    {
+      "seller": "0x40485259c7dd469f171d0789fb6597c07e32be0e",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "179600000",
+      "totalSellerVolumeRaw": "179600000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x40485259c7dd469f171d0789fb6597c07e32be0e.json"
+    },
+    {
+      "seller": "0x40f158cc85f06f272c704822e39943ef1dc168ae",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "340200000",
+      "totalSellerVolumeRaw": "340200000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x40f158cc85f06f272c704822e39943ef1dc168ae.json"
+    },
+    {
+      "seller": "0x422c3faacdedfd0dea33705ea0000008f9a02e48",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "20500000",
+      "totalSellerVolumeRaw": "20500000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x422c3faacdedfd0dea33705ea0000008f9a02e48.json"
+    },
+    {
+      "seller": "0x4581213a7a271c2424427fe4a991dd5ed7f65492",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "179500000",
+      "totalSellerVolumeRaw": "179500000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x4581213a7a271c2424427fe4a991dd5ed7f65492.json"
+    },
+    {
+      "seller": "0x4cf31b431f7559400dcd1269a787dd55d291ca49",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "37500000",
+      "totalSellerVolumeRaw": "37500000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x4cf31b431f7559400dcd1269a787dd55d291ca49.json"
+    },
+    {
+      "seller": "0x5b281ff194f7fd3f68e9379a7d433c752013024f",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "224300000",
+      "totalSellerVolumeRaw": "224300000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x5b281ff194f7fd3f68e9379a7d433c752013024f.json"
+    },
+    {
+      "seller": "0x69f915d18ab913f0c86913a94c353b46a5e7baa4",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "244600000",
+      "totalSellerVolumeRaw": "244600000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x69f915d18ab913f0c86913a94c353b46a5e7baa4.json"
+    },
+    {
+      "seller": "0x6cedcd162ce26ea07df8562be548fd0597526454",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "101900000",
+      "totalSellerVolumeRaw": "101900000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x6cedcd162ce26ea07df8562be548fd0597526454.json"
+    },
+    {
+      "seller": "0x6e4dfb6f34ef798b67c6f546b4da15a170e6e8be",
+      "status": "rejected",
+      "error": "/Users/alex/Documents/code/antseed-org/worktrees/direct-seller-proof/target/release/wash-trading-prove-seller exited with 1\nError: seller 0x6E4DFb6f34EF798b67C6F546b4da15a170e6E8Be is not a staked agent at block 50672526"
+    },
+    {
+      "seller": "0x74d4ca0dcb2d9140da86dbf7bbe97eef7d4f2f72",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "4687961620",
+      "totalSellerVolumeRaw": "12012656168",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x74d4ca0dcb2d9140da86dbf7bbe97eef7d4f2f72.json"
+    },
+    {
+      "seller": "0x7877aa0c29f7c80a9a46bfd9c05dac8126471ff2",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "44000000",
+      "totalSellerVolumeRaw": "46795968",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x7877aa0c29f7c80a9a46bfd9c05dac8126471ff2.json"
+    },
+    {
+      "seller": "0x83e57cbffc0d789f57c6ae0b0326385ad715c00f",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "222600000",
+      "totalSellerVolumeRaw": "222600000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x83e57cbffc0d789f57c6ae0b0326385ad715c00f.json"
+    },
+    {
+      "seller": "0x85f64f9736aeb122e387779a80c5257ad43ba834",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "340300000",
+      "totalSellerVolumeRaw": "340300000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x85f64f9736aeb122e387779a80c5257ad43ba834.json"
+    },
+    {
+      "seller": "0x89118d485aab2f427bf4d9a44b09275222b1e4b3",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "211500000",
+      "totalSellerVolumeRaw": "211500000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x89118d485aab2f427bf4d9a44b09275222b1e4b3.json"
+    },
+    {
+      "seller": "0x8923a4be978521e078e72b92077d59fe2c4deac8",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "283100000",
+      "totalSellerVolumeRaw": "283100000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x8923a4be978521e078e72b92077d59fe2c4deac8.json"
+    },
+    {
+      "seller": "0x8c0be23fbf68d6c317addafd59b1dfb42ea6806b",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "127300000",
+      "totalSellerVolumeRaw": "127300000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x8c0be23fbf68d6c317addafd59b1dfb42ea6806b.json"
+    },
+    {
+      "seller": "0x8d9ddb7ae530fde5c6c811cedd893b8028fe41f4",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "218500000",
+      "totalSellerVolumeRaw": "218500000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x8d9ddb7ae530fde5c6c811cedd893b8028fe41f4.json"
+    },
+    {
+      "seller": "0x8fb7289428d6b3e3f253294c14d1bfaea7d6c05b",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "224200000",
+      "totalSellerVolumeRaw": "224200000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x8fb7289428d6b3e3f253294c14d1bfaea7d6c05b.json"
+    },
+    {
+      "seller": "0x918e2dbcc1243101d6fa212d0c75b30ec4626bf9",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "211500000",
+      "totalSellerVolumeRaw": "211500000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x918e2dbcc1243101d6fa212d0c75b30ec4626bf9.json"
+    },
+    {
+      "seller": "0x94c3f5af394542cfa123f32e17a7a25feeed6758",
+      "status": "rejected",
+      "error": "/Users/alex/Documents/code/antseed-org/worktrees/direct-seller-proof/target/release/wash-trading-prove-seller exited with 1\nError: return: value reaching the funder below the coverage fraction"
+    },
+    {
+      "seller": "0x97a19f462f880c2cfb768dea465dc1a0eb08ad33",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "326500000",
+      "totalSellerVolumeRaw": "326500000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0x97a19f462f880c2cfb768dea465dc1a0eb08ad33.json"
+    },
+    {
+      "seller": "0xa06fda7beb9800a442c7f14e27b5b6fb2ab3a89e",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "4511325039",
+      "totalSellerVolumeRaw": "12720282591",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0xa06fda7beb9800a442c7f14e27b5b6fb2ab3a89e.json"
+    },
+    {
+      "seller": "0xa76cd6e86dc48e3e7fd24c4807a844b4d6caba27",
+      "status": "rejected",
+      "error": "/Users/alex/Documents/code/antseed-org/worktrees/direct-seller-proof/target/release/wash-trading-prove-seller exited with 1\nError: seller 0xa76CD6E86dC48E3e7FD24c4807A844B4d6Caba27 is not a staked agent at block 50672526"
+    },
+    {
+      "seller": "0xb629449e487740c5fb86d7c4ddd51709d692dab4",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "38292186064",
+      "totalSellerVolumeRaw": "40362999991",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0xb629449e487740c5fb86d7c4ddd51709d692dab4.json"
+    },
+    {
+      "seller": "0xb65de8dd31d0967a19c7e9f398fc8a4cc3060abf",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "239600000",
+      "totalSellerVolumeRaw": "239600000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0xb65de8dd31d0967a19c7e9f398fc8a4cc3060abf.json"
+    },
+    {
+      "seller": "0xb88bcda463f6522d5406b935559f09b826cdc17c",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "494000000",
+      "totalSellerVolumeRaw": "494000000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0xb88bcda463f6522d5406b935559f09b826cdc17c.json"
+    },
+    {
+      "seller": "0xbd0cd45b7b486f312460e657701350fab953a3d2",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "5131629830",
+      "totalSellerVolumeRaw": "11639713190",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0xbd0cd45b7b486f312460e657701350fab953a3d2.json"
+    },
+    {
+      "seller": "0xc70734320044e6a7934d97b58eaa2df7d102b0f0",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "223300000",
+      "totalSellerVolumeRaw": "223300000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0xc70734320044e6a7934d97b58eaa2df7d102b0f0.json"
+    },
+    {
+      "seller": "0xc7e303a65f454c1ac3bd2a88e95e7fa5f6a6946a",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "560100000",
+      "totalSellerVolumeRaw": "560100000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0xc7e303a65f454c1ac3bd2a88e95e7fa5f6a6946a.json"
+    },
+    {
+      "seller": "0xc92bc8c21a66b5b10fbfdbea8be56b8fee51d0ab",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "244400000",
+      "totalSellerVolumeRaw": "244400000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0xc92bc8c21a66b5b10fbfdbea8be56b8fee51d0ab.json"
+    },
+    {
+      "seller": "0xc9cd64754b9c273522012526da15fee8520a772b",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "428200000",
+      "totalSellerVolumeRaw": "428200000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0xc9cd64754b9c273522012526da15fee8520a772b.json"
+    },
+    {
+      "seller": "0xcccf2236260bfd0d65abc011563b4796b2040366",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "330600000",
+      "totalSellerVolumeRaw": "330600000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0xcccf2236260bfd0d65abc011563b4796b2040366.json"
+    },
+    {
+      "seller": "0xd63409b6520b114d4666d8568e925653eae66a30",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "330500000",
+      "totalSellerVolumeRaw": "330500000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0xd63409b6520b114d4666d8568e925653eae66a30.json"
+    },
+    {
+      "seller": "0xddbc2bb655d94251113908701896bbd786af20a2",
+      "status": "rejected",
+      "error": "/Users/alex/Documents/code/antseed-org/worktrees/direct-seller-proof/target/release/wash-trading-prove-seller exited with 1\nError: seller 0xddbc2BB655D94251113908701896BBd786AF20A2 is not a staked agent at block 50672526"
+    },
+    {
+      "seller": "0xe2d4c66359fa70a1fba7985c9ffbdd6c4f9a1848",
+      "status": "rejected",
+      "error": "/Users/alex/Documents/code/antseed-org/worktrees/direct-seller-proof/target/release/wash-trading-prove-seller exited with 1\nError: seller 0xE2d4C66359Fa70a1fBa7985c9ffBdD6C4F9a1848 is not a staked agent at block 50672526"
+    },
+    {
+      "seller": "0xe93d3458f07a4d3f93f321a234d55cf084a679af",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "225100000",
+      "totalSellerVolumeRaw": "225100000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0xe93d3458f07a4d3f93f321a234d55cf084a679af.json"
+    },
+    {
+      "seller": "0xea8859617ffef68890b92b2df480458cd7a6581c",
+      "status": "development-verified",
+      "provenWashVolumeRaw": "331800000",
+      "totalSellerVolumeRaw": "331800000",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/proof-history/alpha-return-50-2026-09-05/development/sellers/0xea8859617ffef68890b92b2df480458cd7a6581c.json"
+    }
+  ],
+  "artifactSha256": {
+    "0x0329c5d3920e301740f78d6e17b8d1a11cca9b2c": "2092740609b03dc403673b1c9ef5cbe0a018c495ba09626feec77574181e10ab",
+    "0x05322ba8e1ae2c134d4bf20bbd21b435ae6cd098": "ffd4a2613df70b3495431975e74ce7a0da845f021493d46c8f8985d68fd4ec3d",
+    "0x087800d22b7da6dcfef347f1dac6a9e6b7493e9e": "43c6a14b81ca1c65bee557aea07271761223a4a4037f8f79bd7ebcb412f4be2b",
+    "0x0ecbde32e1dc6c3fb8aada176cea7954316e9696": "acfe17b9f61f6a86024d6ae3f64dd35495955ef9ede49b36b0787666358350f7",
+    "0x17cca44fd5c8d5a2e28b9645ec9977d46537c89b": "2a87df05fd63360dd50f24038ab81b60dd4e2c6a1ab72ec2cbb046e5d18941b9",
+    "0x1982cb91d172e4064ea0eb65085234fcd9f2a40f": "49e9ee928cc5be62c4ef49f039cb9a2ff578c5a8fd35e849ab491d9f61e03fc8",
+    "0x1b46b5ed9512dc2ad4c4a3d9ec89aebe4dee3631": "c6e528fac08c26ed79558c6fa4bc9e44c93f084cb86a257e9aba3502f57d2bff",
+    "0x1c98fa01dcc641e431346be0767bc7344e889761": "744b4828860f3753c8a9b994116d406f07fbbfcff3021c890ebf5788baf2003c",
+    "0x1f761c8d047c73e4de85f07f54b5ef4f01d8e3d0": "596d89f595510f0601a625e58a20ceb72c04e8bf4c09cb9f3e2451f6a1f0ec29",
+    "0x20e7fb440a5ad18f7b9bae09ae51e806cde38b25": "64be5642000a593de404b8f5b32e7c18d1f95bdf9edcdd5c526e9a20e0855f0f",
+    "0x22564606c08e09bef5d8addedefd4c2491a34ee9": "6e215aa5991221b2d0f65cc2bfa1cb1f0c0421b5dd7dae06d745d0846bb2ab85",
+    "0x22a856f3aa4080b0eaeebfd7dca97c93b1618e80": "649dc1682c1bf446d3dc807efbd2a8de669acd60c421098d2187d8fc9efdd4f7",
+    "0x3639a405bd9a7f943b069e68e70dad28a9583bbc": "d9d16b59c8fc34be4725c408a234f1db22a63255fc0c4911e32761ab36b28218",
+    "0x3ae220b8c315111111249a52296aeb1dd69f972d": "1a93f45e45797273a6a3ad5baa48b95ccf6aaab2d015933a14283fa41193a224",
+    "0x3c5babfb591d405625dffda1635ea4f077d64838": "106f78001d6d4d33c161541fca82a2528ed6cfc531a61ed90607b8c172d93e19",
+    "0x3fdb59a36204f0792d3d051ef4a26b7bc5160ec7": "02d9b88aa50a526318304ae122e9418cc204698e47b16a0b7a3b280aa2e0a426",
+    "0x40485259c7dd469f171d0789fb6597c07e32be0e": "02f42264f39785bd6f53eda30dfde09a0f653aa665604218a1e1d16ee7ed1373",
+    "0x40f158cc85f06f272c704822e39943ef1dc168ae": "e2e55c6bb2e780de4934941c679a401997d2a63ad3d0c147fe698a29f77fa995",
+    "0x422c3faacdedfd0dea33705ea0000008f9a02e48": "1df7f145c2503741f3d33acfe6730a4deae18103c677aa998bca96ae9405928a",
+    "0x4581213a7a271c2424427fe4a991dd5ed7f65492": "8045a4b857ea5d4c8899a5c2106ee84366a803b04228b86bf90e4ab4c492b088",
+    "0x4cf31b431f7559400dcd1269a787dd55d291ca49": "4b74a9abbbf268a3b74c511b839761670d3dcf72e24db08b06a9b7a4b88662f1",
+    "0x5b281ff194f7fd3f68e9379a7d433c752013024f": "77f3cf3efc807826eda442e724bf50bc118625bfb0e920fd38cb2a6511c5267a",
+    "0x69f915d18ab913f0c86913a94c353b46a5e7baa4": "4676378bb3bcb6ed85f2c35d4b4248a3770747f2bc424df0e615aaca276f03e0",
+    "0x6cedcd162ce26ea07df8562be548fd0597526454": "2bed3794d5e3e76ac2ceb3a1933e45ece2ac10b865c6ff169d1ba5db33cd4d9a",
+    "0x74d4ca0dcb2d9140da86dbf7bbe97eef7d4f2f72": "99c01e74ecec9e4c97a1e37b17a997f9d6a85dfcfa8f8ecfc3908fe5bd682ca6",
+    "0x7877aa0c29f7c80a9a46bfd9c05dac8126471ff2": "436dc4f12196b752b46399ed5993a004e0b0439892f2080ec4746b7dcece764a",
+    "0x83e57cbffc0d789f57c6ae0b0326385ad715c00f": "86c25c2a843757fad16697f953d7333f10ff38048f4f09ec97233094c6eea1e5",
+    "0x85f64f9736aeb122e387779a80c5257ad43ba834": "6500b5575d3f9ba664bd689776b33b3cbff9f4902e5467fd150d92886b50d3b4",
+    "0x89118d485aab2f427bf4d9a44b09275222b1e4b3": "06ac28e832970ded63d808aab57f8309c035f0720fec8793eeb032d61722ea44",
+    "0x8923a4be978521e078e72b92077d59fe2c4deac8": "3ca0911ab1c7665d06e8cc28e9fe92bc5cdfa488d1b541b64ff2b1d05a65c91f",
+    "0x8c0be23fbf68d6c317addafd59b1dfb42ea6806b": "2a98be044bff3addbece20233d6e021c87810ec97081af5be733d03d0eeade73",
+    "0x8d9ddb7ae530fde5c6c811cedd893b8028fe41f4": "02eb8fc72769004b37b1833346a08d3bdb78d3ba6ab10f96b180a77cca7e42a8",
+    "0x8fb7289428d6b3e3f253294c14d1bfaea7d6c05b": "2f1d9e6ef80f068ff89a22a4b972f5856995b91a01bccb8c5b63671cacc549cf",
+    "0x918e2dbcc1243101d6fa212d0c75b30ec4626bf9": "20765ed722672789585546a3aa14c19f6d10ce4e2f9f05dfa763395fcd6d7c7b",
+    "0x97a19f462f880c2cfb768dea465dc1a0eb08ad33": "85c6a93f6223737f6bae423dd2b9fbdadde40eac414bc444e01ed123b27ea3fd",
+    "0xa06fda7beb9800a442c7f14e27b5b6fb2ab3a89e": "164088bc7523af7ca084d78fd762a29df5c5fa5144f67bfdcd0d08f4dfee71ad",
+    "0xb629449e487740c5fb86d7c4ddd51709d692dab4": "ba13c4a24713b707023a603c1e7e34bdd19b02df4903403ddc73ef228f2ef5f5",
+    "0xb65de8dd31d0967a19c7e9f398fc8a4cc3060abf": "ec25fed028ba8805ebb77383f72774b123d5c976e58d09661bd7b1740c8db584",
+    "0xb88bcda463f6522d5406b935559f09b826cdc17c": "80538e37c81f22771426dcfb67ecf30fc98b3c366c0ad10d9f44cfaa5b054975",
+    "0xbd0cd45b7b486f312460e657701350fab953a3d2": "f81fee6237da088db05fdf5e61bed9d9897e4ed058385ede71e31c48b1fd5e6e",
+    "0xc70734320044e6a7934d97b58eaa2df7d102b0f0": "fc2eed570f644927e832c8237e668e0c48c3811fbdf7c76b270f80281c218fb0",
+    "0xc7e303a65f454c1ac3bd2a88e95e7fa5f6a6946a": "70ffc9e7c206b55e432525b61999d42c3e19333989296bc8b34d63a3930fbed0",
+    "0xc92bc8c21a66b5b10fbfdbea8be56b8fee51d0ab": "9fe863d3f0ed637359292d38dfb5eb0a7d3d7c1db65799e6f31e3db1f823dd58",
+    "0xc9cd64754b9c273522012526da15fee8520a772b": "4d07dded07e642a2823c39233f005b7d27750fd6f7e7b681052ddbc9b5405d30",
+    "0xcccf2236260bfd0d65abc011563b4796b2040366": "9e44d385f833daa1dc393df34388c68e828f2a76eb94df1e7e45b9ed29c75def",
+    "0xd63409b6520b114d4666d8568e925653eae66a30": "dfa1a89169f9585691fc8993fa9951bdb70bcf8cf7973cf530260cf7271fe5b6",
+    "0xe93d3458f07a4d3f93f321a234d55cf084a679af": "143ba8b2ee45573bfbebe09e60fb6c3a817240a2f5fec3b54bc49a9ae95e9f77",
+    "0xea8859617ffef68890b92b2df480458cd7a6581c": "5d3d5e6eb700c6906274481f0f99a846c15d20d09db8bed338c8b80f8c8f5e1c"
+  }
+}

@@ -62,7 +62,7 @@ pub const PERIOD_END_BLOCK: u64 = 49_936_172;
 pub const ALPHA_FUND_BPS: u64 = 9_000;
 /// RETURN must carry at least this share of the settled volume back to the
 /// funder.
-pub const ALPHA_RETURN_BPS: u64 = 2_000;
+pub const ALPHA_RETURN_BPS: u64 = 3_000;
 /// Each return hop must forward at least this share of what it received.
 /// Set low to accommodate real intermediary chains that batch or round
 /// transfer amounts (observed: conduit forwards round-number amounts,

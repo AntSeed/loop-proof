@@ -172,9 +172,35 @@ cargo run --release -p wash-predicate --example report_return_coverage -- /path/
 
 For transfer-return closed loops, coverage is the sum of each return path's
 minimum hop amount divided by the claim's selected settled volume. The fixed
-`ALPHA_RETURN_BPS` floor remains 2000 (20%); it is not the wash share `V/T`.
+`ALPHA_RETURN_BPS` floor is 3000 (30%); it is not the wash share `V/T`.
+The prior 50% seller list is preserved in
+`docs/proof-history/2026-09-05-alpha-return-50.json`; see
+`docs/proof-history/README.md` for the archived artifacts and guest keys.
+Planning and return selection read their ratio and path-limit constants directly
+from the predicate through `scripts/predicate-policy.mjs`. Plan checkpoints bind
+the policy hash; checkpoints from another policy are recomputed, not reused.
+Replay artifacts record `alphaReturnBps`; missing or different-policy metadata
+is stale. Guest replay also checks the actual ELF verification key, including
+when no build attestation was supplied.
+Discovery accepts positive minority-volume cohorts for investigation; only the
+authenticated predicate can validate their funding, return, and ledger evidence.
 Self-funded loops close by identity, and reciprocal claims do not use this
 alpha-return test. Neither is assigned a fabricated measured return percentage.
+
+To rebuild a USDC-funded discovery candidate without replacing an approved list:
+
+```bash
+node scripts/build-usdc-candidate-bundle.mjs \
+  --scan-dir /path/to/scan --baseline-bundle /path/to/proof-bundle.json \
+  --seller 0x7adbe9474e067376da5dea2f757ea3eaa60dc915 \
+  --out-dir /path/to/new-candidate-directory
+```
+
+The builder uses the primary USDC capital funder, not the first ETH gas funder,
+and refuses to overwrite existing outputs. Draft amounts are not proven volume:
+copy the draft before ledger-aware planning, then materialize and verify the
+selected evidence natively and with the current seller guest. Preserve both
+the original candidate amount and the ledger-selected amount in result lists.
 
 To execute or development-prove existing historical witnesses:
 

@@ -89,13 +89,13 @@ test("closed-loop planner combines direct and relay returns when direct credit i
     evidenceType: "RELAY_PATH",
     funder: "funder",
     hops: [
-      { ...evidence("relay-one", null, 46_303_100, 10n), from: "seller", to: "relay", timestamp: 100 },
-      { ...evidence("relay-two", null, 46_303_101, 10n), from: "relay", to: "intermediary", timestamp: 101 },
-      { ...evidence("relay-three", null, 46_303_102, 10n), from: "intermediary", to: "funder", timestamp: 102 },
+      { ...evidence("relay-one", null, 46_303_100, 25n), from: "seller", to: "relay", timestamp: 100 },
+      { ...evidence("relay-two", null, 46_303_101, 25n), from: "relay", to: "intermediary", timestamp: 101 },
+      { ...evidence("relay-three", null, 46_303_102, 25n), from: "intermediary", to: "funder", timestamp: 102 },
     ],
   };
   const dependencies = [
-    { ...evidence("direct", null, 46_303_099, 10n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder", from: "seller", to: "funder", timestamp: 99 },
+    { ...evidence("direct", null, 46_303_099, 25n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder", from: "seller", to: "funder", timestamp: 99 },
     relay,
     { ...evidence("funding", "a", 46_303_001, 100n), evidenceType: "USDC_FUNDING", funder: "funder" },
     evidence("settlement", "a", 46_303_031, 100n),
@@ -112,7 +112,7 @@ test("closed-loop planner combines direct and relay returns when direct credit i
 test("closed-loop planner retains replenishments before the final settlement", () => {
   const claim = { claimId: "claim", type: "P0_CLOSED_LOOP", subjects: ["seller"], approvedBuyers: ["a"], approvedFunders: ["funder"], dependencyRoot: "0x1", metrics: { qualifiedVolumeRaw: "10" } };
   const dependencies = [
-    { ...evidence("direct", null, 46_303_100, 2n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
+    { ...evidence("direct", null, 46_303_100, 5n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
     { ...evidence("funding-early", "a", 46_303_001, 4n), evidenceType: "USDC_FUNDING", funder: "funder" },
     { ...evidence("funding-replenish", "a", 46_303_020, 6n), evidenceType: "USDC_FUNDING", funder: "funder" },
     { ...evidence("settlement-one", "a", 46_303_031, 5n), evidenceType: "SETTLEMENT" },
@@ -158,7 +158,7 @@ test("USDC funding selection is capped by authenticated return capacity", () => 
     metrics: { qualifiedVolumeRaw: "101" },
   };
   const dependencies = [
-    { ...evidence("closure", null, 46_303_100, 20n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
+    { ...evidence("closure", null, 46_303_100, 30n), evidenceType: "DIRECT_SELLER_FUNDER", funder: "funder" },
     { ...evidence("funding", "a", 46_303_001, 101n), evidenceType: "USDC_FUNDING", funder: "funder" },
     evidence("first", "a", 46_303_031, 60n),
     evidence("second", "a", 46_303_032, 40n),

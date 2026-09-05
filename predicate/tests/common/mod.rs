@@ -581,7 +581,7 @@ impl Default for LoopCfg {
             funded: vec![400_000_000; 3],
             settled: vec![400_000_000; 3],
             end_balances: vec![0; 3],
-            // Σ settle = 1200 USDC; α_return = 2_000 bps needs ≥ 240 at the
+            // Σ settle = 1200 USDC; α_return = 3_000 bps needs ≥ 360 at the
             // funder; this path returns 1170.
             return_paths: vec![vec![(RELAY, 1_176_000_000), (FUNDER, 1_170_000_000)]],
         }
