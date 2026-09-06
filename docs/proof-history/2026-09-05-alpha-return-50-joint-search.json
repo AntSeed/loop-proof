@@ -1,0 +1,81 @@
+{
+  "label": "Joint V and R expansion at 50% — September 5, 2026",
+  "targetBps": 5000,
+  "activeGuestBps": 3000,
+  "baselineReplaced": false,
+  "newQualifyingSellers": 0,
+  "newProvenVolumeRaw": "0",
+  "nativeProofsGenerated": false,
+  "networkSubmitted": false,
+  "searchExhaustive": false,
+  "sourceSummary": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt50-joint-volume-search-2026-09-05-run3/summary.json",
+  "sourceSummarySha256": "ace03f0541af51d8389f936f77f1ecbe9f9aa16e91356adf6de436fc4751d517",
+  "results": [
+    {
+      "seller": "0x3a59c0058d6f4d75887aadf6812855a75b9ef1fd",
+      "name": "Prompt-Forge",
+      "baselineVolumeRaw": "11156194466",
+      "totalSellerVolumeRaw": "11605934345",
+      "scannedCandidateSettlementRaw": "11605913053",
+      "additionalCandidateSettlementRaw": "449718587",
+      "ledgerSelectedVolumeBeforeReturnCheckRaw": "11156194466",
+      "returnedCreditRaw": "3437600775",
+      "returnShortfallForBaselineAt50Raw": "2140496458",
+      "candidateVolumeAt50Raw": "6875187743",
+      "candidateAdopted": false,
+      "baselineInputUnchanged": true,
+      "fundersExamined": 3,
+      "returnPathsEnumerated": 51867,
+      "graphTruncated": false,
+      "metadataRejections": 0,
+      "otherCohortFindings": [
+        {
+          "funder": "0x4b5c71082d027d16d2a146465d66f9eec11634f6",
+          "finding": "no non-overlapping return path to the actual USDC funder in available traces"
+        },
+        {
+          "funder": "0x55c7e5124fc14a3cdde1f09ecbb8676141c5a06c",
+          "finding": "no non-overlapping return path to the actual USDC funder in available traces"
+        }
+      ],
+      "findings": [
+        "Additional settlement metadata does not add buyer-ledger capacity with the discovered funding.",
+        "Expanded graph did not increase selected qualifying return credit.",
+        "The smaller 50% candidate is diagnostic only; the previous proof is preserved."
+      ]
+    },
+    {
+      "seller": "0x94c3f5af394542cfa123f32e17a7a25feeed6758",
+      "name": "NoaxAI",
+      "baselineVolumeRaw": "9781569372",
+      "totalSellerVolumeRaw": "10258688713",
+      "scannedCandidateSettlementRaw": "10257743864",
+      "additionalCandidateSettlementRaw": "476174492",
+      "ledgerSelectedVolumeBeforeReturnCheckRaw": "9781569372",
+      "returnedCreditRaw": "3287721408",
+      "returnShortfallForBaselineAt50Raw": "1603063278",
+      "candidateVolumeAt50Raw": "6575422880",
+      "candidateAdopted": false,
+      "baselineInputUnchanged": true,
+      "fundersExamined": 3,
+      "returnPathsEnumerated": 47400,
+      "graphTruncated": false,
+      "metadataRejections": 0,
+      "otherCohortFindings": [
+        {
+          "funder": "0x2736a134c88aebd921908f0f534600d05f57b1a4",
+          "finding": "no non-overlapping return path to the actual USDC funder in available traces"
+        },
+        {
+          "funder": "0x91f21ca67887528c0d761036c3d0edf118f6ad37",
+          "finding": "no non-overlapping return path to the actual USDC funder in available traces"
+        }
+      ],
+      "findings": [
+        "Additional settlement metadata does not add buyer-ledger capacity with the discovered funding.",
+        "Expanded graph did not increase selected qualifying return credit.",
+        "The smaller 50% candidate is diagnostic only; the previous proof is preserved."
+      ]
+    }
+  ]
+}

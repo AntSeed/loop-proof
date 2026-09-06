@@ -3,17 +3,23 @@ import test from "node:test";
 import { evaluateClosedLoopCandidate, selectLargestDeterministicSettlementSet, supportedSettlementCapacity } from "./build-discovery-proof-bundle.mjs";
 
 const amount = (amountRaw) => ({ amountRaw: String(amountRaw) });
-const path = (first, second, third) => ({ sellerPayment: amount(first), relayForward: amount(second), funderReceipt: amount(third) });
+const path = (first, second, third) => ({ evidenceType: "RELAY_PATH", sellerPayment: amount(first), relayForward: amount(second), funderReceipt: amount(third) });
+const directRelayPath = (first, second) => ({ evidenceType: "RELAY_PATH", sellerPayment: amount(first), relayForward: amount(second) });
 
-test("candidate evaluation requires a strict seller-volume majority", () => {
+test("candidate evaluation permits minority and exact-half claims", () => {
   const exactHalf = evaluateClosedLoopCandidate({
     sellerVolumeRaw: "200",
     settlements: [amount(100)],
     fundings: [amount(100)],
     paths: [path(100, 100, 100)],
   });
-  assert.equal(exactHalf.accepted, false);
-  assert.equal(exactHalf.deficits.majorityRaw, "1");
+  assert.equal(exactHalf.accepted, true);
+  assert.equal(exactHalf.deficits.positiveVolumeRaw, "0");
+
+  const minority = evaluateClosedLoopCandidate({ sellerVolumeRaw: "1000", settlements: [amount(100)], fundings: [amount(90)], paths: [path(30, 30, 30)] });
+  assert.equal(minority.accepted, true);
+  const empty = evaluateClosedLoopCandidate({ sellerVolumeRaw: "1000", settlements: [], fundings: [], paths: [] });
+  assert.equal(empty.accepted, false);
 
   const majority = evaluateClosedLoopCandidate({
     sellerVolumeRaw: "200",
@@ -32,7 +38,19 @@ test("candidate evaluation reports bottleneck return and exact deficits", () => 
     paths: [path(8, 8, 248)],
   });
   assert.equal(result.bottleneckReturnRaw, 8n);
-  assert.deepEqual(result.deficits, { majorityRaw: "0", fundingRaw: "11", returnRaw: "23" });
+  assert.deepEqual(result.deficits, { positiveVolumeRaw: "0", fundingRaw: "11", returnRaw: "23" });
+});
+
+test("candidate evaluation credits a two-transfer relay path", () => {
+  const result = evaluateClosedLoopCandidate({
+    sellerVolumeRaw: "200",
+    settlements: [amount(101)],
+    fundings: [amount(91)],
+    paths: [directRelayPath(31, 30)],
+  });
+  assert.equal(result.accepted, false);
+  assert.equal(result.bottleneckReturnRaw, 30n);
+  assert.equal(supportedSettlementCapacity([amount(100)], [directRelayPath(30, 29)]), 96n);
 });
 
 test("largest deterministic selection stays within funding and bottleneck capacity", () => {

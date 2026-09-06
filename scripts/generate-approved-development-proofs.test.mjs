@@ -1,9 +1,73 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   buildApprovedBatchSummary,
+  buildWitnessOnlySummary,
+  countClaimMaterializationBlocks,
+  isCurrentWitness,
+  mapWithConcurrency,
+  writeWitnessCacheMetadata,
+  validateClaimMaterializationBlocks,
   validateApprovedSet,
+  validateSnapshotLock,
 } from "./generate-approved-development-proofs.mjs";
+
+test("bounded worker queue preserves result order and concurrency", async () => {
+  let active = 0;
+  let maximumActive = 0;
+  const results = await mapWithConcurrency([30, 5, 20, 10], 2, async (delay, index) => {
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, delay));
+    active -= 1;
+    return index;
+  });
+  assert.deepEqual(results, [0, 1, 2, 3]);
+  assert.equal(maximumActive, 2);
+});
+
+test("bounded worker queue rejects invalid concurrency", async () => {
+  await assert.rejects(() => mapWithConcurrency([1], 0, async () => {}), /positive integer/);
+});
+
+test("materialization block preflight mirrors relay expansion and deduplication", () => {
+  const claim = {
+    claimId: "claim",
+    selectedEvidence: [
+      { evidenceType: "SETTLEMENT", blockNumber: 10 },
+      {
+        evidenceType: "RELAY_PATH",
+        sellerPayment: { blockNumber: 11 },
+        relayForward: { blockNumber: 12 },
+        funderReceipt: { blockNumber: 11 },
+      },
+    ],
+  };
+  assert.equal(countClaimMaterializationBlocks(claim, 19), 4);
+  assert.equal(validateClaimMaterializationBlocks(claim, 19, 4), 4);
+  assert.throws(() => validateClaimMaterializationBlocks(claim, 19, 3), /exceed predicate maximum/);
+});
+
+test("witness cache metadata binds identity, generator, size, and mtime", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "wash-witness-cache-"));
+  const witnessPath = join(directory, "witness.json");
+  const claim = { claimId: `0x${"1".repeat(64)}`, type: "P0_RECIPROCAL" };
+  const period = { startBlock: 10, endBlockExclusive: 20 };
+  const materializerSha256 = `0x${"2".repeat(64)}`;
+  try {
+    await writeFile(witnessPath, "{}\n");
+    await writeWitnessCacheMetadata(witnessPath, period, claim, materializerSha256);
+    assert.equal(await isCurrentWitness(witnessPath, period, claim, materializerSha256), true);
+    assert.equal(await isCurrentWitness(witnessPath, period, claim, `0x${"3".repeat(64)}`), false);
+    await writeFile(witnessPath, "{\"changed\":true}\n");
+    assert.equal(await isCurrentWitness(witnessPath, period, claim, materializerSha256), false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("approved development summary requires and totals every claim", () => {
   const bundle = fixtureBundle();
@@ -15,7 +79,7 @@ test("approved development summary requires and totals every claim", () => {
     approvedSellerCount: 3,
     closedLoopVolumeRaw: "100",
     reciprocalVolumeRaw: "70",
-    uniqueSuspectedVolumeRaw: "170",
+    uniqueSettlementVolumeRaw: "170",
     uniqueSettlementCount: 3,
   });
 });
@@ -25,6 +89,35 @@ test("approved development summary rejects partial plans", () => {
   plan.claims.pop();
   plan.claimCount = 1;
   assert.throws(() => validateApprovedSet(fixtureBundle(), plan), /partial proof plan/);
+});
+
+test("witness-only summary proves completeness without a prover-network submission", () => {
+  const approved = buildApprovedBatchSummary(fixtureBundle(), fixturePlan());
+  const witnesses = [
+    { claimId: "closed", claimType: "P0_CLOSED_LOOP", path: "/closed.json", sha256: "0x1" },
+    { claimId: "pair", claimType: "P0_RECIPROCAL", path: "/pair.json", sha256: "0x2" },
+  ];
+  const summary = buildWitnessOnlySummary(approved, witnesses, { path: "/lock.json", sha256: "0x3" });
+  assert.equal(summary.witnessCount, 2);
+  assert.equal(summary.proverNetworkSubmitted, false);
+  assert.equal(summary.completeness, "all-approved-claims-materialized-and-guest-verified-offchain");
+  assert.throws(() => buildWitnessOnlySummary(approved, witnesses.slice(1), {}), /not every approved claim/);
+});
+
+test("development generation binds the unified snapshot lock", () => {
+  const bundle = fixtureBundle();
+  const plan = fixturePlan();
+  const lock = {
+    version: 1,
+    kind: "antseed-unified-historical-wash-snapshot-lock",
+    reportRoot: bundle.reportRoot,
+    counts: { approvedClaims: 2, approvedSellers: 3 },
+    bundle: { path: "/bundle.json" },
+    plan: { path: "/plan.json" },
+  };
+  assert.doesNotThrow(() => validateSnapshotLock(lock, "/bundle.json", "/plan.json", bundle, plan));
+  lock.counts.approvedSellers = 2;
+  assert.throws(() => validateSnapshotLock(lock, "/bundle.json", "/plan.json", bundle, plan), /totals/);
 });
 
 function fixtureBundle() {

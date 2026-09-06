@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { sellerEvidenceByAddress } from "./seller-evidence.mjs";
 
 const exec = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -12,68 +13,70 @@ const value = (flag) => {
   const index = args.indexOf(flag);
   return index < 0 ? null : args[index + 1];
 };
-const output = resolve(value("--output") ?? "out/development-aggregate-proof.json");
 const artifactDir = resolve(value("--artifact-dir") ?? "out/development-proof-artifacts");
+const outputDir = resolve(value("--output-dir") ?? resolve(artifactDir, "sellers"));
 const toolchain = process.env.RUSTUP_TOOLCHAIN ?? "1.94";
-const guests = ["closed-loop", "reciprocal", "aggregator"];
 const skipGuestBuild = args.includes("--skip-guest-build");
 
 await mkdir(artifactDir, { recursive: true });
+await mkdir(outputDir, { recursive: true });
 await run("cargo", ["run", "-q", "-p", "wash-predicate", "--example", "generate_development_fixtures", "--", `--output=${artifactDir}`]);
-const closedFixture = JSON.parse(await readFile(resolve(artifactDir, "closed-loop.json"), "utf8"));
-const reciprocalFixture = JSON.parse(await readFile(resolve(artifactDir, "reciprocal.json"), "utf8"));
-const manifestPath = resolve(artifactDir, "historical-manifest.json");
-await writeFile(manifestPath, `${JSON.stringify({
-  report_root: `0x${"44".repeat(32)}`,
-  period_start_block: Math.min(closedFixture.period_start_block, reciprocalFixture.period_start_block),
-  period_end_block: Math.max(closedFixture.period_end_block, reciprocalFixture.period_end_block),
-  closed_loop_program_vkey: `0x${"00".repeat(32)}`,
-  reciprocal_program_vkey: `0x${"00".repeat(32)}`,
-  claims: [
-    { source_claim_id: closedFixture.source_claim_id, predicate_id: 1, period_start_block: closedFixture.period_start_block, period_end_block: closedFixture.period_end_block, subjects: [{ seller: closedFixture.seller, proven_wash_volume: "1200000000" }] },
-    { source_claim_id: reciprocalFixture.source_claim_id, predicate_id: 2, period_start_block: reciprocalFixture.period_start_block, period_end_block: reciprocalFixture.period_end_block, subjects: [
-      { seller: reciprocalFixture.address_a, proven_wash_volume: "500000000" },
-      { seller: reciprocalFixture.address_b, proven_wash_volume: "450000000" },
-    ] },
-  ],
-  block_refs: [],
-}, null, 2)}\n`);
+const closedFixturePath = resolve(artifactDir, "closed-loop.json");
+const reciprocalFixturePath = resolve(artifactDir, "reciprocal.json");
+const closedFixture = JSON.parse(await readFile(closedFixturePath, "utf8"));
+const reciprocalFixture = JSON.parse(await readFile(reciprocalFixturePath, "utf8"));
+const entries = [
+  { claim: { claimId: closedFixture.source_claim_id, subjects: [closedFixture.seller] }, kind: "closed-loop", witnessPath: closedFixturePath },
+  { claim: { claimId: reciprocalFixture.source_claim_id, subjects: [reciprocalFixture.address_a, reciprocalFixture.address_b] }, kind: "reciprocal", witnessPath: reciprocalFixturePath },
+];
+const evidenceBySeller = sellerEvidenceByAddress({ claims: entries.map((entry) => entry.claim) }, entries);
 
-for (const guest of guests) {
-  const elf = guestElf(guest);
-  if (!skipGuestBuild) {
-    await run("cargo", ["prove", "build"], resolve(root, "program", guest), { RUSTUP_TOOLCHAIN: "succinct" });
-    continue;
-  }
+const elf = guestElf();
+if (!skipGuestBuild) {
+  await run("cargo", ["prove", "build", "--workspace-directory", "../.."], resolve(root, "program/seller"), {
+    RUSTUP_TOOLCHAIN: "succinct",
+  });
+} else {
   try {
     await readFile(elf);
   } catch (error) {
-    if (error.code === "ENOENT") throw new Error(`${guest} guest ELF is missing; omit --skip-guest-build`);
+    if (error.code === "ENOENT") throw new Error("seller guest ELF is missing; omit --skip-guest-build");
     throw error;
   }
 }
 
-await mkdir(dirname(output), { recursive: true });
-await run("cargo", [
-  "run", "-q", "-p", "loop-host", "--features", "sp1", "--bin", "wash-trading-aggregate", "--",
-  "--development",
-  "--aggregator-elf", guestElf("aggregator"),
-  "--closed-loop-elf", guestElf("closed-loop"),
-  "--reciprocal-elf", guestElf("reciprocal"),
-  "--manifest", manifestPath,
-  "--child", `closed-loop:${resolve(artifactDir, "closed-loop.json")}`,
-  "--child", `reciprocal:${resolve(artifactDir, "reciprocal.json")}`,
-  "--output", output,
-]);
-
-const artifact = JSON.parse(await readFile(output, "utf8"));
-if (artifact.securityMode !== "development" || artifact.childCount !== 2 || artifact.sellerCount !== 3) {
-  throw new Error("development aggregate artifact has unexpected identity");
+const sellers = [...evidenceBySeller.keys()].sort();
+const outputs = [];
+for (const seller of sellers) {
+  const output = resolve(outputDir, `${seller}.json`);
+  const entry = evidenceBySeller.get(seller);
+  const evidence = `${entry.kind}:${entry.witnessPath}`;
+  const command = [
+    "run", "--release", "-q", "-p", "loop-host", "--features", "sp1", "--bin", "wash-trading-prove-seller", "--",
+    "--development",
+    "--seller", seller,
+    "--total-volume-witness", resolve(artifactDir, `${seller}.total-volume.json`),
+    "--seller-elf", elf,
+    "--seller-witness", resolve(artifactDir, "seller-witnesses", `${seller}.json`),
+    "--output", output,
+  ];
+  command.push("--evidence", evidence);
+  await run("cargo", [
+    ...command,
+  ]);
+  const artifact = JSON.parse(await readFile(output, "utf8"));
+  if (artifact?.version !== 3 || artifact.kind !== "antseed-wash-trading-seller-proof"
+      || artifact.proofArchitecture !== "direct-seller-v1" || artifact.securityMode !== "development"
+      || artifact.seller.toLowerCase() !== seller || artifact.claimCount !== 1
+      || artifact.evidenceFormat !== "single-bundle-v1") {
+    throw new Error(`${seller}: development seller artifact has unexpected identity`);
+  }
+  outputs.push(output);
 }
-console.log(`development aggregate: ${output}`);
+console.log(`development seller proofs: ${outputs.join(", ")}`);
 
-function guestElf(guest) {
-  return resolve(root, `program/${guest}/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/${guest}-guest`);
+function guestElf() {
+  return resolve(root, "program/seller/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/seller-guest");
 }
 
 async function run(command, commandArgs, cwd = root, extraEnv = {}) {

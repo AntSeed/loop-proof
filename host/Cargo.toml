@@ -9,8 +9,18 @@ name = "loop-host"
 path = "src/main.rs"
 
 [[bin]]
-name = "wash-trading-aggregate"
-path = "src/bin/wash-trading-aggregate.rs"
+name = "wash-trading-network-preflight"
+path = "src/bin/wash-trading-network-preflight.rs"
+required-features = ["sp1"]
+
+[[bin]]
+name = "wash-trading-network-price"
+path = "src/bin/wash-trading-network-price.rs"
+required-features = ["sp1"]
+
+[[bin]]
+name = "wash-trading-prove-seller"
+path = "src/bin/wash-trading-prove-seller.rs"
 required-features = ["sp1"]
 
 [dependencies]
@@ -30,7 +40,7 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 ureq = { version = "2", features = ["json"] }
 
-sp1-sdk = { workspace = true, optional = true, features = ["blocking", "native-gnark"] }
+sp1-sdk = { workspace = true, optional = true, features = ["blocking", "native-gnark", "network"] }
 
 [features]
 sp1 = ["dep:sp1-sdk"]

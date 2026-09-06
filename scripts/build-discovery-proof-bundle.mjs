@@ -5,6 +5,8 @@ import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { dedupeDependencies, finalizeBundle, finalizeClaim, locator, relayDependency, returnPathDependency } from "./proof-bundle.mjs";
+import { returnPathCreditRaw } from "./return-path-selection.mjs";
+import { ALPHA_FUND_BPS, ALPHA_RETURN_BPS } from "./predicate-policy.mjs";
 
 const DEFAULT_SCAN = "/Users/alex/.antseed/forensics/wash-trading/scans/2026-08-13T22-54-53-096Z";
 
@@ -158,16 +160,11 @@ export async function buildDiscoveryProofBundle({ scanDirectory, baselineBundle,
 export function evaluateClosedLoopCandidate({ sellerVolumeRaw, settlements, fundings, paths }) {
   const selectedSettlementRaw = sumRaw(settlements);
   const retainedFundingRaw = sumRaw(fundings);
-  const bottleneckReturnRaw = paths.reduce((total, path) => total + minRaw([
-    path.sellerPayment.amountRaw,
-    path.relayForward.amountRaw,
-    path.funderReceipt.amountRaw,
-  ]), 0n);
-  const total = BigInt(sellerVolumeRaw);
+  const bottleneckReturnRaw = paths.reduce((total, path) => total + returnPathCreditRaw(path), 0n);
   const deficits = {
-    majorityRaw: selectedSettlementRaw * 2n > total ? "0" : ((total / 2n + 1n) - selectedSettlementRaw).toString(),
-    fundingRaw: retainedFundingRaw * 10_000n >= selectedSettlementRaw * 9_000n ? "0" : (ceilDiv(selectedSettlementRaw * 9_000n, 10_000n) - retainedFundingRaw).toString(),
-    returnRaw: bottleneckReturnRaw * 10_000n >= selectedSettlementRaw * 3_000n ? "0" : (ceilDiv(selectedSettlementRaw * 3_000n, 10_000n) - bottleneckReturnRaw).toString(),
+    positiveVolumeRaw: selectedSettlementRaw > 0n ? "0" : "1",
+    fundingRaw: retainedFundingRaw * 10_000n >= selectedSettlementRaw * ALPHA_FUND_BPS ? "0" : (ceilDiv(selectedSettlementRaw * ALPHA_FUND_BPS, 10_000n) - retainedFundingRaw).toString(),
+    returnRaw: bottleneckReturnRaw * 10_000n >= selectedSettlementRaw * ALPHA_RETURN_BPS ? "0" : (ceilDiv(selectedSettlementRaw * ALPHA_RETURN_BPS, 10_000n) - bottleneckReturnRaw).toString(),
   };
   return {
     accepted: Object.values(deficits).every((value) => value === "0"),
@@ -180,13 +177,9 @@ export function evaluateClosedLoopCandidate({ sellerVolumeRaw, settlements, fund
 
 export function supportedSettlementCapacity(fundings, paths) {
   const fundingRaw = sumRaw(fundings);
-  const returnRaw = paths.reduce((total, path) => total + minRaw([
-    path.sellerPayment.amountRaw,
-    path.relayForward.amountRaw,
-    path.funderReceipt.amountRaw,
-  ]), 0n);
-  const fundingCapacity = fundingRaw * 10_000n / 9_000n;
-  const returnCapacity = returnRaw * 10_000n / 3_000n;
+  const returnRaw = paths.reduce((total, path) => total + returnPathCreditRaw(path), 0n);
+  const fundingCapacity = fundingRaw * 10_000n / ALPHA_FUND_BPS;
+  const returnCapacity = returnRaw * 10_000n / ALPHA_RETURN_BPS;
   return fundingCapacity < returnCapacity ? fundingCapacity : returnCapacity;
 }
 

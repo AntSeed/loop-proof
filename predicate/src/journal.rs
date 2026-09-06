@@ -1,13 +1,20 @@
-//! The public child-proof journal.
+//! The claim journal consumed privately by the direct seller proof.
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{keccak256, Address, B256};
 use alloy_sol_types::SolValue;
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettlementRecord {
+    pub settlement_id: B256,
+    pub amount: u128,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubjectRecord {
     pub subject: Address,
     pub wash_volume: u128,
+    pub settlements: Vec<SettlementRecord>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +38,12 @@ alloy_sol_types::sol! {
     struct SolSubjectRecord {
         address subject;
         uint128 washVolume;
+        SolSettlementRecord[] settlements;
+    }
+
+    struct SolSettlementRecord {
+        bytes32 settlementId;
+        uint128 amount;
     }
 
     struct SolWashJournal {
@@ -60,6 +73,14 @@ impl WashJournal {
                 .map(|subject| SolSubjectRecord {
                     subject: subject.subject,
                     washVolume: subject.wash_volume,
+                    settlements: subject
+                        .settlements
+                        .iter()
+                        .map(|settlement| SolSettlementRecord {
+                            settlementId: settlement.settlement_id,
+                            amount: settlement.amount,
+                        })
+                        .collect(),
                 })
                 .collect(),
             blockRefs: self
@@ -90,6 +111,14 @@ impl WashJournal {
                 .map(|subject| SubjectRecord {
                     subject: subject.subject,
                     wash_volume: subject.washVolume,
+                    settlements: subject
+                        .settlements
+                        .into_iter()
+                        .map(|settlement| SettlementRecord {
+                            settlement_id: settlement.settlementId,
+                            amount: settlement.amount,
+                        })
+                        .collect(),
                 })
                 .collect(),
             block_refs: journal
@@ -99,4 +128,13 @@ impl WashJournal {
                 .collect(),
         })
     }
+}
+
+pub fn settlement_id(
+    chain_id: u64,
+    block_number: u64,
+    transaction_index: u64,
+    log_index: usize,
+) -> B256 {
+    keccak256((chain_id, block_number, transaction_index, log_index as u64).abi_encode())
 }

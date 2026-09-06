@@ -4,8 +4,8 @@
 //! evidence (receipts, transactions, and state, authenticated by
 //! Merkle-Patricia proofs against block headers) and checks a fixed
 //! mechanical predicate over it. The guest binary's verification key IS the
-//! rule: changing any constant in this crate produces a different vkey and
-//! therefore a new append-only child-program version in the registry.
+//! rule: changing any constant in this crate produces a different direct
+//! seller-program vkey and therefore a new registry version.
 //!
 //! Both predicates prove the same thing — a conserved value loop. Fabricated
 //! volume is volume settled with capital that the same party put in and got
@@ -25,30 +25,26 @@ use alloy_primitives::{address, keccak256, Address, B256, U256};
 use alloy_sol_types::SolValue;
 use serde::{Deserialize, Serialize};
 
-pub mod aggregate;
 pub mod closed_loop;
 pub mod journal;
 pub mod reciprocal;
 pub mod resolver;
+pub mod seller;
 
-pub use aggregate::{AggregateJournal, ChildProofInput};
 pub use closed_loop::{verify_closed_loop, ClosedLoopInput};
-pub use journal::{SubjectRecord, WashJournal};
+pub use journal::{settlement_id, SettlementRecord, SubjectRecord, WashJournal};
 pub use reciprocal::{verify_reciprocal, ReciprocalInput};
+pub use seller::{
+    verify_block_authentication_chunk, verify_seller, BlockAuthenticationChunk, HistoricalBlockRef,
+    SellerEvidence, SellerJournal, SellerProofInput, SolSellerSettlement, VerifiedSeller,
+};
 
 // ─── Rule identity ────────────────────────────────────────────────────────
 
-pub const PREDICATE_VERSION: u32 = 5;
+pub const PREDICATE_VERSION: u32 = 8;
 pub const CLOSED_LOOP_PREDICATE_ID: u8 = 1;
 pub const RECIPROCAL_PREDICATE_ID: u8 = 2;
 pub const BASE_CHAIN_ID: u64 = 8_453;
-pub const CLOSED_LOOP_PROGRAM_ID: B256 =
-    alloy_primitives::b256!("8d4ca7dfd71be3492a82a21293943ea86911396bd13abf3a0979ca676b307c15");
-pub const RECIPROCAL_PROGRAM_ID: B256 =
-    alloy_primitives::b256!("95663278b1f0af87d6f97269fa5259671b347e3a7f4290fe2f23a00dfe881ad3");
-pub const AGGREGATOR_PROGRAM_ID: B256 =
-    alloy_primitives::b256!("f10e3b26ded3ac26cbb512dd52c781ace3f3e0f53977fe4772e54838fa8b2e1f");
-
 // ─── Historical defaults used by ad-hoc tooling ──────────────────────────
 
 pub const PERIOD_START_BLOCK: u64 = 44_471_575;
@@ -66,7 +62,7 @@ pub const PERIOD_END_BLOCK: u64 = 49_936_172;
 pub const ALPHA_FUND_BPS: u64 = 9_000;
 /// RETURN must carry at least this share of the settled volume back to the
 /// funder.
-pub const ALPHA_RETURN_BPS: u64 = 2_000;
+pub const ALPHA_RETURN_BPS: u64 = 3_000;
 /// Each return hop must forward at least this share of what it received.
 /// Set low to accommodate real intermediary chains that batch or round
 /// transfer amounts (observed: conduit forwards round-number amounts,
@@ -96,7 +92,7 @@ pub const H_MAX_INTERMEDIATE_HOPS: usize = 8;
 
 // Witness-sizing limits (shape bounds, not thresholds).
 pub const MAX_BUYERS: usize = 256;
-pub const MAX_BLOCK_REFS: usize = 40_000;
+pub const MAX_BLOCK_REFS: usize = 65_536;
 pub const MAX_RETURN_PATHS: usize = 512;
 
 // ─── Deployed contracts the evidence binds to (Base mainnet) ──────────────
@@ -110,23 +106,19 @@ pub const STAKING_ADDRESS: Address = address!("3652E6B22919bd322A25723B94BB20760
 //
 // The guest derives every proven slot from these constants and the subject
 // addresses; slots are never part of the witness, so a prover cannot point a
-// proof at a different contract or field. Verified live against Base mainnet
-// (`loop-host verify-layout <seller>`): e.g. for any agent id N,
-// `_agentStats[N].totalVolumeUsdc` at keccak256(N ‖ 11) + 1 equals
-// `getAgentStats(N).totalVolumeUsdc`.
-
-/// `AntseedChannels.mapping(uint256 => AgentStats) private _agentStats`.
-pub const CHANNELS_AGENT_STATS_SLOT: u64 = 11;
-/// `AgentStats { uint64 channelCount; uint64 ghostCount; uint256
-/// totalVolumeUsdc; uint64 lastSettledAt }` — the two u64s pack into the
-/// first slot, so `totalVolumeUsdc` is at offset 1.
-pub const AGENT_STATS_TOTAL_VOLUME_OFFSET: u64 = 1;
-/// `AntseedStaking.mapping(address => uint256) public sellerAgentId`.
-pub const STAKING_SELLER_AGENT_ID_SLOT: u64 = 4;
+// proof at a different contract or field.
 /// `AntseedDeposits.mapping(address => BuyerAccount) public buyers`.
 pub const DEPOSITS_BUYERS_SLOT: u64 = 9;
 /// `BuyerAccount.balance` is the struct's first field.
 pub const BUYER_ACCOUNT_BALANCE_OFFSET: u64 = 0;
+/// `AntseedStaking.mapping(address => uint256) public sellerAgentId`.
+pub const STAKING_SELLER_AGENT_ID_SLOT: u64 = 4;
+/// `AntseedChannels.mapping(uint256 => AgentStats) private _agentStats`.
+pub const CHANNELS_AGENT_STATS_SLOT: u64 = 11;
+/// `AgentStats.totalVolumeUsdc`: `channelCount` and `ghostCount` pack into
+/// the struct's first slot, so the cumulative settled-volume counter lives
+/// at offset 1.
+pub const AGENT_STATS_TOTAL_VOLUME_OFFSET: u64 = 1;
 
 // ─── Evidence references ──────────────────────────────────────────────────
 
@@ -169,19 +161,18 @@ pub struct StateRead {
     pub proof: StorageProof,
 }
 
-/// `FUND` evidence: capital from the funder crediting one buyer. Every form
-/// is attributed by recovering the funding transaction's signer — log topics
-/// alone never attribute.
+/// `FUND` evidence: USDC capital from the funder crediting one buyer.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FundingKind {
-    /// Direct USDC transfer funder → buyer.
+    /// Direct USDC transfer funder → buyer. Attribution comes from the
+    /// authenticated ERC-20 Transfer sender so contract custodians qualify.
     Usdc { transfer: LogRef },
     /// `Deposits.deposit(buyer, …)`: USDC transfer funder → Deposits paired
     /// with `Deposited(buyer, amount)` in the same receipt.
     ProtocolDeposit { transfer: LogRef, deposited: LogRef },
-    /// Native transfer funder → buyer. Establishes funding order and shape
-    /// only: native value is a different unit and never counts toward the
-    /// USDC coverage or ledger sums.
+    /// Legacy witness shape retained for decoding old artifacts. The closed-loop
+    /// predicate rejects this variant because native value cannot establish
+    /// USDC conservation.
     Native {
         transaction: TransactionRef,
         receipt: ReceiptRef,

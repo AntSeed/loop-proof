@@ -195,13 +195,16 @@ fn missing_or_short_return_is_rejected() {
     cfg.return_paths = vec![];
     assert_rejects(&closed_loop_input(&cfg), "below the coverage fraction");
 
-    // Σ settle = 1_200_000_000; α_return = 2_000 bps → arrival ≥ 240_000_000.
+    // Σ settle = 1_200_000_000; α_return = 3_000 bps → arrival ≥ 360_000_000.
     let mut cfg = LoopCfg::default();
-    cfg.return_paths = vec![vec![(FUNDER, 240_000_000)]];
+    cfg.return_paths = vec![vec![(FUNDER, 360_000_000)]];
     verify_closed_loop(&closed_loop_input(&cfg)).unwrap();
 
     let mut cfg = LoopCfg::default();
-    cfg.return_paths = vec![vec![(FUNDER, 239_999_999)]];
+    cfg.return_paths = vec![vec![(FUNDER, 359_999_999)]];
+    assert_rejects(&closed_loop_input(&cfg), "below the coverage fraction");
+
+    cfg.return_paths = vec![vec![(FUNDER, 240_000_000)]];
     assert_rejects(&closed_loop_input(&cfg), "below the coverage fraction");
 }
 
@@ -209,12 +212,12 @@ fn missing_or_short_return_is_rejected() {
 fn return_hop_retention_boundary_is_exact() {
     // ρ_hop = 2_800: a hop forwarding exactly 28% passes…
     let mut cfg = LoopCfg::default();
-    cfg.return_paths = vec![vec![(RELAY, 1_300_000_000), (FUNDER, 364_000_000)]];
+    cfg.return_paths = vec![vec![(RELAY, 2_200_000_000), (FUNDER, 616_000_000)]];
     verify_closed_loop(&closed_loop_input(&cfg)).unwrap();
 
     // …one unit less does not.
     let mut cfg = LoopCfg::default();
-    cfg.return_paths = vec![vec![(RELAY, 1_300_000_000), (FUNDER, 363_999_999)]];
+    cfg.return_paths = vec![vec![(RELAY, 2_200_000_000), (FUNDER, 615_999_999)]];
     assert_rejects(
         &closed_loop_input(&cfg),
         "retains more than the permitted share",
@@ -319,20 +322,21 @@ fn evidence_outside_the_period_is_rejected() {
 }
 
 #[test]
-fn funding_attribution_requires_the_recovered_signer() {
-    // Strip the authenticated transaction from a funding block.
+fn direct_usdc_funding_uses_the_authenticated_transfer_sender() {
+    // Direct ERC-20 funding remains valid without a transaction proof because
+    // contract custodians may emit the transfer while an operator signs.
     let mut input = closed_loop_input(&LoopCfg::default());
     input.blocks[0].transactions.clear();
     input.blocks[0].header.transactions_root = B256::ZERO;
-    assert_rejects(&input, "authenticated transaction missing");
+    verify_closed_loop(&input).unwrap();
 
-    // A funder that is not the signer fails recovery-based attribution even
-    // though the Transfer log names it.
+    // The authenticated Transfer sender is the funder even when the bundled
+    // transaction was signed by a different operator.
     let other = address!("0000000000000000000000000000000000000099");
     let mut cfg = LoopCfg::default();
     cfg.funder = other;
     cfg.return_paths = vec![vec![(other, 960_000_000)]];
-    assert_rejects(&closed_loop_input(&cfg), "signer mismatch");
+    verify_closed_loop(&closed_loop_input(&cfg)).unwrap();
 }
 
 #[test]
@@ -379,7 +383,7 @@ fn protocol_deposit_funding_is_accepted() {
 }
 
 #[test]
-fn native_funding_proves_seeding_without_cross_unit_coverage() {
+fn native_funding_is_rejected_in_the_guest() {
     // SELLER is the raw transaction's `to`; use it as the funded buyer so the
     // native evidence itself is shape-valid.
     let mut cfg = LoopCfg::default();
@@ -407,12 +411,11 @@ fn native_funding_proves_seeding_without_cross_unit_coverage() {
         },
     };
     input.ledgers.clear();
-    let journal = verify_closed_loop(&input).unwrap();
-    assert_eq!(journal.subjects[0].wash_volume, 400_000_000);
+    assert_rejects(&input, "native funding is not supported");
 }
 
 #[test]
-fn native_and_usdc_funding_cannot_be_mixed() {
+fn native_funding_is_rejected_even_when_usdc_evidence_is_present() {
     let mut input = closed_loop_input(&LoopCfg::default());
     input.blocks[0] = transfer_block(PERIOD_START_BLOCK, 1_000, FUNDER, BUYERS[0], 1, true);
     input.fundings[0].kind = FundingKind::Native {
@@ -425,7 +428,7 @@ fn native_and_usdc_funding_cannot_be_mixed() {
             receipt: 0,
         },
     };
-    assert_rejects(&input, "cannot mix native and USDC evidence");
+    assert_rejects(&input, "native funding is not supported");
 }
 
 #[test]

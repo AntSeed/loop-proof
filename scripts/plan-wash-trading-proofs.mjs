@@ -16,6 +16,7 @@ const plan = await planFile({
   outPath,
   rpcUrl,
   concurrency: Number(value("--concurrency") ?? 20),
+  claimConcurrency: Number(value("--claim-concurrency") ?? 1),
   claimIds: claimIds.length === 0 ? null : claimIds,
   onProgress: (message) => console.error(message),
 });

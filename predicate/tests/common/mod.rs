@@ -11,8 +11,9 @@ use loop_core::{rlp_bytes, rlp_list, rlp_uint, ReceiptProof, StorageProof, Trans
 use std::collections::BTreeMap;
 use wash_predicate::{
     BuyerLedger, EvidenceBlock, FundingEvidence, FundingKind, LogRef, ReturnPath, StateRead,
-    BUYER_ACCOUNT_BALANCE_OFFSET, CHANNELS_ADDRESS, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT,
-    PERIOD_END_BLOCK, PERIOD_START_BLOCK, USDC_ADDRESS,
+    AGENT_STATS_TOTAL_VOLUME_OFFSET, BUYER_ACCOUNT_BALANCE_OFFSET, CHANNELS_ADDRESS,
+    CHANNELS_AGENT_STATS_SLOT, DEPOSITS_ADDRESS, DEPOSITS_BUYERS_SLOT, PERIOD_END_BLOCK,
+    PERIOD_START_BLOCK, STAKING_ADDRESS, STAKING_SELLER_AGENT_ID_SLOT, USDC_ADDRESS,
 };
 
 /// Signer-recoverable raw transaction (chain id 8453, to = SELLER, value 1
@@ -27,7 +28,6 @@ pub const BUYERS: [Address; 3] = [
     address!("0000000000000000000000000000000000000002"),
     address!("0000000000000000000000000000000000000003"),
 ];
-pub const AGENT_ID: u64 = 777;
 
 pub fn address_topic(value: Address) -> B256 {
     let mut topic = [0u8; 32];
@@ -292,6 +292,10 @@ pub fn deposit_block(
 pub struct StateSpec {
     /// `Deposits.buyers[addr].balance`
     pub balances: Vec<(Address, U256)>,
+    /// `Staking.sellerAgentId[seller]`
+    pub agent_ids: Vec<(Address, U256)>,
+    /// `Channels._agentStats[agentId].totalVolumeUsdc`
+    pub total_volumes: Vec<(U256, U256)>,
 }
 
 pub struct StateBlock {
@@ -310,6 +314,13 @@ impl StateBlock {
                 .clone(),
         }
     }
+
+    pub fn proof(&self, contract: Address, slot: B256) -> StorageProof {
+        self.proofs
+            .get(&(contract, slot))
+            .unwrap_or_else(|| panic!("no retained proof for {contract} {slot}"))
+            .clone()
+    }
 }
 
 pub fn balance_slot(buyer: Address) -> B256 {
@@ -317,6 +328,128 @@ pub fn balance_slot(buyer: Address) -> B256 {
         loop_core::mapping_slot_address(buyer, DEPOSITS_BUYERS_SLOT),
         BUYER_ACCOUNT_BALANCE_OFFSET,
     )
+}
+
+pub fn agent_id_slot(seller: Address) -> B256 {
+    loop_core::mapping_slot_address(seller, STAKING_SELLER_AGENT_ID_SLOT)
+}
+
+pub fn total_volume_slot(agent_id: U256) -> B256 {
+    loop_core::slot_offset(
+        loop_core::mapping_slot_u256(agent_id, CHANNELS_AGENT_STATS_SLOT),
+        AGENT_STATS_TOTAL_VOLUME_OFFSET,
+    )
+}
+
+/// Default agent id used by seller-proof fixtures.
+pub const AGENT_ID: u64 = 53_008;
+
+/// Every fixture seller's cumulative settled-volume counter at the period
+/// end (the start-boundary counter is zero).
+pub const TOTAL_VOLUME_END_COUNTER: u128 = 2_000_000_000;
+
+/// Fixture-canonical agent id per subject address. Claim end-state blocks
+/// and total-volume boundary witnesses must agree on one world state, so
+/// both derive it from here.
+pub fn canonical_agent_id(seller: Address) -> U256 {
+    if seller == SELLER {
+        U256::from(AGENT_ID)
+    } else if seller == PAIR_A {
+        U256::from(AGENT_ID + 1)
+    } else if seller == PAIR_B {
+        U256::from(AGENT_ID + 2)
+    } else {
+        U256::from(AGENT_ID + 9)
+    }
+}
+
+/// Staking/channels state shared by every boundary block: all fixture
+/// sellers staked, each with `counter` settled volume.
+fn boundary_entries(counter: u128) -> (Vec<(Address, U256)>, Vec<(U256, U256)>) {
+    let sellers = [SELLER, PAIR_A, PAIR_B];
+    (
+        sellers
+            .iter()
+            .map(|s| (*s, canonical_agent_id(*s)))
+            .collect(),
+        sellers
+            .iter()
+            .map(|s| (canonical_agent_id(*s), U256::from(counter)))
+            .collect(),
+    )
+}
+
+/// Extend a period-end state spec with the canonical staking/channels
+/// entries so the end header matches total-volume boundary witnesses.
+pub fn with_boundary_state(mut spec: StateSpec) -> StateSpec {
+    let (agent_ids, total_volumes) = boundary_entries(TOTAL_VOLUME_END_COUNTER);
+    spec.agent_ids = agent_ids;
+    spec.total_volumes = total_volumes;
+    spec
+}
+
+/// Build the period-end boundary witness proving the seller's total settled
+/// volume (`TOTAL_VOLUME_END_COUNTER`; the period starts at protocol
+/// genesis, so the end counter is the period total).
+pub fn total_volume_witness(seller: Address) -> wash_predicate::seller::TotalVolumeBoundary {
+    total_volume_boundary(PERIOD_END_BLOCK, 9_000, seller, TOTAL_VOLUME_END_COUNTER)
+}
+
+pub fn total_volume_boundary(
+    number: u64,
+    timestamp: u64,
+    seller: Address,
+    counter: u128,
+) -> wash_predicate::seller::TotalVolumeBoundary {
+    let agent = canonical_agent_id(seller);
+    let (agent_ids, total_volumes) = boundary_entries(counter);
+    let spec = StateSpec {
+        balances: Vec::new(),
+        agent_ids,
+        total_volumes,
+    };
+    let retain = vec![
+        (STAKING_ADDRESS, agent_id_slot(seller)),
+        (CHANNELS_ADDRESS, total_volume_slot(agent)),
+    ];
+    let state = state_block(number, timestamp, &spec, &retain);
+    wash_predicate::seller::TotalVolumeBoundary {
+        header: state.block.header.clone(),
+        agent_id: state.proof(STAKING_ADDRESS, agent_id_slot(seller)),
+        total_volume: state.proof(CHANNELS_ADDRESS, total_volume_slot(agent)),
+    }
+}
+
+/// Period-end boundary where the target seller is not staked: its agent-id
+/// slot is absent (proves zero), so the proof must be rejected.
+pub fn unstaked_total_volume_witness(
+    seller: Address,
+) -> wash_predicate::seller::TotalVolumeBoundary {
+    let others: Vec<Address> = [SELLER, PAIR_A, PAIR_B]
+        .into_iter()
+        .filter(|other| *other != seller)
+        .collect();
+    let spec = StateSpec {
+        balances: Vec::new(),
+        agent_ids: others
+            .iter()
+            .map(|other| (*other, canonical_agent_id(*other)))
+            .collect(),
+        total_volumes: others
+            .iter()
+            .map(|other| (canonical_agent_id(*other), U256::from(1u64)))
+            .collect(),
+    };
+    let retain = vec![
+        (STAKING_ADDRESS, agent_id_slot(seller)),
+        (CHANNELS_ADDRESS, total_volume_slot(U256::ZERO)),
+    ];
+    let state = state_block(PERIOD_END_BLOCK, 9_000, &spec, &retain);
+    wash_predicate::seller::TotalVolumeBoundary {
+        header: state.block.header.clone(),
+        agent_id: state.proof(STAKING_ADDRESS, agent_id_slot(seller)),
+        total_volume: state.proof(CHANNELS_ADDRESS, total_volume_slot(U256::ZERO)),
+    }
 }
 
 /// Build a boundary block whose state trie holds the deposits account,
@@ -327,7 +460,7 @@ pub fn state_block(
     spec: &StateSpec,
     retain: &[(Address, B256)],
 ) -> StateBlock {
-    let contracts = [DEPOSITS_ADDRESS];
+    let contracts = [DEPOSITS_ADDRESS, STAKING_ADDRESS, CHANNELS_ADDRESS];
     let mut storage: BTreeMap<Address, Vec<(B256, Vec<u8>)>> = BTreeMap::new();
     for (buyer, balance) in &spec.balances {
         if !balance.is_zero() {
@@ -335,6 +468,22 @@ pub fn state_block(
                 .entry(DEPOSITS_ADDRESS)
                 .or_default()
                 .push((balance_slot(*buyer), storage_leaf(*balance)));
+        }
+    }
+    for (seller, agent_id) in &spec.agent_ids {
+        if !agent_id.is_zero() {
+            storage
+                .entry(STAKING_ADDRESS)
+                .or_default()
+                .push((agent_id_slot(*seller), storage_leaf(*agent_id)));
+        }
+    }
+    for (agent_id, volume) in &spec.total_volumes {
+        if !volume.is_zero() {
+            storage
+                .entry(CHANNELS_ADDRESS)
+                .or_default()
+                .push((total_volume_slot(*agent_id), storage_leaf(*volume)));
         }
     }
     // storage tries + retained storage proofs per contract
@@ -432,7 +581,8 @@ impl Default for LoopCfg {
             funded: vec![400_000_000; 3],
             settled: vec![400_000_000; 3],
             end_balances: vec![0; 3],
-            // Σ settle = 1200 USDC; α_return 0.8 needs ≥ 960 at the funder.
+            // Σ settle = 1200 USDC; α_return = 3_000 bps needs ≥ 360 at the
+            // funder; this path returns 1170.
             return_paths: vec![vec![(RELAY, 1_176_000_000), (FUNDER, 1_170_000_000)]],
         }
     }
@@ -527,7 +677,12 @@ pub fn closed_loop_input(cfg: &LoopCfg) -> wash_predicate::ClosedLoopInput {
             .collect(),
         ..Default::default()
     };
-    let end_state = state_block(PERIOD_END_BLOCK, 9_000, &end_spec, &retain_end);
+    let end_state = state_block(
+        PERIOD_END_BLOCK,
+        9_000,
+        &with_boundary_state(end_spec),
+        &retain_end,
+    );
     let end_index = blocks.len();
     blocks.push(end_state.block.clone());
 
@@ -538,7 +693,6 @@ pub fn closed_loop_input(cfg: &LoopCfg) -> wash_predicate::ClosedLoopInput {
             end: end_state.read(end_index, DEPOSITS_ADDRESS, balance_slot(*buyer)),
         })
         .collect();
-
     wash_predicate::ClosedLoopInput {
         chain_id: wash_predicate::BASE_CHAIN_ID,
         period_start_block: PERIOD_START_BLOCK,
@@ -648,7 +802,12 @@ pub fn reciprocal_input(cfg: &PairCfg) -> wash_predicate::ReciprocalInput {
         ],
         ..Default::default()
     };
-    let end_state = state_block(PERIOD_END_BLOCK, 9_000, &end_spec, &retain_end);
+    let end_state = state_block(
+        PERIOD_END_BLOCK,
+        9_000,
+        &with_boundary_state(end_spec),
+        &retain_end,
+    );
     let end_index = blocks.len();
     blocks.push(end_state.block.clone());
 

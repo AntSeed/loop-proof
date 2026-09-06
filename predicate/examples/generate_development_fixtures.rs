@@ -22,6 +22,20 @@ fn main() -> Result<()> {
     for block in &mut reciprocal.blocks {
         block.header.number += reciprocal_offset;
     }
+    for seller in [
+        common::closed_loop_input(&LoopCfg::default()).seller,
+        reciprocal.address_a,
+        reciprocal.address_b,
+    ] {
+        let mut boundary = common::total_volume_witness(seller);
+        if seller == reciprocal.address_a || seller == reciprocal.address_b {
+            boundary.header.number += reciprocal_offset;
+        }
+        fs::write(
+            output.join(format!("{seller}.total-volume.json")),
+            serde_json::to_vec(&boundary)?,
+        )?;
+    }
 
     let fixtures = [
         (

@@ -1,0 +1,50 @@
+{
+  "alphaReturnBps": 3000,
+  "complete": true,
+  "allVerified": true,
+  "proverNetworkSubmitted": false,
+  "sellerProgramVKey": "0x0028d499469d8bdb345427dccf15bbbf3f1c582625a0a5690e7ac3576ef6ed99",
+  "elfSha256": "0x64fc83ab149f425bf91c7f451fc28645d24623894378efd2efed3f48d0847562",
+  "results": [
+    {
+      "seller": "0x94c3f5af394542cfa123f32e17a7a25feeed6758",
+      "name": "NoaxAI",
+      "alphaReturnBps": 3000,
+      "originalSellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt-native-2026-09-05/seller-witnesses/0x94c3f5af394542cfa123f32e17a7a25feeed6758.json",
+      "originalSellerInputSha256": "0x41710464edd8d3eee72a1c8068e6b518bdd7f23fde3f383ba0871d22d41ae78b",
+      "status": "development-verified",
+      "nativeVerified": true,
+      "provenWashVolumeRaw": "9781569372",
+      "totalSellerVolumeRaw": "10258688713",
+      "returnedCreditRaw": "3287721408",
+      "sellerProgramVKey": "0x0028d499469d8bdb345427dccf15bbbf3f1c582625a0a5690e7ac3576ef6ed99",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt30-2026-09-05/expanded-original-sellers/0x94c3f5af394542cfa123f32e17a7a25feeed6758/development.json",
+      "artifactSha256": "0xcc263b6166fbb387c05d3de255e90dee30c23e95727b9a48f10dc20e5dc7678f",
+      "settlementsFundingBuyersLedgersUnchanged": true,
+      "instructionCount": 17032178569,
+      "blockReferenceCount": 9412,
+      "returnSharePercent": "33.6113",
+      "washSharePercent": "95.3491"
+    },
+    {
+      "seller": "0x3a59c0058d6f4d75887aadf6812855a75b9ef1fd",
+      "name": "Prompt-Forge",
+      "alphaReturnBps": 3000,
+      "originalSellerInput": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt-native-2026-09-05/seller-witnesses/0x3a59c0058d6f4d75887aadf6812855a75b9ef1fd.json",
+      "originalSellerInputSha256": "0x44ba31b3c8417ece1e800974e72c03698e1535a2152918371f566a4b165ce034",
+      "status": "development-verified",
+      "nativeVerified": true,
+      "provenWashVolumeRaw": "11156194466",
+      "totalSellerVolumeRaw": "11605934345",
+      "returnedCreditRaw": "3437600775",
+      "sellerProgramVKey": "0x0028d499469d8bdb345427dccf15bbbf3f1c582625a0a5690e7ac3576ef6ed99",
+      "artifact": "/Users/alex/Documents/code/antseed-org/loop-proof/out/vt30-2026-09-05/expanded-original-sellers/0x3a59c0058d6f4d75887aadf6812855a75b9ef1fd/development.json",
+      "artifactSha256": "0x13bcc21cfc04decbf7b6a297dc23ad852c3b065be2a920d562b724bf480e1fab",
+      "settlementsFundingBuyersLedgersUnchanged": true,
+      "instructionCount": 19010249973,
+      "blockReferenceCount": 10277,
+      "returnSharePercent": "30.8133",
+      "washSharePercent": "96.1249"
+    }
+  ]
+}

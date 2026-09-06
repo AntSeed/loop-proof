@@ -28,7 +28,7 @@ export function finalizeBundle(bundle) {
 }
 
 export function relayDependency(path, seller, funder) {
-  return {
+  const dependency = {
     evidenceType: "RELAY_PATH",
     seller,
     funder,
@@ -44,12 +44,13 @@ export function relayDependency(path, seller, funder) {
       logIndex: path.relayForwardLogIndex,
       timestamp: path.relayForwardAt,
     }, { from: normalizeAddress(path.relay), to: normalizeAddress(path.intermediary), amountRaw: String(path.relayForwardRaw) }),
-    funderReceipt: locator("RELAY_FUNDER_RECEIPT", {
+  };
+  if (path.funderReceiptTx != null) dependency.funderReceipt = locator("RELAY_FUNDER_RECEIPT", {
       txHash: path.funderReceiptTx,
       logIndex: path.funderReceiptLogIndex,
       timestamp: path.funderReceiptAt,
-    }, { from: normalizeAddress(path.intermediary), to: funder, amountRaw: String(path.funderReceiptRaw) }),
-  };
+    }, { from: normalizeAddress(path.intermediary), to: funder, amountRaw: String(path.funderReceiptRaw) });
+  return dependency;
 }
 
 export function returnPathDependency(path, seller, funder) {

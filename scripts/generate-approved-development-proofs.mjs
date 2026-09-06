@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildAggregateCalldataArtifact } from "./generate-aggregate-calldata.mjs";
-import { historicalManifestFromBundle } from "./generate-historical-manifest.mjs";
+import { sellerEvidenceByAddress } from "./seller-evidence.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const MAX_PREDICATE_BLOCK_REFS = 65_536;
 
 export function buildApprovedBatchSummary(bundle, plan) {
   validateApprovedSet(bundle, plan);
@@ -53,8 +54,25 @@ export function buildApprovedBatchSummary(bundle, plan) {
     approvedSellerCount: new Set(bundle.claims.flatMap((claim) => claim.subjects.map((subject) => subject.toLowerCase()))).size,
     closedLoopVolumeRaw: closedLoopVolume.toString(),
     reciprocalVolumeRaw: reciprocalVolume.toString(),
-    uniqueSuspectedVolumeRaw: uniqueVolume.toString(),
+    uniqueSettlementVolumeRaw: uniqueVolume.toString(),
     uniqueSettlementCount: uniqueSettlements.size,
+  };
+}
+
+export function buildWitnessOnlySummary(approved, witnesses, snapshotLock) {
+  if (witnesses.length !== approved.approvedClaimCount) {
+    throw new Error("not every approved claim has a witness");
+  }
+  return {
+    version: 1,
+    kind: "antseed-wash-trading-approved-development-witness-summary",
+    securityMode: "development",
+    completeness: "all-approved-claims-materialized-and-guest-verified-offchain",
+    proverNetworkSubmitted: false,
+    snapshotLock,
+    ...approved,
+    witnessCount: witnesses.length,
+    witnesses,
   };
 }
 
@@ -84,6 +102,137 @@ export function validateApprovedSet(bundle, plan) {
   }
 }
 
+export async function mapWithConcurrency(items, concurrency, worker) {
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
+    throw new Error("concurrency must be a positive integer");
+  }
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+export function countClaimMaterializationBlocks(claim, periodEndBlock) {
+  const blocks = new Set([periodEndBlock]);
+  const atomicEvidence = [];
+  for (const evidence of claim.selectedEvidence ?? []) {
+    if (evidence.evidenceType === "RELAY_PATH") {
+      atomicEvidence.push(evidence.sellerPayment, evidence.relayForward, evidence.funderReceipt);
+    } else {
+      atomicEvidence.push(evidence);
+    }
+  }
+  for (const evidence of atomicEvidence) {
+    if (Number.isSafeInteger(evidence?.blockNumber)) blocks.add(evidence.blockNumber);
+  }
+  return blocks.size;
+}
+
+export function validateClaimMaterializationBlocks(claim, periodEndBlock, maximum = MAX_PREDICATE_BLOCK_REFS) {
+  const count = countClaimMaterializationBlocks(claim, periodEndBlock);
+  if (count > maximum) {
+    throw new Error(`${claim.claimId}: ${count} materialization blocks exceed predicate maximum ${maximum}`);
+  }
+  return count;
+}
+
+export async function shardProofPlan(planPath, shardDirectory, bundle) {
+  await mkdir(shardDirectory, { recursive: true });
+  const marker = '"claims":[';
+  let pending = "";
+  let metadata = null;
+  let claimChunks = [];
+  let claimDepth = 0;
+  let inString = false;
+  let escaped = false;
+  let parsingClaims = false;
+  let claimsEnded = false;
+  const entries = [];
+  const approvedById = new Map(bundle.claims.map((claim) => [claim.claimId.toLowerCase(), claim]));
+  const seenIds = new Set();
+  const accumulator = createBatchAccumulator(bundle);
+
+  for await (const chunk of createReadStream(planPath, { encoding: "utf8" })) {
+    pending += chunk;
+    if (!parsingClaims) {
+      const markerIndex = pending.indexOf(marker);
+      if (markerIndex < 0) continue;
+      metadata = JSON.parse(`${pending.slice(0, markerIndex)}"claims":[]}`);
+      pending = pending.slice(markerIndex + marker.length);
+      parsingClaims = true;
+      validatePlanMetadata(bundle, metadata);
+    }
+
+    let claimStart = claimDepth > 0 ? 0 : null;
+    let consumed = 0;
+    for (let index = 0; index < pending.length; index += 1) {
+      const character = pending[index];
+      consumed = index + 1;
+      if (claimsEnded) continue;
+      if (claimDepth === 0) {
+        if (character === "{") {
+          claimDepth = 1;
+          claimStart = index;
+          inString = false;
+          escaped = false;
+        } else if (character === "]") {
+          claimsEnded = true;
+        }
+        continue;
+      }
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') inString = true;
+      else if (character === "{") claimDepth += 1;
+      else if (character === "}") {
+        claimDepth -= 1;
+        if (claimDepth === 0) {
+          claimChunks.push(pending.slice(claimStart, index + 1));
+          const claimText = claimChunks.join("");
+          const claim = JSON.parse(claimText);
+          const claimId = claim.claimId?.toLowerCase();
+          const approved = approvedById.get(claimId);
+          if (!approved || seenIds.has(claimId)) throw new Error(`unexpected or duplicate planned claim ${claim.claimId}`);
+          accumulateClaim(accumulator, approved, claim);
+          validateClaimMaterializationBlocks(claim, metadata.period.endBlockExclusive - 1);
+          seenIds.add(claimId);
+          const shardPath = join(shardDirectory, `${String(entries.length).padStart(3, "0")}-${claim.claimId.slice(2, 18)}.plan.json`);
+          const shardPrefix = JSON.stringify({
+            version: metadata.version,
+            kind: metadata.kind,
+            chainId: metadata.chainId,
+            period: metadata.period,
+          });
+          await writeFile(shardPath, `${shardPrefix.slice(0, -1)},"claims":[${claimText}]}\n`);
+          entries.push({ claim: { claimId: claim.claimId, type: claim.type }, shardPath });
+          claimChunks = [];
+          claimStart = null;
+        }
+      }
+    }
+    if (claimDepth > 0 && claimStart != null) claimChunks.push(pending.slice(claimStart));
+    pending = parsingClaims ? pending.slice(consumed) : pending;
+  }
+
+  if (!metadata || !claimsEnded || claimDepth !== 0) throw new Error("incomplete proof plan JSON");
+  if (entries.length !== bundle.claims.length || seenIds.size !== bundle.claims.length) {
+    throw new Error(`partial proof plan: expected ${bundle.claims.length} claims, received ${entries.length}`);
+  }
+  if (metadata.claimCount !== entries.length) throw new Error("proof plan claim count mismatch");
+  return { entries, period: metadata.period, approved: finishBatchAccumulator(accumulator) };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const value = (flag) => {
@@ -94,21 +243,47 @@ async function main() {
   const planPath = resolve(required(value("--plan"), "--plan"));
   const artifactDir = resolve(value("--artifact-dir") ?? "out/approved-development-proofs");
   const summaryPath = resolve(value("--summary") ?? join(artifactDir, "summary.json"));
+  const snapshotLockPath = resolve(required(value("--snapshot-lock"), "--snapshot-lock"));
   const toolchain = process.env.RUSTUP_TOOLCHAIN ?? "1.94";
   const skipGuestBuild = args.includes("--skip-guest-build");
-  const bundle = JSON.parse(await readFile(bundlePath, "utf8"));
-  const plan = JSON.parse(await readFile(planPath, "utf8"));
-  const approved = buildApprovedBatchSummary(bundle, plan);
-  const manifestPath = join(artifactDir, "historical-manifest.json");
-
+  const witnessOnly = args.includes("--witness-only");
+  const materializeConcurrency = positiveInteger(
+    value("--materialize-concurrency") ?? process.env.WASH_TRADING_MATERIALIZE_CONCURRENCY ?? "2",
+    "--materialize-concurrency",
+  );
+  const bundleBytes = await readFile(bundlePath);
+  const bundle = JSON.parse(bundleBytes);
+  sellerEvidenceByAddress(bundle, bundle.claims.map((claim) => ({ claim })));
+  const snapshotLock = JSON.parse(await readFile(snapshotLockPath, "utf8"));
   await mkdir(artifactDir, { recursive: true });
-  const witnessEntries = plan.claims.map((claim, index) => ({
+  const planShardsDirectory = join(artifactDir, "plan-shards");
+  const indexedPlan = await shardProofPlan(planPath, planShardsDirectory, bundle);
+  validateSnapshotLock(snapshotLock, bundlePath, planPath, bundle, indexedPlan.approved, {
+    bundle: sha256(bundleBytes),
+    plan: await sha256File(planPath),
+  });
+  const approved = indexedPlan.approved;
+  const copiedSnapshotLockPath = join(artifactDir, "snapshot-lock.json");
+  await writeFile(copiedSnapshotLockPath, `${JSON.stringify(snapshotLock, null, 2)}\n`);
+  const materializer = resolve(root, "target/release/wash-trading-materialize-p0");
+  await run("cargo", [
+    "build", "--release", "-p", "loop-host",
+    "--bin", "wash-trading-materialize-p0",
+  ], root, { RUSTUP_TOOLCHAIN: toolchain });
+  const materializerSha256 = await sha256File(materializer);
+  const witnessEntries = indexedPlan.entries.map(({ claim, shardPath }, index) => ({
+    index,
     claim,
+    shardPath,
     witnessPath: join(artifactDir, `${String(index).padStart(3, "0")}-${claim.claimId.slice(2, 18)}.witness.json`),
   }));
   const missingWitnesses = [];
   for (const entry of witnessEntries) {
-    if (!await isCurrentWitness(entry.witnessPath, plan.period, entry.claim)) missingWitnesses.push(entry);
+    if (!await isCurrentWitness(entry.witnessPath, indexedPlan.period, entry.claim, materializerSha256)) {
+      missingWitnesses.push(entry);
+    } else {
+      console.error(`[${entry.index + 1}/${witnessEntries.length}] reusing ${basename(entry.witnessPath)}`);
+    }
   }
   if (missingWitnesses.length > 0) {
     const endpoints = (process.env.BASE_RPC_URLS ?? process.env.BASE_RPC_URL ?? "")
@@ -120,96 +295,231 @@ async function main() {
     }
   }
 
-  const materializer = resolve(root, "target/release/wash-trading-materialize-p0");
-  await run("cargo", [
-    "build", "--release", "-p", "loop-host",
-    "--bin", "wash-trading-materialize-p0",
-  ], root, { RUSTUP_TOOLCHAIN: toolchain });
-
-  const children = [];
-  for (const [index, { claim, witnessPath }] of witnessEntries.entries()) {
-    if (!await isCurrentWitness(witnessPath, plan.period, claim)) {
-      console.error(`[${index + 1}/${plan.claims.length}] materializing ${claim.claimId}`);
-      await run(materializer, ["--plan", planPath, "--claim-id", claim.claimId, "--output", witnessPath], root, {
+  if (missingWitnesses.length > 0) {
+    await mapWithConcurrency(missingWitnesses, materializeConcurrency, async ({ index, claim, shardPath, witnessPath }) => {
+      console.error(`[${index + 1}/${witnessEntries.length}] materializing ${claim.claimId}`);
+      await run(materializer, ["--plan", shardPath, "--claim-id", claim.claimId, "--output", witnessPath], root, {
         LOOP_RPC_CONCURRENCY: process.env.LOOP_RPC_CONCURRENCY ?? "1",
       });
-    } else {
-      console.error(`[${index + 1}/${plan.claims.length}] reusing ${basename(witnessPath)}`);
-    }
-    children.push(`${claim.type === "P0_RECIPROCAL" ? "reciprocal" : "closed-loop"}:${witnessPath}`);
+      await writeWitnessCacheMetadata(witnessPath, indexedPlan.period, claim, materializerSha256);
+    });
   }
-  if (children.length !== approved.approvedClaimCount) throw new Error("not every approved claim has a witness");
 
-  for (const guest of ["closed-loop", "reciprocal", "aggregator"]) {
+  const claimWitnesses = [];
+  for (const { claim, witnessPath } of witnessEntries) {
+    if (!await isCurrentWitness(witnessPath, indexedPlan.period, claim, materializerSha256)) {
+      throw new Error(`${claim.claimId}: canonical witness is missing or stale after materialization`);
+    }
+    claimWitnesses.push(`${claim.type === "P0_RECIPROCAL" ? "reciprocal" : "closed-loop"}:${witnessPath}`);
+  }
+  if (claimWitnesses.length !== approved.approvedClaimCount) throw new Error("not every approved claim has a witness");
+
+  if (!witnessOnly) {
     if (!skipGuestBuild) {
-      await run("cargo", ["prove", "build"], resolve(root, "program", guest), { RUSTUP_TOOLCHAIN: "succinct" });
+      await run("cargo", ["prove", "build", "--workspace-directory", "../.."], resolve(root, "program", "seller"), {
+        RUSTUP_TOOLCHAIN: "succinct",
+      });
     } else {
-      await stat(guestElf(guest));
+      await stat(guestElf("seller"));
     }
   }
-  await writeFile(manifestPath, `${JSON.stringify(historicalManifestFromBundle(bundle), null, 2)}\n`);
 
-  const aggregatePath = join(artifactDir, "aggregate-proof.json");
-  const aggregateArgs = [
-    "run", "--release", "-p", "loop-host", "--features", "sp1", "--bin", "wash-trading-aggregate", "--",
-    "--development",
-    "--aggregator-elf", guestElf("aggregator"),
-    "--closed-loop-elf", guestElf("closed-loop"),
-    "--reciprocal-elf", guestElf("reciprocal"),
-    "--manifest", manifestPath,
-    "--resolved-manifest-output", manifestPath,
-    "--child-artifact-dir", join(artifactDir, "children"),
-    "--output", aggregatePath,
-  ];
-  for (const child of children) aggregateArgs.push("--child", child);
-  await run("cargo", aggregateArgs, root, { RUSTUP_TOOLCHAIN: toolchain });
-
-  const aggregate = JSON.parse(await readFile(aggregatePath, "utf8"));
-  if (aggregate.securityMode !== "development"
-      || aggregate.childCount !== approved.approvedClaimCount
-      || aggregate.sourceClaimCount !== approved.approvedClaimCount
-      || aggregate.sellerCount !== approved.approvedSellerCount
-      || aggregate.provenWashVolumeRaw !== approved.uniqueSuspectedVolumeRaw) {
-    throw new Error("aggregate does not prove the complete approved report totals");
+  const witnessByClaim = new Map(witnessEntries.map(({ claim, witnessPath }) => [
+    claim.claimId.toLowerCase(),
+    `${claim.type === "P0_RECIPROCAL" ? "reciprocal" : "closed-loop"}:${witnessPath}`,
+  ]));
+  const evidenceBySeller = sellerEvidenceByAddress(bundle, witnessEntries.map(({ claim }) => ({
+    claim, witness: witnessByClaim.get(claim.claimId.toLowerCase()),
+  })));
+  const sellers = [...evidenceBySeller.keys()].sort();
+  if (sellers.length !== approved.approvedSellerCount) throw new Error("approved seller count mismatch");
+  const sellerArtifactDirectory = join(artifactDir, "sellers");
+  const sellerWitnessDirectory = join(artifactDir, "seller-witnesses");
+  await mkdir(sellerArtifactDirectory, { recursive: true });
+  await mkdir(sellerWitnessDirectory, { recursive: true });
+  const sellerResults = [];
+  for (const [sellerIndex, seller] of sellers.entries()) {
+    const evidence = evidenceBySeller.get(seller);
+    const output = join(sellerArtifactDirectory, `${seller}.json`);
+    const command = [
+      "run", "--release", "-p", "loop-host", "--features", "sp1",
+      "--bin", "wash-trading-prove-seller", "--",
+      witnessOnly ? "--witness-only" : "--development",
+      "--seller", seller,
+      "--output", output,
+      "--seller-witness", join(sellerWitnessDirectory, `${seller}.json`),
+    ];
+    if (!witnessOnly) command.push("--seller-elf", guestElf("seller"));
+    command.push("--evidence", evidence.witness);
+    console.error(`[${sellerIndex + 1}/${sellers.length}] ${witnessOnly ? "verifying" : "proving"} seller ${seller}`);
+    await run("cargo", command, root, { RUSTUP_TOOLCHAIN: toolchain });
+    const artifact = JSON.parse(await readFile(output, "utf8"));
+    if (artifact.seller?.toLowerCase() !== seller || artifact.claimCount !== 1
+        || artifact.evidenceFormat !== "single-bundle-v1"
+        || artifact.provenWashVolumeRaw == null || !/^[1-9][0-9]*$/.test(artifact.totalSellerVolumeRaw ?? "")
+        || artifact.proverNetworkSubmitted === true) {
+      throw new Error(`${seller}: invalid direct seller artifact`);
+    }
+    sellerResults.push({
+      seller,
+      path: output,
+      sha256: sha256(await readFile(output)),
+      claimCount: artifact.claimCount,
+      provenWashVolumeRaw: artifact.provenWashVolumeRaw,
+      totalSellerVolumeRaw: artifact.totalSellerVolumeRaw,
+      blockReferenceCount: artifact.blockReferenceCount,
+    });
   }
-  const calldataPath = join(artifactDir, "submit-historical-aggregate-calldata.json");
-  await writeFile(
-    calldataPath,
-    `${JSON.stringify(buildAggregateCalldataArtifact(aggregate), null, 2)}\n`,
-  );
+  const totalProvenWashVolumeRaw = sellerResults
+    .reduce((total, result) => total + BigInt(result.provenWashVolumeRaw), 0n)
+    .toString();
+  if (totalProvenWashVolumeRaw !== approved.uniqueSettlementVolumeRaw) {
+    throw new Error(`direct seller total ${totalProvenWashVolumeRaw} differs from approved ${approved.uniqueSettlementVolumeRaw}`);
+  }
   const summary = {
-    version: 1,
-    kind: "antseed-wash-trading-approved-development-summary",
+    version: 2,
+    kind: witnessOnly
+      ? "antseed-wash-trading-approved-development-witness-summary"
+      : "antseed-wash-trading-approved-development-summary",
+    proofArchitecture: "direct-seller-v1",
     securityMode: "development",
-    completeness: "complete-approved-report",
+    completeness: witnessOnly
+      ? "all-approved-seller-witnesses-native-verified"
+      : "all-approved-sellers-proved-offchain",
+    totalSellerVolumeRaw: sellerResults.reduce((total, seller) => total + BigInt(seller.totalSellerVolumeRaw), 0n).toString(),
+    proverNetworkSubmitted: false,
+    snapshotLock: { path: copiedSnapshotLockPath, sha256: sha256(await readFile(copiedSnapshotLockPath)) },
     ...approved,
-    aggregate: {
-      path: aggregatePath,
-      sha256: sha256(await readFile(aggregatePath)),
-      childCount: aggregate.childCount,
-      sourceClaimCount: aggregate.sourceClaimCount,
-      sellerCount: aggregate.sellerCount,
-      blockReferenceCount: aggregate.blockReferenceCount,
-      provenWashVolumeRaw: aggregate.provenWashVolumeRaw,
-      calldataPath,
-    },
+    sellerProofCount: witnessOnly ? 0 : sellerResults.length,
+    sellerWitnessCount: sellerResults.length,
+    totalProvenWashVolumeRaw,
+    sellerResults,
   };
   await mkdir(dirname(summaryPath), { recursive: true });
   await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
   console.log(`WASH_TRADING_APPROVED_DEVELOPMENT_SUMMARY=${JSON.stringify(summary)}`);
 }
 
-async function isCurrentWitness(path, period, claim) {
+export function validateSnapshotLock(lock, bundlePath, planPath, bundle, plan, digests = {}) {
+  if (lock?.version !== 1 || lock.kind !== "antseed-unified-historical-wash-snapshot-lock") {
+    throw new Error("invalid unified snapshot lock");
+  }
+  const approved = Array.isArray(plan?.claims) ? buildApprovedBatchSummary(bundle, plan) : plan;
+  if (lock.reportRoot !== bundle.reportRoot || lock.counts?.approvedClaims !== bundle.claims.length
+    || lock.counts?.approvedSellers !== approved?.approvedSellerCount) {
+    throw new Error("snapshot lock totals do not match bundle and plan");
+  }
+  if (lock.bundle?.path !== bundlePath || lock.plan?.path !== planPath) {
+    throw new Error("snapshot lock paths do not match requested inputs");
+  }
+  if (digests.bundle && lock.bundle.sha256 !== digests.bundle) throw new Error("snapshot bundle digest mismatch");
+  if (digests.plan && lock.plan.sha256 !== digests.plan) throw new Error("snapshot plan digest mismatch");
+}
+
+function validatePlanMetadata(bundle, plan) {
+  if (plan?.version !== 2 || plan.kind !== "antseed-wash-trading-proof-plan") throw new Error("invalid approved proof plan");
+  if (bundle.chainId !== 8_453 || plan.chainId !== bundle.chainId || plan.reportRoot !== bundle.reportRoot) {
+    throw new Error("bundle and plan identity mismatch");
+  }
+  if (JSON.stringify(plan.period) !== JSON.stringify(bundle.period)) throw new Error("bundle and plan periods differ");
+}
+
+function createBatchAccumulator(bundle) {
+  return {
+    bundle,
+    uniqueSettlements: new Map(),
+    closedLoopVolume: 0n,
+    reciprocalVolume: 0n,
+  };
+}
+
+function accumulateClaim(accumulator, approved, planned) {
+  let selectedVolume = 0n;
+  for (const evidence of planned.selectedEvidence ?? []) {
+    if (!["SETTLEMENT", "RECIPROCAL_SETTLEMENT"].includes(evidence.evidenceType)) continue;
+    const source = evidence.dependencyLeaf ? JSON.parse(evidence.dependencyLeaf) : evidence;
+    const logIndex = evidence.receiptLogIndex ?? source.logIndex;
+    if (!source.transactionHash || !Number.isSafeInteger(logIndex) || logIndex < 0) {
+      throw new Error(`${planned.claimId}: settlement identity is incomplete`);
+    }
+    const amount = BigInt(source.amountRaw);
+    const identity = `${source.transactionHash}:${logIndex}`.toLowerCase();
+    const existing = accumulator.uniqueSettlements.get(identity);
+    if (existing != null && existing !== amount) throw new Error(`${planned.claimId}: settlement ${identity} has conflicting amounts`);
+    accumulator.uniqueSettlements.set(identity, amount);
+    selectedVolume += amount;
+  }
+  const approvedVolume = approved.type === "P0_RECIPROCAL"
+    ? BigInt(approved.metrics.volumeAToBRaw) + BigInt(approved.metrics.volumeBToARaw)
+    : BigInt(approved.metrics.qualifiedVolumeRaw);
+  if (selectedVolume !== approvedVolume) {
+    throw new Error(`${planned.claimId}: selected volume ${selectedVolume} differs from approved volume ${approvedVolume}`);
+  }
+  if (approved.type === "P0_RECIPROCAL") accumulator.reciprocalVolume += selectedVolume;
+  else accumulator.closedLoopVolume += selectedVolume;
+}
+
+function finishBatchAccumulator(accumulator) {
+  const { bundle, uniqueSettlements, closedLoopVolume, reciprocalVolume } = accumulator;
+  return {
+    reportRoot: bundle.reportRoot,
+    period: bundle.period,
+    approvedClaimCount: bundle.claims.length,
+    approvedSellerCount: new Set(bundle.claims.flatMap((claim) => claim.subjects.map((subject) => subject.toLowerCase()))).size,
+    closedLoopVolumeRaw: closedLoopVolume.toString(),
+    reciprocalVolumeRaw: reciprocalVolume.toString(),
+    uniqueSettlementVolumeRaw: [...uniqueSettlements.values()].reduce((total, amount) => total + amount, 0n).toString(),
+    uniqueSettlementCount: uniqueSettlements.size,
+  };
+}
+
+function sha256File(path) {
+  return new Promise((resolveDigest, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(path);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolveDigest(`0x${hash.digest("hex")}`));
+  });
+}
+
+export async function writeWitnessCacheMetadata(path, period, claim, materializerSha256) {
+  const witness = await stat(path);
+  if (!witness.isFile() || witness.size === 0) throw new Error(`${path}: witness file is empty`);
+  const metadata = {
+    version: 1,
+    kind: "antseed-wash-trading-witness-cache",
+    chainId: 8_453,
+    periodStartBlock: period.startBlock,
+    periodEndBlock: period.endBlockExclusive - 1,
+    sourceClaimId: claim.claimId.toLowerCase(),
+    claimType: claim.type,
+    materializerSha256,
+    witnessSize: witness.size,
+    witnessMtimeMs: witness.mtimeMs,
+  };
+  await writeFile(`${path}.cache.json`, `${JSON.stringify(metadata, null, 2)}\n`);
+  return metadata;
+}
+
+export async function isCurrentWitness(path, period, claim, materializerSha256) {
   try {
-    const witness = JSON.parse(await readFile(path, "utf8"));
-    return witness?.chain_id === 8_453
-      && witness.period_start_block === period.startBlock
-      && witness.period_end_block === period.endBlockExclusive - 1
-      && Array.isArray(witness.blocks)
-      && witness.source_claim_id?.toLowerCase() === claim.claimId.toLowerCase()
-      && (claim.type === "P0_RECIPROCAL"
-        ? typeof witness.address_a === "string" && typeof witness.address_b === "string"
-        : typeof witness.seller === "string");
+    const [witness, metadata] = await Promise.all([
+      stat(path),
+      readFile(`${path}.cache.json`, "utf8").then(JSON.parse),
+    ]);
+    return witness.isFile()
+      && witness.size > 0
+      && metadata?.version === 1
+      && metadata.kind === "antseed-wash-trading-witness-cache"
+      && metadata.chainId === 8_453
+      && metadata.periodStartBlock === period.startBlock
+      && metadata.periodEndBlock === period.endBlockExclusive - 1
+      && metadata.sourceClaimId === claim.claimId.toLowerCase()
+      && metadata.claimType === claim.type
+      && metadata.materializerSha256 === materializerSha256
+      && metadata.witnessSize === witness.size
+      && metadata.witnessMtimeMs === witness.mtimeMs;
   } catch (error) {
     if (error.code === "ENOENT" || error instanceof SyntaxError) return false;
     throw error;
@@ -223,6 +533,12 @@ function guestElf(guest) {
 function required(value, flag) {
   if (!value) throw new Error(`missing ${flag}`);
   return value;
+}
+
+function positiveInteger(value, flag) {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${flag} must be a positive integer`);
+  return parsed;
 }
 
 function sha256(bytes) {

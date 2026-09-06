@@ -1,239 +1,279 @@
 # antseed-loop-proof
 
-Reference implementation of **AIP-4: Proof-Carrying Wash-Trading Enforcement**
-— the zkVM guests, the conserved-value-loop predicate library, and the host
-tooling that materializes raw Base evidence into guest witnesses.
+Reference implementation of **AIP-4: Proof-Carrying Wash-Trading Enforcement**:
+the direct SP1 seller guest, conserved-value-loop predicates, and host tooling
+that materializes raw Base evidence into proof witnesses.
 
-A finding against a seller is never attested; it is **proven**. A guest
-program re-verifies raw Base evidence — receipts, transactions, and contract
-state, each authenticated by Merkle-Patricia proofs against block headers —
-and checks a fixed mechanical predicate. The guest's verification key **is**
-the rule: the historical `AntseedWashTradingRegistry` (AntSeed monorepo)
-verifies one recursive SP1 aggregate and permanently records the complete
-approved snapshot. The aggregate guest authenticates the fixed manifest of
-claims, seller volumes, and evidence-block hashes. Ongoing submissions are a
-separate future registry design.
-No committee, no multisig, no challenge
-window, no company API, no scheduled infrastructure.
+A seller result is proven directly from one raw evidence bundle. One SP1 execution
+verifies either a closed-loop bundle or a reciprocal bundle, rejects duplicate
+settlement IDs, authenticates every referenced block, proves the seller's total settled volume
+from the channels contract's own cumulative counter at the period end, and
+commits one schema-1 seller journal for the registry. There are no recursive
+child proofs and no seller-aggregator guest.
 
-## What the predicates prove
+This repository is proof infrastructure, not a mainnet security approval. A
+production deployment still requires independently reviewed predicate
+parameters, reproducible guest builds, real Groth16 proofs, the matching
+concrete SP1 verifier, and canonical block authentication.
 
-Both predicates prove a **conserved value loop**, not the existence of
-transfers. Because claim submission is permissionless and the record is
-permanent, the claimant is assumed adversarial: a predicate satisfiable by
-sprinkling a few dollars around an honest seller would be a weapon. Three
-magnitudes must therefore be bound together at comparable scale:
+## What is proven
 
-- **FUND** — activity the funder initiated for the buyer cohort, attributed by
-  recovered transaction signer. USDC funding must satisfy
-  `Σ FUND ≥ α_fund · Σ SETTLE`; native funding proves common seeding and
-  ordering without comparing ETH and USDC units;
-- **SETTLE** — `ChannelSettled` volume from those buyers to the subject,
-  each strictly after its buyer's funding;
-- **RETURN** — value flowing back seller → funder, per-hop retention ≥
-  `ρ_hop`, end-to-end within `T_path` (`Σ RETURN ≥ α_return · Σ SETTLE`);
-- **LEDGER** — for USDC-funded cohorts, per-buyer attribution through the protocol's own accounting:
-  `Deposits.buyers[b].balance` proven at the period end must reconcile
-  with the funder-attributed capital
-  (`balance_end + settledₑᵥ ≤ funded · (1 + ε_ledger)`).
+Both predicates prove a **conserved USDC value loop**, not merely transfers:
 
-  *Note:* the deployed `AntseedDeposits` keeps a net `balance`, not a
-  lifetime-cumulative deposit counter, so this balance-delta reconciliation
-  is the strongest end-state witness form of AIP-4's attribution requirement
-  implementable against deployed state. Unseen outflows (spend to other
-  sellers, withdrawals) only make the check *stricter* for the claimed
-  buyers' inflow, and looser measurement never flags anyone by itself —
-  the RETURN and coverage legs still bind.
+- **FUND**: authenticated USDC funding covers the required share of settlement
+  volume. Native-token funding is rejected by predicate version 8.
+- **SETTLE**: authenticated `ChannelSettled` records bind exact buyers, sellers,
+  settlement IDs, amounts, and ordering after funding.
+- **RETURN**: authenticated seller-to-funder paths meet per-hop retention,
+  end-to-end amount, and time bounds.
+- **LEDGER**: authenticated period-end `Deposits.buyers[buyer].balance` storage
+  proofs reconcile the selected funding and settlement activity.
+- **TOTAL**: an authenticated period-end storage proof of
+  `AntseedChannels._agentStats[sellerAgentId].totalVolumeUsdc` commits the
+  seller's complete settled volume for the period (the period starts at
+  protocol genesis, so the end counter is the period total). The journal's
+  `provenWashVolume / totalSellerVolume` is therefore a lower-bound share
+  with a complete, non-selectable denominator.
 
-**There are no volume floors and no minimum cohort size.** Every parameter
-is a ratio or an evidence-shape bound. A floor in a public immutable rule
-tells an operator how finely to slice; ratios have no edge to sit under, and
-splitting fabricated volume across identities *raises* each identity's
-proven ratio.
+The direct seller verifier preserves the raw receipt, transaction, and storage
+Merkle-Patricia checks performed by `verify_closed_loop` and
+`verify_reciprocal`. It additionally enforces one seller, period, and evidence
+bundle, unique settlement IDs, checked
+volume arithmetic, deterministic evidence digests, and deterministic block
+authentication roots.
 
-The journal commits each seller address and the suspected wash volume derived
-from authenticated settlement evidence. It deliberately does not prove or
-publish a total-volume denominator or an ERC-8004 agent ID.
-
-### Storage-layout bindings (verified against deployed bytecode)
-
-The guest derives every proven storage slot itself; slots are never part of
-the witness. Verified live on Base mainnet (`loop-host verify-layout`):
-
-| binding | contract | slot |
-|---|---|---|
-| `buyers[buyer].balance` | Deposits `0x0F7a…9fD2` | `keccak(buyer ‖ 9)` |
+There are no absolute volume floors or minimum cohort sizes. Predicate
+parameters are ratios or evidence-shape bounds.
 
 ## Layout
 
-```
-core/               MPT/receipt/transaction/state-proof primitives (zkVM-agnostic)
-predicate/          P0_CLOSED_LOOP + P0_RECIPROCAL predicates, journal, native tests
-program/closed-loop SP1 guest (standalone crate, needs the SP1 toolchain)
-program/reciprocal  SP1 guest
-program/aggregator  recursive SP1 guest; emits the registry ABI
-host/               witness materializer, prover driver, live layout cross-check
-cases/              example case descriptions
-scripts/            reproducible guest builds
+```text
+core/             Receipt, transaction, state, and MPT verification primitives
+predicate/        Closed-loop, reciprocal, and direct seller verification
+program/seller/   Single SP1 guest; emits the schema-1 registry journal
+host/             Witness materializer and direct seller prover
+scripts/          Historical orchestration, attestations, quotes, and calldata
 ```
 
-## Usage
+## Local validation
 
 ```bash
-# native predicate + evidence-authentication tests (no zkVM toolchain needed)
-cargo test
+# Native predicate and evidence-authentication tests
+cargo test --workspace
 
-# live cross-check of pinned storage-layout constants against Base
-cargo run -p loop-host -- verify-layout <seller_address> [seller_address ...]
-cargo test -p loop-host -- --ignored     # same check as a test
-
-# materialize an ad-hoc closed-loop case (archive RPC required for the
-# period-end ledger proofs)
-cargo run -p loop-host -- fetch --case cases/<case>.json --out fixture.json [--expect-reject]
-
-# reproducible guest builds + vkey derivation (SP1 toolchain + Docker)
+# Build the only SP1 guest
 scripts/build-guests.sh
 
-# produce one Groth16 aggregate (one child is still aggregated)
-cargo run -p loop-host --features sp1 --bin wash-trading-aggregate -- \
-  --aggregator-elf program/aggregator/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/aggregator-guest \
-  --closed-loop-elf program/closed-loop/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/closed-loop-guest \
-  --reciprocal-elf program/reciprocal/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/reciprocal-guest \
-  --manifest historical-manifest.json \
-  --child closed-loop:fixture.json --output aggregate-proof.json
-
-# execute the checked-in synthetic closed-loop and reciprocal fixtures with
-# SP1's mock prover and emit one local-development aggregate artifact
-node scripts/generate-development-proofs.mjs \
-  --output out/development-aggregate-proof.json
+# Generate synthetic direct development proofs
+node scripts/generate-development-proofs.mjs
 ```
 
-The generator rebuilds all three guest ELFs by default. Pass
-`--skip-guest-build` only for a fast repeat run against already-built ELFs.
+Produce one direct seller artifact from an existing evidence witness:
 
-Development artifacts are explicitly marked `securityMode: development` and
-must only be submitted to the digest-pinned local verifier used by the AntSeed
-Anvil E2E. They are not production proofs and are rejected by production
-proving workflows.
+```bash
+cargo run --release -p loop-host --features sp1 --bin wash-trading-prove-seller -- \
+  --development \
+  --seller 0x... \
+  --seller-elf program/seller/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/seller-guest \
+  --evidence closed-loop:/path/to/closed-loop.witness.json \
+  --seller-witness /path/to/seller-witness.json \
+  --output /path/to/seller-proof.json
+```
 
-To execute every claim in an approved historical report, use the fail-closed
-batch generator. It rejects subset plans and prints the final unique suspected
-USDC volume only after every approved claim is represented in the aggregate:
+Use `--evidence reciprocal:/path/to/reciprocal.witness.json` instead for a
+reciprocal bundle. Exactly one `--evidence` is required; legacy `--claim` and
+repeated evidence arguments are rejected. A bundle can contain many buyers,
+settlements, and return paths, but there is no cross-bundle seller aggregation.
+Batch tools reject multiple approved bundles for the same seller rather than
+silently picking one. A reciprocal bundle may produce a separate proof for each
+of its two sellers.
+
+The guest input has one `evidence` object, not a `claims` array. Old seller input
+JSON is rejected, even if its array has only one entry. Seller artifacts carry
+`evidenceFormat: "single-bundle-v1"`; `claimCount: 1` and the singleton
+`sourceClaimIds` array remain provenance metadata for downstream tools. Rebuild
+the guest and regenerate seller inputs and proofs with its new program vkey;
+old seller proof caches cannot be reused. This input simplification does not
+change the current schema-1 on-chain journal ABI. Raw closed-loop and reciprocal
+witness files remain reusable.
+
+Set `BASE_RPC_URL` (or comma-separated `BASE_RPC_URLS`) to an archive RPC for
+the period-end staking and channels storage proofs. For offline replay, pass
+`--total-volume-witness /path/to/boundary.json` instead. This is the
+`total_volume` object in the saved seller witness; no start-boundary
+proof is requested. Artifacts and seller summaries expose `totalSellerVolumeRaw`
+alongside `provenWashVolumeRaw`, both in USDC base units (six decimals).
+
+Available modes are:
+
+- `--witness-only`: runs complete native verification and writes the
+  seller witness without initializing SP1 or a prover network.
+- `--execute-only`: additionally executes the seller guest and verifies its
+  public values against native verification.
+- `--development`: executes the guest and creates a development proof artifact
+  accepted only by the local mock verifier integration. It reuses the checked
+  execution's public values to create and verify the SDK mock proof instead of
+  executing the same guest a second time.
+- `--production`: requests a real network Groth16 proof and requires
+  `--confirm-production`, explicit price/time limits, a funded prover identity,
+  and a resumable request checkpoint.
+
+Development proof bytes are not production cryptographic evidence.
+
+## Unified historical dataset
+
+Freeze one scan and build one authenticated bundle, plan, and snapshot lock:
+
+```bash
+node scripts/build-unified-historical-snapshot.mjs \
+  --scan-dir /path/to/unified-scan \
+  --out-dir out/unified-historical \
+  --rpc-url "$BASE_RPC_URL"
+```
+
+Materialize every approved claim and natively verify every direct seller proof
+input without a prover-network request:
 
 ```bash
 node scripts/generate-approved-development-proofs.mjs \
-  --bundle /path/to/proof-bundle.json \
-  --plan /path/to/proof-plan.json \
-  --artifact-dir out/approved-development-proofs
+  --bundle out/unified-historical/proof-bundle.json \
+  --plan out/unified-historical/proof-plan.json \
+  --snapshot-lock out/unified-historical/snapshot-lock.json \
+  --artifact-dir out/unified-historical/development \
+  --witness-only
 ```
 
-The approved development runner also writes
-`submit-historical-aggregate-calldata.json`. It records the aggregate program ID, vkey,
-public values, proof bytes, and calldata for the immutable historical
-registry's `submitHistoricalAggregate(bytes,bytes)` entrypoint. The registry
-pins the aggregate vkey at deployment, so the program ID remains artifact
-metadata and is not repeated in calldata.
+The summary fails unless every approved claim maps to every affected seller and
+the sum of the 55 direct seller journals equals the approved unique settlement
+volume. Cached claim witnesses avoid re-fetching claim evidence, but the seller
+prover still needs the period-end total-volume storage proofs. All development
+modes keep `proverNetworkSubmitted` set to `false`.
 
-After proving, reconcile verified child artifacts back into discovery states
-and emit the final investigated-seller table:
+The paid batch orchestrator natively preflights every selected seller before
+submitting any network request, including in `--preflight-only` mode. Failures
+are recorded under `native-preflight/summary.json` and stop the entire selected
+batch before spending. Cost-quote approval and reproducible-guest checks still
+apply; a passing development artifact alone does not authorize paid proving.
+For an offline paid preflight and submission, pass `--total-volume-witness-dir`
+with one `<seller>.json` period-end boundary witness per selected seller; the
+same boundary file is used for both native preflight and the paid proof input.
+
+`prove-approved-historical-development.mjs` attempts every seller even if one
+fails, writes `sellerFailures` and `complete` in its summary, and exits nonzero
+for an incomplete run. An unstaked-at-period-end seller is a finding, not an
+automatically excluded claim. Cached artifacts without a positive authenticated
+total are stale and must be regenerated.
+
+To report actual return coverage from the verified claim witnesses:
 
 ```bash
-node scripts/reconcile-development-proof-results.mjs \
-  --discovery /path/to/discovery/p0-loop-candidates.json \
-  --bundle /path/to/proof/closed-loop-approved-bundle.json \
-  --children out/approved-development-proofs/children \
-  --aggregate out/approved-development-proofs/aggregate-proof.json \
-  --diagnostics /path/to/proof/candidate-diagnostics.json \
-  --output out/approved-development-proofs/validation-report.json
+cargo run --release -p wash-predicate --example report_return_coverage -- /path/to/witnesses > return-coverage.json
 ```
 
-The current approved report is one historical period, not independently
-epoch-sliced claims. Child and aggregate journals commit only that fixed block
-range; they do not derive or publish reward epochs.
+For transfer-return closed loops, coverage is the sum of each return path's
+minimum hop amount divided by the claim's selected settled volume. The fixed
+`ALPHA_RETURN_BPS` floor is 3000 (30%); it is not the wash share `V/T`.
+The prior 50% seller list is preserved in
+`docs/proof-history/2026-09-05-alpha-return-50.json`; see
+`docs/proof-history/README.md` for the archived artifacts and guest keys.
+Planning and return selection read their ratio and path-limit constants directly
+from the predicate through `scripts/predicate-policy.mjs`. Plan checkpoints bind
+the policy hash; checkpoints from another policy are recomputed, not reused.
+Replay artifacts record `alphaReturnBps`; missing or different-policy metadata
+is stale. Guest replay also checks the actual ELF verification key, including
+when no build attestation was supplied.
+Discovery accepts positive minority-volume cohorts for investigation; only the
+authenticated predicate can validate their funding, return, and ledger evidence.
+Self-funded loops close by identity, and reciprocal claims do not use this
+alpha-return test. Neither is assigned a fabricated measured return percentage.
 
-Case files in `cases/` describe a claim's participants (seller, funder,
-buyers, return paths). `--expect-reject` asserts that the predicate
-correctly rejects the evidence — use it for honest-seller test vectors
-where the conserved-loop shape is absent.
-
-Block evidence is checkpointed atomically after every successful RPC fetch in
-`cache/block-evidence-v1/`. Re-running the same case resumes from those files,
-and progress reports separate cache hits from RPC fetches. Set
-`LOOP_EVIDENCE_CACHE_DIR` to place the checkpoint outside the repository; the
-cache key includes the block number and exact receipt/transaction targets, so
-evidence from a different selection is never reused.
-
-`scripts/build-case.py` reads each buyer's Deposits balance at the period-end
-block and selects funding that satisfies the P0 ledger inequality per buyer
-before topping up the aggregate 90% funding requirement.
-
-## Production batch pipeline
-
-Production proving starts from the approved detection bundle and never from an
-operator-maintained case list. The planner authenticates every dependency,
-requires its selected settlement volume to equal the bundle's approved analysis
-metrics, and emits `antseed-wash-trading-proof-plan` v2. Claim IDs emitted by
-the guests additionally bind the complete authenticated witness, so two
-different evidence selections cannot occupy the same on-chain claim ID.
+To rebuild a USDC-funded discovery candidate without replacing an approved list:
 
 ```bash
-# 1. Authenticate and plan the exact approved claim set.
-node scripts/plan-wash-trading-proofs.mjs \
-  --bundle proof-bundle.json \
-  --out proof-plan.json \
-  --rpc-url "$BASE_RPC_URL"
+node scripts/build-usdc-candidate-bundle.mjs \
+  --scan-dir /path/to/scan --baseline-bundle /path/to/proof-bundle.json \
+  --seller 0x7adbe9474e067376da5dea2f757ea3eaa60dc915 \
+  --out-dir /path/to/new-candidate-directory
+```
 
-# 2. Build all three guests twice in isolated snapshots and compare ELFs/vkeys.
-node scripts/build-guests-reproducibly.mjs --work-dir ../guest-repro-builds --out guest-build-attestation.json
+The builder uses the primary USDC capital funder, not the first ETH gas funder,
+and refuses to overwrite existing outputs. Draft amounts are not proven volume:
+copy the draft before ledger-aware planning, then materialize and verify the
+selected evidence natively and with the current seller guest. Preserve both
+the original candidate amount and the ledger-selected amount in result lists.
+
+To execute or development-prove existing historical witnesses:
+
+```bash
+node scripts/prove-approved-historical-development.mjs \
+  --bundle out/unified-historical/proof-bundle.json \
+  --witness-dir out/unified-historical/development \
+  --artifact-dir out/volume-only-historical-development \
+  --execute-only
+```
+
+Large sellers may require substantial SP1 execution time and memory. Use the
+smallest seller first before scheduling the complete set.
+
+## Reproducible guest identity
+
+Build the seller guest twice in isolated source snapshots and compare ELF
+digests before deriving its vkey:
+
+```bash
+node scripts/build-guests-reproducibly.mjs \
+  --work-dir ../guest-repro-builds \
+  --out guest-build-attestation.json
 node scripts/verify-guest-build-attestation.mjs guest-build-attestation.json
-
-# 3. Generate the immutable historical manifest.
-node scripts/generate-historical-manifest.mjs \
-  --bundle proof-bundle.json \
-  --output historical-manifest.json
-
-# 4. Quote and approve proving cost, then make compressed child proofs and one
-# Groth16 aggregate. RPCs need eth_getProof at the historical period end.
-node scripts/prove-approved-batch.mjs \
-  --plan proof-plan.json \
-  --manifest historical-manifest.json \
-  --artifact-dir proof-artifacts \
-  --closed-loop-elf target/guests/closed-loop/elf \
-  --reciprocal-elf target/guests/reciprocal/elf \
-  --aggregator-elf target/guests/aggregator/elf \
-  --cost-quote proof-cost.json \
-  --approve-cost-digest 0x... \
-  --confirm-production-proving
 ```
 
-`wash-trading-materialize-p0` consumes each claim's exact `selectedEvidence`.
-It authenticates the selected receipt and transaction tries, adds mandatory
-period-end `Deposits.buyers[*].balance` proofs with no opening-balance credit,
-and natively verifies the final witness before it is passed to SP1.
-Reciprocal claims also include
-pair-internal protocol deposits selected by the planner.
+Attestation version 4 contains exactly one guest entry: `seller`.
 
-The final `antseed-wash-trading-aggregate-proof` artifact contains exactly one
-registry-ready `publicValues` blob and one Groth16 `proofBytes` blob. Public
-values contain the report root, manifest digest, fixed period, exact claim and
-seller counts, sorted seller volumes, total proven wash volume, and the number
-of private manifest block references. No per-child on-chain submission exists.
+## Production proving
 
-Before production submission, run the coverage report and the AntSeed
-repository's volume verifier. The signed analysis baseline, current planner,
-refetched authenticated receipts, host metrics, and journal wash volumes must
-all agree exactly.
+Production requests are intentionally guarded and resumable:
+
+```bash
+scripts/run-production-proofs-safe.sh canary
+scripts/run-production-proofs-safe.sh full
+```
+
+The runner:
+
+1. verifies the reproducible seller guest attestation;
+2. obtains a live Succinct price recommendation without submitting work;
+3. writes a digest-pinned cost quote for one proof per selected seller;
+4. validates all witnesses and stable run configuration with a no-spend pass;
+5. checks the funded prover account and expected seller vkey;
+6. requires a second exact confirmation before any paid request; and
+7. resumes each seller from its request checkpoint after interruption.
+
+Do not run production mode merely to validate the implementation. The complete
+native dataset check and representative SP1 execution are free of paid proof
+requests.
+
+## Registry submission artifacts
+
+Each version-3 `antseed-wash-trading-seller-proof` contains registry-ready
+`publicValues`, `proofBytes`, and gas-bounded block-authentication chunks.
+
+```bash
+node scripts/generate-aggregate-calldata.mjs \
+  --seller-proof seller-proof.json \
+  --output stage-seller-calldata.json
+
+node scripts/generate-block-authentication-chunks.mjs \
+  --seller-proof seller-proof.json \
+  --output block-authentication-chunks.json
+```
+
+The first artifact encodes `stageSellerProof(bytes,bytes)`. The second flattens
+and validates the seller proof's ordered block references and preserves each
+Merkle proof needed by `authenticateBlockReferences` before finalization.
 
 ## Rule identity
 
-`PREDICATE_VERSION`, every α/β/ρ/ε parameter, the
-contract addresses and storage-slot bindings are constants in
-`predicate/src/lib.rs`. Changing any of them changes the child vkey and
-therefore the rule. This historical registry pins one aggregator vkey and
-accepts one complete result. Any ongoing proof system is deployed separately. Current
-parameter values are **calibration placeholders** — final values are fixed
-by the companion wash-trading detection AIP before a registry is bound to a
-live policy.
-
-Guest builds are dockerized (`scripts/build-guests.sh`) so any party can
-independently re-derive the pinned vkeys from source.
+`PREDICATE_VERSION`, ratio parameters, contract addresses, and storage-slot
+bindings are constants in `predicate/src/lib.rs`. Any semantic change alters
+the seller ELF and therefore its program vkey. The schema-1 registry pins that
+single seller vkey and the concrete SP1 verifier release.

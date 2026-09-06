@@ -9,7 +9,6 @@ export function historicalManifestFromBundle(bundle) {
     throw new Error("invalid historical proof bundle");
   }
   const sourceIds = new Set();
-  const sellers = new Set();
   const reportRoot = merkleRoot(bundle.claims.map((claim) => normalizeHash(claim.leafHash, "claim leafHash")));
   if (reportRoot !== normalizeHash(bundle.reportRoot, "reportRoot")) {
     throw new Error(`bundle report root mismatch: calculated ${reportRoot}`);
@@ -20,10 +19,6 @@ export function historicalManifestFromBundle(bundle) {
     sourceIds.add(sourceClaimId);
     const subjects = claimSubjects(claim).map(({ seller, volume }) => {
       const normalizedSeller = normalizeAddress(seller);
-      if (sellers.has(normalizedSeller)) {
-        throw new Error(`seller ${normalizedSeller} appears in more than one approved claim`);
-      }
-      sellers.add(normalizedSeller);
       const provenWashVolume = BigInt(volume);
       if (provenWashVolume <= 0n || provenWashVolume > (1n << 128n) - 1n) {
         throw new Error(`${sourceClaimId}: invalid proven wash volume`);

@@ -5,22 +5,16 @@
 //!   loop-host fetch --case case.json --out fixture.json [--expect-reject]
 //!   loop-host run fixture.json [--prove --elf path/to/elf]
 //!   loop-host vkey --elf path/to/elf
-//!   loop-host verify-layout
-//!
-//! `verify-layout` is the live cross-check demanded by AIP-4: it proves a
-//! known agent's `AgentStats.totalVolumeUsdc` storage slot at a recent block
-//! and compares the proven value against `getAgentStats` via `eth_call`.
 
 mod rpc;
 
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use wash_predicate::{
     BuyerLedger, ClosedLoopInput, EvidenceBlock, FundingEvidence, FundingKind, LogRef, ReturnPath,
-    StateRead, WashJournal, CHANNELS_ADDRESS, DEPOSITS_ADDRESS, PERIOD_END_BLOCK, STAKING_ADDRESS,
-    USDC_ADDRESS,
+    StateRead, WashJournal, CHANNELS_ADDRESS, DEPOSITS_ADDRESS, PERIOD_END_BLOCK, USDC_ADDRESS,
 };
 
 const DEFAULT_RPCS: &[&str] = &[
@@ -89,20 +83,8 @@ fn main() -> Result<()> {
             arg_value(&args, "--end").context("--end required")?.parse()?,
             &arg_value(&args, "--out").context("--out required")?,
         ),
-        Some("batch-manifest") => batch_manifest(
-            &arg_value(&args, "--results-dir").context("--results-dir required")?,
-            &arg_value(&args, "--blockhash-store").context("--blockhash-store required")?,
-            &arg_value(&args, "--closed-loop-vkey").context("--closed-loop-vkey required")?,
-            &arg_value(&args, "--reciprocal-vkey").context("--reciprocal-vkey required")?,
-            &arg_value(&args, "--out").context("--out required")?,
-            args.iter().any(|a| a == "--development"),
-        ),
-        Some("verify-layout") => {
-            let addresses: Vec<String> = args[2..].to_vec();
-            verify_layout(&addresses)
-        }
         _ => bail!(
-            "usage: loop-host fetch --case case.json --out fixture.json [--expect-reject]\n       loop-host run fixture.json [--elf path --result result.json --source-claim-id 0x...] [--prove --production]\n       loop-host vkey --elf path\n       loop-host headers --start N --end M --out headers.json\n       loop-host batch-manifest --results-dir DIR --blockhash-store 0x... --closed-loop-vkey 0x... --reciprocal-vkey 0x... --out proof-results.json [--development]\n       loop-host verify-layout [seller_address ...]"
+            "usage: loop-host fetch --case case.json --out fixture.json [--expect-reject]\n       loop-host run fixture.json [--elf path --result result.json --source-claim-id 0x...] [--prove --production]\n       loop-host vkey --elf path\n       loop-host headers --start N --end M --out headers.json"
         ),
     }
 }
@@ -599,199 +581,6 @@ fn write_proof_result(
     Ok(())
 }
 
-// ─────────────────────────────── batch manifest ──────────────────────────
-
-fn batch_manifest(
-    results_dir: &str,
-    blockhash_store: &str,
-    closed_loop_vkey: &str,
-    reciprocal_vkey: &str,
-    out_path: &str,
-    development: bool,
-) -> Result<()> {
-    use alloy_primitives::{keccak256, Address, B256};
-    use sha2::Digest;
-
-    let store: Address = blockhash_store
-        .parse()
-        .context("invalid BlockhashStore address")?;
-    let closed_vkey: B256 = closed_loop_vkey
-        .parse()
-        .context("invalid closed-loop vkey")?;
-    let reciprocal_vkey: B256 = reciprocal_vkey.parse().context("invalid reciprocal vkey")?;
-    let security_mode = if development {
-        "development"
-    } else {
-        "production"
-    };
-    let mut entries = Vec::<serde_json::Value>::new();
-    for item in std::fs::read_dir(results_dir)? {
-        let path = item?.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
-        if value.get("kind").and_then(|item| item.as_str())
-            != Some("antseed-wash-trading-proof-result")
-        {
-            continue;
-        }
-        if value.get("version").and_then(|item| item.as_u64()) != Some(2)
-            || value.get("chainId").and_then(|item| item.as_u64()) != Some(8_453)
-            || value.get("securityMode").and_then(|item| item.as_str()) != Some(security_mode)
-        {
-            bail!("{}: invalid {security_mode} proof result", path.display());
-        }
-        entries.push(
-            value
-                .get("entry")
-                .cloned()
-                .context("proof result entry missing")?,
-        );
-    }
-    if entries.is_empty() {
-        bail!("no {security_mode} proof result files found");
-    }
-    entries.sort_by(|left, right| {
-        left.get("claimId")
-            .and_then(|value| value.as_str())
-            .cmp(&right.get("claimId").and_then(|value| value.as_str()))
-    });
-
-    let mut commitments = Vec::new();
-    let mut previous = B256::ZERO;
-    for entry in &entries {
-        let claim: B256 = entry
-            .get("claimId")
-            .and_then(|value| value.as_str())
-            .context("claimId missing")?
-            .parse()
-            .context("invalid claimId")?;
-        if claim <= previous {
-            bail!("proof claim IDs must be unique and strictly ordered");
-        }
-        previous = claim;
-        let journal_hex = entry
-            .get("journalBytes")
-            .and_then(|value| value.as_str())
-            .context("journalBytes missing")?
-            .strip_prefix("0x")
-            .context("journalBytes must be hex")?;
-        let journal_bytes = alloy_primitives::hex::decode(journal_hex)?;
-        let journal = WashJournal::abi_decode(&journal_bytes).map_err(anyhow::Error::msg)?;
-        if journal.claim_id != claim {
-            bail!("{claim}: journal claim ID mismatch");
-        }
-        let journal_digest = B256::from_slice(&sha2::Sha256::digest(&journal_bytes));
-        let declared_digest: B256 = entry
-            .get("journalDigest")
-            .and_then(|value| value.as_str())
-            .context("journalDigest missing")?
-            .parse()
-            .context("invalid journalDigest")?;
-        if journal_digest != declared_digest {
-            bail!("{claim}: journal digest mismatch");
-        }
-        let claim_type = entry.get("claimType").and_then(|value| value.as_str());
-        let program_vkey: B256 = entry
-            .get("programVKey")
-            .and_then(|value| value.as_str())
-            .context("programVKey missing")?
-            .parse()
-            .context("invalid programVKey")?;
-        match claim_type {
-            Some("P0_CLOSED_LOOP") if program_vkey == closed_vkey => {}
-            Some("P0_RECIPROCAL") if program_vkey == reciprocal_vkey => {}
-            _ => bail!("{claim}: predicate type and vkey mismatch"),
-        }
-        commitments.push((claim, journal_digest));
-    }
-
-    let domain = keccak256("ANTSEED_AIP4_BACKFILL_V1");
-    let digest = compute_batch_digest(store, closed_vkey, reciprocal_vkey, &commitments);
-    let commitment_values: Vec<_> = commitments
-        .iter()
-        .map(|(claim, journal_digest)| {
-            serde_json::json!({
-                "claimId": format!("{claim}"),
-                "journalDigest": format!("{journal_digest}"),
-            })
-        })
-        .collect();
-    let manifest = serde_json::json!({
-        "version": 2,
-        "kind": "antseed-wash-trading-proof-results",
-        "chainId": 8_453,
-        "securityMode": security_mode,
-        "batch": {
-            "domain": format!("{domain}"),
-            "blockhashStore": format!("{store}"),
-            "closedLoopVKey": format!("{closed_vkey}"),
-            "reciprocalVKey": format!("{reciprocal_vkey}"),
-            "expectedBatchCount": entries.len(),
-            "expectedBatchDigest": format!("{digest}"),
-            "commitments": commitment_values,
-        },
-        "entries": entries,
-    });
-    std::fs::write(out_path, serde_json::to_vec_pretty(&manifest)?)?;
-    println!("batch manifest written to {out_path}");
-    println!("expectedBatchCount {}", commitments.len());
-    println!("expectedBatchDigest {digest}");
-    Ok(())
-}
-
-fn compute_batch_digest(
-    blockhash_store: alloy_primitives::Address,
-    closed_loop_vkey: alloy_primitives::B256,
-    reciprocal_vkey: alloy_primitives::B256,
-    commitments: &[(alloy_primitives::B256, alloy_primitives::B256)],
-) -> alloy_primitives::B256 {
-    use alloy_primitives::{keccak256, U256};
-    use alloy_sol_types::SolValue;
-    let domain = keccak256("ANTSEED_AIP4_BACKFILL_V1");
-    let mut digest = keccak256(
-        (
-            domain,
-            8_453u64,
-            closed_loop_vkey,
-            reciprocal_vkey,
-            blockhash_store,
-            U256::from(commitments.len()),
-        )
-            .abi_encode(),
-    );
-    for (claim, journal_digest) in commitments {
-        digest = keccak256((digest, *claim, *journal_digest).abi_encode());
-    }
-    digest
-}
-
-#[cfg(test)]
-mod batch_tests {
-    use super::compute_batch_digest;
-    use alloy_primitives::{Address, B256};
-
-    #[test]
-    fn batch_digest_matches_solidity_and_ethers() {
-        let store: Address = "0x78b69899C8cD252126cBB1A50171ec37286C3877"
-            .parse()
-            .unwrap();
-        let closed: B256 = format!("0x{}", "55".repeat(32)).parse().unwrap();
-        let reciprocal: B256 = format!("0x{}", "66".repeat(32)).parse().unwrap();
-        let claim: B256 = format!("0x{}", "11".repeat(32)).parse().unwrap();
-        let journal: B256 = "0xa5b524c49d791184e67724513c459f42e290127c33496dd59e933e329f3c815e"
-            .parse()
-            .unwrap();
-        assert_eq!(
-            compute_batch_digest(store, closed, reciprocal, &[(claim, journal)]),
-            "0xbdbd8ffe503030c82e83e23a9496b7bd106dd934b19e1ec976ddf48c50ec3175"
-                .parse::<B256>()
-                .unwrap()
-        );
-    }
-}
-
 fn vkey(elf_path: &str) -> Result<()> {
     #[cfg(feature = "sp1")]
     {
@@ -838,99 +627,6 @@ fn headers(start: u64, end: u64, out_path: &str) -> Result<()> {
     }
     std::fs::write(out_path, serde_json::to_vec_pretty(&out)?)?;
     println!("{} headers written to {out_path}", end - start + 1);
-    Ok(())
-}
-
-// ─────────────────────────────── layout cross-check ───────────────────────
-
-/// Live verification of storage-layout constants the guest pins, against
-/// Base mainnet. Pass one or more seller addresses to check.
-///
-///   loop-host verify-layout 0x0329…9b2c 0xb629…dab4
-pub fn verify_layout(addresses: &[String]) -> Result<()> {
-    if addresses.is_empty() {
-        bail!("usage: loop-host verify-layout <seller_address> [seller_address ...]");
-    }
-    let sellers: Vec<Address> = addresses
-        .iter()
-        .map(|a| a.parse().with_context(|| format!("invalid address: {a}")))
-        .collect::<Result<_>>()?;
-
-    let client = rpc::Client::new(&endpoints());
-    let latest = rpc::hex_u64(&client.call("eth_blockNumber", serde_json::json!([]))?)?;
-    let number = latest.saturating_sub(8);
-    let header = client.header(number)?;
-    println!("checking layouts at block {number}");
-
-    for seller in &sellers {
-        verify_seller(&client, &header, number, seller)?;
-    }
-
-    println!("all storage-layout bindings verified");
-    Ok(())
-}
-
-fn verify_seller(
-    client: &rpc::Client,
-    header: &alloy_consensus::Header,
-    number: u64,
-    seller: &Address,
-) -> Result<()> {
-    let agent_slot =
-        loop_core::mapping_slot_address(*seller, wash_predicate::STAKING_SELLER_AGENT_ID_SLOT);
-    let (_, agent_id) = client.storage_witness(header, STAKING_ADDRESS, agent_slot)?;
-    let expected_id = eth_call_u256(
-        client,
-        STAKING_ADDRESS,
-        &format!("0x042324b6{}", pad_address(*seller)),
-        number,
-    )?;
-    ensure_equal(&format!("{seller} sellerAgentId"), agent_id, expected_id)?;
-
-    if agent_id.is_zero() {
-        println!("{seller}: no staked agent ✔");
-        return Ok(());
-    }
-    let volume_slot = loop_core::slot_offset(
-        loop_core::mapping_slot_u256(agent_id, wash_predicate::CHANNELS_AGENT_STATS_SLOT),
-        wash_predicate::AGENT_STATS_TOTAL_VOLUME_OFFSET,
-    );
-    let (_, proven_volume) = client.storage_witness(header, CHANNELS_ADDRESS, volume_slot)?;
-    let data = format!("0x68091633{:064x}", agent_id);
-    let out = eth_call(client, CHANNELS_ADDRESS, &data, number)?;
-    let expected_volume = U256::from_be_slice(&out[64..96]);
-    ensure_equal(
-        &format!("{seller} totalVolumeUsdc"),
-        proven_volume,
-        expected_volume,
-    )?;
-    println!("{seller} agent {agent_id}: totalVolumeUsdc = {proven_volume} ✔");
-    Ok(())
-}
-
-fn pad_address(a: Address) -> String {
-    format!("{:0>64}", alloy_primitives::hex::encode(a.as_slice()))
-}
-
-fn eth_call(client: &rpc::Client, to: Address, data: &str, block: u64) -> Result<Vec<u8>> {
-    let out = client.call(
-        "eth_call",
-        serde_json::json!([{ "to": format!("{to}"), "data": data }, format!("0x{block:x}")]),
-    )?;
-    Ok(alloy_primitives::hex::decode(
-        out.as_str().context("call output")?,
-    )?)
-}
-
-fn eth_call_u256(client: &rpc::Client, to: Address, data: &str, block: u64) -> Result<U256> {
-    let out = eth_call(client, to, data, block)?;
-    Ok(U256::from_be_slice(&out[0..32]))
-}
-
-fn ensure_equal(label: &str, proven: U256, expected: U256) -> Result<()> {
-    if proven != expected {
-        bail!("{label}: proven storage value {proven} != contract view {expected} — layout drift");
-    }
     Ok(())
 }
 
