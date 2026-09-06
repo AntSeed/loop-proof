@@ -1,0 +1,17 @@
+{
+  "date": "2026-09-06",
+  "nodeTestsPassed": 114,
+  "nodeTestsFailed": 0,
+  "generatedCallsComparedWithIndependentEthersAbiEncoding": 3975,
+  "calldataMismatches": 0,
+  "readOnlyDeploymentCheckerPassedOnBaseFork": true,
+  "directCastSubmissionCanary": {
+    "seller": "0x22564606c08e09bef5d8addedefd4c2491a34ee9",
+    "successfulTransactions": 5,
+    "proofFinalized": true,
+    "recordedVolumesMatched": true,
+    "mainnetTransactionsSubmitted": false
+  },
+  "bashExamplesSyntaxChecked": 4,
+  "note": "All 54 original artifacts passed the full prior Anvil rehearsal in anvil-validation.json. This file records checks of the portable packaging and direct-call instructions."
+}
