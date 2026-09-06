@@ -2,13 +2,31 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { loadPackage, unpackArtifact, validateArtifact, encodeChunk, checkDeployment } from "./published-seller-proofs.mjs";
+import { loadPackage, unpackArtifact, validateArtifact, encodeChunk, checkDeployment, cast } from "./published-seller-proofs.mjs";
 
 const directory = fileURLToPath(new URL("../proofs/2026-09-06-vt30", import.meta.url));
 const manifest = JSON.parse(await readFile(`${directory}/manifest.json`, "utf8"));
 const entry = manifest.artifacts[0];
 const compressed = await readFile(`${directory}/${entry.file}`);
 const { artifact } = unpackArtifact(compressed, entry);
+
+test("read-only cast commands do not inherit the signing password file", () => {
+  const previous = process.env.ETH_PASSWORD;
+  process.env.ETH_PASSWORD = "/unused/test-password-file";
+  try {
+    assert.equal(cast(["call", "registry", "verifier()(address)"], (command, args, options) => {
+      assert.equal(command, "cast");
+      assert.equal(args[0], "call");
+      assert.equal(Object.hasOwn(options.env, "ETH_PASSWORD"), false);
+      assert.equal(options.env.PATH, process.env.PATH);
+      return "0x1234\n";
+    }), "0x1234");
+    assert.equal(process.env.ETH_PASSWORD, "/unused/test-password-file");
+  } finally {
+    if (previous === undefined) delete process.env.ETH_PASSWORD;
+    else process.env.ETH_PASSWORD = previous;
+  }
+});
 
 test("published package preserves all 54 production artifacts and totals", async () => {
   const loaded = await loadPackage(directory);

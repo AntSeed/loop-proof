@@ -83,9 +83,11 @@ export async function loadPackage(directory) {
   return { manifest, artifacts };
 }
 
-export function cast(args) {
+export function cast(args, execute = execFileSync) {
+  const env = { ...process.env };
+  delete env.ETH_PASSWORD;
   try {
-    return execFileSync("cast", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024 }).trim();
+    return execute("cast", args, { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024 }).trim();
   } catch {
     throw new Error(`cast ${args[0]} failed; check your local Foundry installation and RPC configuration`);
   }

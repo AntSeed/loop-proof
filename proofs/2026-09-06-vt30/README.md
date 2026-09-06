@@ -115,6 +115,8 @@ Foundry's `ETH_PASSWORD` variable is a **path to a password file**, not the pass
 itself. Store that file outside the repository with mode `600`, and remove it when
 finished. Otherwise Foundry prompts for the password on each signing operation.
 Never use the public Anvil test key on mainnet.
+Read-only calls below clear `ETH_PASSWORD` for that command only: Foundry otherwise
+requires a keystore even for `cast call`. Signing commands keep the password file.
 
 Run the preparation and read-only deployment check above first. Then, in Bash:
 
@@ -133,8 +135,8 @@ test "$APPROVAL" = "SUBMIT $REGISTRY"
 
 send_file() {
   local calldata_file="$1" receipt_file="$2" latest_nonce pending_nonce
-  latest_nonce="$(cast nonce "$SENDER" --block latest)"
-  pending_nonce="$(cast nonce "$SENDER" --block pending)"
+  latest_nonce="$(env -u ETH_PASSWORD cast nonce "$SENDER" --block latest)"
+  pending_nonce="$(env -u ETH_PASSWORD cast nonce "$SENDER" --block pending)"
   if [[ "$latest_nonce" != "$pending_nonce" ]]; then
     echo "STOP: this wallet has a pending transaction. Resolve it before continuing."
     exit 1
@@ -146,10 +148,10 @@ send_file() {
 
 for DIR in "$PREPARED"/0x*; do
   PROOF_ID="$(cat "$DIR/proof-id.txt")"
-  DONE="$(cast call "$REGISTRY" 'proofFinalized(bytes32)(bool)' "$PROOF_ID")"
+  DONE="$(env -u ETH_PASSWORD cast call "$REGISTRY" 'proofFinalized(bytes32)(bool)' "$PROOF_ID")"
   if [[ "$DONE" == true ]]; then continue; fi
   mkdir -p "$DIR/receipts"
-  STAGED="$(cast call "$REGISTRY" 'proofStaged(bytes32)(bool)' "$PROOF_ID")"
+  STAGED="$(env -u ETH_PASSWORD cast call "$REGISTRY" 'proofStaged(bytes32)(bool)' "$PROOF_ID")"
   if [[ "$STAGED" == false ]]; then
     send_file "$DIR/stage.hex" "$DIR/receipts/stage.json"
   elif [[ "$STAGED" != true ]]; then
@@ -158,7 +160,7 @@ for DIR in "$PREPARED"/0x*; do
   for CHUNK in "$DIR"/chunks/*.hex; do
     CHUNK_NAME="$(basename "$CHUNK" .hex)"
     INDEX=$((10#$CHUNK_NAME))
-    AUTHENTICATED="$(cast call "$REGISTRY" 'proofBlockChunkAuthenticated(bytes32,uint32)(bool)' "$PROOF_ID" "$INDEX")"
+    AUTHENTICATED="$(env -u ETH_PASSWORD cast call "$REGISTRY" 'proofBlockChunkAuthenticated(bytes32,uint32)(bool)' "$PROOF_ID" "$INDEX")"
     if [[ "$AUTHENTICATED" == false ]]; then
       send_file "$CHUNK" "$DIR/receipts/chunk-$CHUNK_NAME.json"
     elif [[ "$AUTHENTICATED" != true ]]; then
@@ -166,7 +168,7 @@ for DIR in "$PREPARED"/0x*; do
     fi
   done
   send_file "$DIR/finalize.hex" "$DIR/receipts/finalize.json"
-  DONE="$(cast call "$REGISTRY" 'proofFinalized(bytes32)(bool)' "$PROOF_ID")"
+  DONE="$(env -u ETH_PASSWORD cast call "$REGISTRY" 'proofFinalized(bytes32)(bool)' "$PROOF_ID")"
   test "$DONE" = true
   echo "Finalized $(basename "$DIR")"
 done
@@ -182,9 +184,9 @@ prepared files. Re-check deployment settings if changing RPC or registry.
 For a seller, check recorded values with:
 
 ```bash
-cast call "$REGISTRY" 'provenWashVolume(address)(uint128)' "$SELLER"
-cast call "$REGISTRY" 'totalSellerVolume(address)(uint128)' "$SELLER"
-cast call "$REGISTRY" 'provenWashShareBps(address)(uint256)' "$SELLER"
+env -u ETH_PASSWORD cast call "$REGISTRY" 'provenWashVolume(address)(uint128)' "$SELLER"
+env -u ETH_PASSWORD cast call "$REGISTRY" 'totalSellerVolume(address)(uint128)' "$SELLER"
+env -u ETH_PASSWORD cast call "$REGISTRY" 'provenWashShareBps(address)(uint256)' "$SELLER"
 ```
 
 V and T are raw USDC units (six decimals). Expected values are in `manifest.json`.
